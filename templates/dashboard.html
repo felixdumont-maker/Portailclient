@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Tableau de bord | Portail Client{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+  <nav class="navbar">
+    <div class="nav-container">
+      <img src="{{ url_for('static', filename='logo.png') }}" alt="Logo" class="nav-logo" />
+
+      <div>
+        <a href="{{ url_for('profile') }}" class="nav-link" style="background-color:#6c757d;margin-right:1rem;">Mon Profil</a>
+        <a href="{{ url_for('logout') }}" class="nav-link">Se déconnecter</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="container">
+    <h1>Bienvenue, {{ session['user_name'] }} !</h1>
+    <h2>Vos Projets</h2>
+
+    <ul class="project-list">
+      {% if projets %}
+        {% for row in projets %}
+          <li class="project-item">
+            <div class="project-main">
+              <a href="{{ url_for('project_detail', project_id=row.p['id']) }}" class="project-title-link">
+                {{ row.p['nom_projet'] }}
+              </a>
+              <span class="project-status">{{ row.p['statut'] }}</span>
+            </div>
+            <div class="project-progress">
+              <span class="pastille {{ row.pastille }}"></span>
+              <span class="ratio">{{ row.done }}/{{ row.total }}</span>
+            </div>
+          </li>
+        {% endfor %}
+      {% else %}
+        <li class="no-projects">Vous n'avez aucun projet pour le moment.</li>
+      {% endif %}
+    </ul>
+  </div>
+</div>
+{% endblock %}
+

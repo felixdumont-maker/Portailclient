@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Mon profil | Portail Client{% endblock %}
+
+{% block content %}
+<nav class="navbar" aria-label="Navigation">
+  <div class="nav-container">
+    <img src="{{ url_for('static', filename='logo 2.png') }}" alt="Logo" class="nav-logo">
+    <div>
+      <a href="{{ url_for('dashboard') }}" class="nav-link" style="background-color:#6c757d;margin-right:1rem;">Tableau de bord</a>
+      <a href="{{ url_for('logout') }}" class="nav-link">Se déconnecter</a>
+    </div>
+  </div>
+</nav>
+
+<div class="container">
+  <h1>Mon profil</h1>
+
+  <!-- Infos personnelles -->
+  <div class="form-container">
+    <h2>Informations personnelles</h2>
+    <form method="post" action="{{ url_for('update_profile') }}" novalidate>
+      <div class="form-group">
+        <label for="nom_complet">Nom complet</label>
+        <input type="text" id="nom_complet" name="nom_complet" value="{{ user.nom_complet }}" required>
+      </div>
+
+      <div class="form-group">
+        <label for="nom_entreprise">Entreprise</label>
+        <input type="text" id="nom_entreprise" name="nom_entreprise" value="{{ user.nom_entreprise or '' }}">
+      </div>
+
+      <div class="form-group">
+        <label for="telephone">Téléphone</label>
+        <input type="text" id="telephone" name="telephone" value="{{ user.telephone or '' }}">
+      </div>
+
+      {% if user.auth_provider == 'password' %}
+        <div class="form-group">
+          <label for="email">Adresse email</label>
+          <input type="email" id="email" name="email" value="{{ user.email }}" required>
+        </div>
+      {% else %}
+        <div class="form-group">
+          <label>Adresse email</label>
+          <input type="email" value="{{ user.email }}" disabled>
+          <small>Votre email est géré via Google et ne peut pas être modifié ici.</small>
+        </div>
+      {% endif %}
+
+      <button type="submit" class="btn-green">Mettre à jour les informations</button>
+    </form>
+  </div>
+
+  {% if user.auth_provider == 'password' %}
+  <!-- Changement de mot de passe -->
+  <div class="form-container">
+    <h2>Changer mon mot de passe</h2>
+    <form method="post" action="{{ url_for('update_password') }}" novalidate>
+      <div class="form-group">
+        <label for="current_password">Mot de passe actuel</label>
+        <input type="password" id="current_password" name="current_password" required>
+      </div>
+
+      <div class="form-group">
+        <label for="new_password">Nouveau mot de passe</label>
+        <input
+          type="password"
+          id="new_password"
+          name="new_password"
+          pattern="(?=.*\d)(?=.*[a-z])(?=.*[A-Z])(?=.*[!@#$%^&*]).{8,}"
+          title="Doit contenir au moins 8 caractères, une majuscule, une minuscule, un chiffre et un caractère spécial (!@#$%^&*)."
+          required
+        >
+      </div>
+
+      <div class="form-group">
+        <label for="confirm_password">Confirmez le nouveau mot de passe</label>
+        <input type="password" id="confirm_password" name="confirm_password" required>
+      </div>
+
+      <div class="show-password-container">
+        <input type="checkbox" id="toggleAllPw">
+        <label for="toggleAllPw">Afficher les mots de passe</label>
+      </div>
+
+      <button type="submit" class="btn-green" style="margin-top:1rem;">Mettre à jour le mot de passe</button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const toggle = document.getElementById('toggleAllPw');
+  if (!toggle) return;
+  const ids = ['current_password','new_password','confirm_password'];
+  toggle.addEventListener('change', function () {
+    ids.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.type = this.checked ? 'text' : 'password';
+    });
+  });
+})();
+</script>
+{% endblock %}

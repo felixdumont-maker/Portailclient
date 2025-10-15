@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Modifier le projet | Portail Admin{% endblock %}
+
+{% block content %}
+<nav class="navbar">
+  <div class="nav-container">
+    <span class="nav-brand">Portail Admin – Modifier un projet</span>
+    <div>
+      <a href="{{ url_for('admin_dashboard') }}" class="nav-link" style="background-color:#6c757d;margin-right:1rem;">Retour</a>
+      <a href="{{ url_for('logout') }}" class="nav-link">Se déconnecter</a>
+    </div>
+  </div>
+</nav>
+
+<div class="container">
+  <div class="form-container">
+    <h1>Modifier le projet : {{ projet['nom_projet'] }}</h1>
+
+    <form method="post" action="{{ url_for('edit_project', project_id=projet['id']) }}" novalidate>
+      <div class="form-group">
+        <label for="nom_projet">Nom du projet</label>
+        <input type="text" id="nom_projet" name="nom_projet" value="{{ projet['nom_projet'] }}" required>
+      </div>
+
+      <div class="form-group">
+        <label for="statut">Statut</label>
+        <input type="text" id="statut" name="statut" value="{{ projet['statut'] or '' }}" required>
+      </div>
+
+      <div class="form-group">
+        <label for="lien_gdrive">Lien Google Drive (optionnel)</label>
+        <input type="url" id="lien_gdrive" name="lien_gdrive" value="{{ projet['lien_gdrive'] or '' }}" placeholder="https://...">
+      </div>
+
+      <div class="form-group">
+        <label for="id_client">Client associé</label>
+        <select id="id_client" name="id_client" required>
+          {% for c in clients %}
+            <option value="{{ c['id'] }}" {% if c['id'] == projet['id_client'] %}selected{% endif %}>
+              {{ c['nom_complet'] }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <button type="submit" class="btn-green">Enregistrer les modifications</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
+

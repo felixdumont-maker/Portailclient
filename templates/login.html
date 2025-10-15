@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Connexion | Portail Client{% endblock %}
+
+{% block content %}
+<div class="auth-page">
+  <div class="auth-container">
+
+    <img src="{{ url_for('static', filename='logo 2.png') }}" alt="Logo Cocktail Media" class="auth-logo">
+
+    <h1>Connexion au Portail Client</h1>
+
+    <form method="post" action="{{ url_for('login') }}" class="auth-form" novalidate>
+      <div class="form-group">
+        <label for="email">Adresse email</label>
+        <input type="email" id="email" name="email" required>
+      </div>
+
+      <div class="form-group">
+        <label for="password">Mot de passe</label>
+        <input type="password" id="password" name="password" required>
+        <div class="show-password-container">
+          <input type="checkbox" id="showPassword">
+          <label for="showPassword" style="font-weight:normal;margin-bottom:0;">Afficher le mot de passe</label>
+        </div>
+      </div>
+
+      <button type="submit" class="btn-green">Se connecter</button>
+    </form>
+
+    <div class="separator">ou</div>
+
+    <a href="{{ url_for('google_login') }}" class="google-btn">
+      <img src="https://upload.wikimedia.org/wikipedia/commons/c/c1/Google_%22G%22_logo.svg" alt="Google logo">
+      Se connecter avec Google
+    </a>
+
+    <p class="auth-link">
+      <a href="{{ url_for('forgot_password') }}">Mot de passe oublié ?</a>
+    </p>
+    <p class="auth-link">
+      Pas encore de compte ? <a href="{{ url_for('register') }}">Inscrivez-vous</a>
+    </p>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById("showPassword").addEventListener("click", function() {
+  const passwordInput = document.getElementById("password");
+  passwordInput.type = this.checked ? "text" : "password";
+});
+</script>
+{% endblock %}
+

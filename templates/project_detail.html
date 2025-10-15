@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Projet – {{ projet['nom_projet'] }}{% endblock %}
+
+{% block content %}
+<nav class="navbar">
+  <div class="nav-container">
+    <img src="{{ url_for('static', filename='logo.png') }}" alt="Logo" class="nav-logo">
+    <div>
+      <a href="{{ url_for('dashboard') }}" class="nav-link" style="background-color:#6c757d;margin-right:1rem;">Retour au tableau de bord</a>
+      <a href="{{ url_for('logout') }}" class="nav-link">Se déconnecter</a>
+    </div>
+  </div>
+</nav>
+
+<div class="container">
+  <div class="project-header">
+    <h1>{{ projet['nom_projet'] }}</h1>
+    <span class="project-status">{{ projet['statut'] }}</span>
+  </div>
+
+  <section class="project-section">
+    <h2>Fichiers du projet</h2>
+    {% if projet['lien_gdrive'] %}
+      <a href="{{ projet['lien_gdrive'] }}" target="_blank" rel="noopener noreferrer" class="gdrive-button">
+        Ouvrir le dossier Google Drive
+      </a>
+    {% else %}
+      <p>Aucun dossier Google Drive n’est associé à ce projet pour le moment.</p>
+    {% endif %}
+  </section>
+
+  <section class="project-section">
+    <h2>Checklist</h2>
+    {% if items and items|length > 0 %}
+      <ul class="checklist">
+        {% for item in items %}
+          <li class="checklist-item {% if item['est_coche'] %}completed{% endif %}">
+            <a href="{{ url_for('toggle_checklist_item', item_id=item['id']) }}" class="item-link">
+              {{ item['nom_item'] }}
+            </a>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p>Aucun item dans la checklist pour le moment.</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}
+
+

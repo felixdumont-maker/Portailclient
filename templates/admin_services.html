@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Gérer les Services | Portail Admin{% endblock %}
+
+{% block content %}
+<nav class="navbar">
+  <div class="nav-container">
+    <a href="{{ url_for('admin_dashboard') }}" class="nav-brand">← Retour au Tableau de Bord</a>
+    <span class="nav-brand-center">Gérer les Services</span>
+    <a href="{{ url_for('logout') }}" class="nav-link">Se déconnecter</a>
+  </div>
+</nav>
+
+<div class="container">
+  <h1>Modèles de Services et Checklists</h1>
+
+  <!-- Création d’un service -->
+  <div class="form-container">
+    <h2>Ajouter un nouveau service</h2>
+    <form action="{{ url_for('add_service') }}" method="post" novalidate>
+      <div class="form-group">
+        <label for="nom_service">Nom du nouveau service (ex: Site Web Vitrine)</label>
+        <input type="text" id="nom_service" name="nom_service" required>
+      </div>
+      <div class="form-group">
+        <label for="description">Description (optionnel)</label>
+        <input type="text" id="description" name="description">
+      </div>
+      <button type="submit" class="btn-green">Créer le service</button>
+    </form>
+  </div>
+
+  <h2 style="margin-top: 2rem;">Services existants</h2>
+
+  {% for s_data in services %}
+    <section class="service-card">
+      <header class="service-header">
+        <h3>{{ s_data['service']['nom_service'] }}</h3>
+        <div>
+          <a href="{{ url_for('delete_service', service_id=s_data['service']['id']) }}"
+             class="action-btn btn-delete"
+             onclick="return confirm('Attention ! Supprimer ce service supprimera aussi sa checklist modèle. Continuer ?');">
+            Supprimer
+          </a>
+        </div>
+      </header>
+
+      <h4>Checklist modèle</h4>
+
+      {% if s_data['items'] %}
+        <div class="checklist-items-list">
+          {% for item in s_data['items'] %}
+            <div class="checklist-item">
+              <div class="item-left">
+                <strong>{{ item['nom_item'] }}</strong>
+                <span class="badges">
+                  {% if item['requires_file'] %}
+                    <span class="badge req">Fichier requis</span>
+                  {% endif %}
+                  {% if item['is_required'] %}
+                    <span class="badge must">Obligatoire</span>
+                  {% endif %}
+                </span>
+              </div>
+              <a href="{{ url_for('delete_checklist_item', item_id=item['id']) }}"
+                 class="action-btn btn-small-delete"
+                 title="Supprimer cet item"
+                 onclick="return confirm('Supprimer cet item ?');">
+                ✖
+              </a>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p>Aucun item dans cette checklist modèle pour le moment.</p>
+      {% endif %}
+
+      <!-- Ajout d’un item -->
+      <form action="{{ url_for('add_checklist_item', service_id=s_data['service']['id']) }}"
+            method="post" class="add-item-form" novalidate>
+        <input type="text" name="nom_item" placeholder="Ajouter un item à la checklist..." required>
+        <label class="checkbox-inline">
+          <input type="checkbox" name="requires_file" value="1">
+          Fichier requis
+        </label>
+        <label class="checkbox-inline">
+          <input type="checkbox" name="is_required" value="1" checked>
+          Obligatoire
+        </label>
+        <button type="submit">Ajouter</button>
+      </form>
+    </section>
+  {% else %}
+    <p>Aucun service n’a été créé pour le moment.</p>
+  {% endfor %}
+</div>
+{% endblock %}

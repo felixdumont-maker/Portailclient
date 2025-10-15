@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}Tableau de bord admin | Portail{% endblock %}
+
+{% block content %}
+<nav class="navbar">
+  <div class="nav-container">
+    <span class="nav-brand">Portail Admin</span>
+    <div>
+      <a href="{{ url_for('admin_services') }}" class="nav-link" style="margin-right:1rem;">Services</a>
+      <a href="{{ url_for('logout') }}" class="nav-link">Se déconnecter</a>
+    </div>
+  </div>
+</nav>
+
+<div class="container">
+  <a href="{{ url_for('admin_services') }}" class="btn-green">Gérer les Services et Checklists Modèles</a>
+
+  <!-- Formulaires d'ajout -->
+  <div class="form-grid">
+    <div class="form-container">
+      <h2>Ajouter un nouveau projet</h2>
+      <form action="{{ url_for('add_project') }}" method="post">
+        <div class="form-group">
+          <label for="id_client">Assigner au client</label>
+          <select id="id_client" name="id_client" required>
+            {% for client in clients %}
+              <option value="{{ client['id'] }}">{{ client['nom_complet'] }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="nom_projet">Nom du projet</label>
+          <input type="text" id="nom_projet" name="nom_projet" required>
+        </div>
+
+        <div class="form-group">
+          <label for="id_service">Appliquer un modèle de service (Optionnel)</label>
+          <select id="id_service" name="id_service">
+            <option value="">-- Aucun modèle --</option>
+            {% for service in services %}
+              <option value="{{ service['id'] }}">{{ service['nom_service'] }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="statut">Statut initial</label>
+          <input type="text" id="statut" name="statut" value="À faire" required>
+        </div>
+
+        <div class="form-group">
+          <label for="lien_gdrive">Lien Google Drive (optionnel)</label>
+          <input type="url" id="lien_gdrive" name="lien_gdrive" placeholder="https://...">
+        </div>
+
+        <button type="submit">Ajouter le projet</button>
+      </form>
+    </div>
+
+    <div class="form-container">
+      <h2>Ajouter un nouveau client</h2>
+      <form action="{{ url_for('add_client') }}" method="post">
+        <div class="form-group">
+          <label for="nom_complet">Nom complet</label>
+          <input type="text" id="nom_complet" name="nom_complet" required>
+        </div>
+        <div class="form-group">
+          <label for="email">Email</label>
+          <input type="email" id="email" name="email" required>
+        </div>
+        <div class="form-group">
+          <label for="password">Mot de passe initial</label>
+          <input type="password" id="password" name="password" required>
+        </div>
+        <div class="form-group">
+          <label for="nom_entreprise">Entreprise (optionnel)</label>
+          <input type="text" id="nom_entreprise" name="nom_entreprise">
+        </div>
+        <button type="submit" class="btn-green">Ajouter le client</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Liste des Projets -->
+  <div class="table-container">
+    <h2>Liste des Projets</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Projet</th>
+          <th>Client</th>
+          <th>Pré-travaux</th>
+          <th>Statut</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in projets %}
+          <tr>
+            <td>
+              <a href="{{ url_for('project_detail', project_id=row.p['id']) }}">
+                {{ row.p['nom_projet'] }}
+              </a>
+            </td>
+            <td>{{ row.p['nom_client'] if row.p.get('nom_client') else row.p['id_client'] }}</td>
+            <td>
+              <span class="pastille {{ row.pastille }}"></span>
+              <span class="ratio">{{ row.done }}/{{ row.total }}</span>
+            </td>
+            <td>{{ row.p['statut'] }}</td>
+            <td>
+              <a href="{{ url_for('edit_project', project_id=row.p['id']) }}" class="action-btn btn-edit">Modifier</a>
+              <a href="{{ url_for('delete_project', project_id=row.p['id']) }}" class="action-btn btn-delete" onclick="return confirm('Êtes-vous sûr de vouloir supprimer ce projet ?');">Supprimer</a>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="5">Aucun projet trouvé.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Liste des Clients -->
+  <div class="table-container">
+    <h2>Liste des Clients</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Nom</th>
+          <th>Email</th>
+          <th>Entreprise</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for client in clients %}
+          <tr>
+            <td>{{ client['nom_complet'] }}</td>
+            <td>{{ client['email'] }}</td>
+            <td>{{ client['nom_entreprise'] or 'N/A' }}</td>
+            <td>
+              <a href="{{ url_for('edit_client', client_id=client['id']) }}" class="action-btn btn-edit">Modifier</a>
+              <a href="{{ url_for('delete_client', client_id=client['id']) }}" class="action-btn btn-delete" onclick="return confirm('Êtes-vous sûr de vouloir supprimer ce client ?');">Supprimer</a>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="4">Aucun client trouvé.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
