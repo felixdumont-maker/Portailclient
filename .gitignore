@@ -10,3 +10,8 @@ venv/
 .venv/
 .local/
 .ipython/
+
+# local artifacts
+*.db
+*.tar.gz
+*.swp
