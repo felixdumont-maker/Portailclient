@@ -4,10 +4,10 @@ import re
 import sqlite3
 import pathlib
 from functools import wraps
-from typing import List, Tuple, Optional
+from typing import Tuple
 
 from flask import (
-    Flask, render_template, request, redirect, url_for, session, flash, send_file
+    Flask, render_template, request, redirect, url_for, session, flash, send_file, jsonify
 )
 from flask_bcrypt import Bcrypt
 from flask_mail import Mail, Message
@@ -16,11 +16,21 @@ from authlib.integrations.flask_client import OAuth
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 
+# ── Chargement .env (PythonAnywhere : .env à la racine du projet) ──
 from dotenv import load_dotenv
-load_dotenv()
+from pathlib import Path
+ENV_PATH = (Path(__file__).resolve().parent / ".." / ".env").resolve()
+load_dotenv(dotenv_path=ENV_PATH)
 
 # ───────────────────────────────────────────────────────────
-# Config
+# App init
+# ───────────────────────────────────────────────────────────
+app = Flask(__name__)
+app.config['PREFERRED_URL_SCHEME'] = 'https'  # à mettre APRÈS la création de app
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)  # derrière proxy (PA)
+
+# ───────────────────────────────────────────────────────────
+# Config (tirée du .env)
 # ───────────────────────────────────────────────────────────
 class Config:
     SECRET_KEY = os.getenv("SECRET_KEY", "change-me")
@@ -28,37 +38,28 @@ class Config:
     SESSION_COOKIE_SAMESITE = "Lax"
     SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "true").lower() == "true"
 
-    MAIL_SERVER = "smtp.gmail.com"
-    MAIL_PORT = 587
+    MAIL_SERVER = os.getenv("MAIL_SERVER", "smtp.gmail.com")
+    MAIL_PORT = int(os.getenv("MAIL_PORT", "587"))
     MAIL_USE_TLS = True
     MAIL_USERNAME = os.getenv("MAIL_USERNAME", "")
     MAIL_PASSWORD = os.getenv("MAIL_PASSWORD", "")
+    MAIL_DEFAULT_SENDER = os.getenv("MAIL_DEFAULT_SENDER", os.getenv("MAIL_USERNAME", ""))
 
     GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
     GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 
-    # DB: chemin absolu sûr (instance/)
     BASE_DIR = os.path.abspath(os.path.dirname(__file__))
     INSTANCE_DIR = os.path.join(BASE_DIR, "instance")
     os.makedirs(INSTANCE_DIR, exist_ok=True)
     DB_PATH = os.getenv("DB_PATH", os.path.join(INSTANCE_DIR, "portail.db"))
 
-    # Uploads (stockage local)
     UPLOAD_ROOT = os.getenv("UPLOAD_ROOT", os.path.join(os.getcwd(), "uploads"))
     ALLOWED_EXTENSIONS = set(
         (os.getenv("ALLOWED_EXTENSIONS", "pdf,png,jpg,jpeg,webp,doc,docx,xls,xlsx,zip"))
-        .replace(" ", "")
-        .split(",")
+        .replace(" ", "").split(",")
     )
 
-# ───────────────────────────────────────────────────────────
-# App init
-# ───────────────────────────────────────────────────────────
-app = Flask(__name__)
 app.config.from_object(Config)
-
-# Si derrière un proxy (PythonAnywhere/Nginx)
-app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)  # type: ignore
 
 # Ensure upload root exists
 pathlib.Path(app.config["UPLOAD_ROOT"]).mkdir(parents=True, exist_ok=True)
@@ -67,6 +68,7 @@ bcrypt = Bcrypt(app)
 mail = Mail(app)
 s = URLSafeTimedSerializer(app.config['SECRET_KEY'])
 
+# OAuth
 oauth = OAuth(app)
 oauth.register(
     name="google",
@@ -76,33 +78,44 @@ oauth.register(
     client_kwargs={"scope": "openid email profile"},
 )
 
+# (optionnel) routes de debug
+@app.route("/__env")
+def __env():
+    cid = os.getenv("GOOGLE_CLIENT_ID", "")
+    csec = os.getenv("GOOGLE_CLIENT_SECRET", "")
+    return jsonify({
+        "GOOGLE_CLIENT_ID_loaded": bool(cid),
+        "GOOGLE_CLIENT_ID_sample": (cid[:12] + "...") if cid else "",
+        "GOOGLE_CLIENT_SECRET_loaded": bool(csec),
+    })
+
+@app.route("/__routes")
+def __routes():
+    return jsonify(sorted([(r.rule, r.endpoint) for r in app.url_map.iter_rules()]))
+
 # ───────────────────────────────────────────────────────────
-# Google OAuth Routes (endpoints uniques)
+# Google OAuth Routes
 # ───────────────────────────────────────────────────────────
-@app.route("/login/google", endpoint="oauth_login_google")
+
+@app.route("/login/google", endpoint="google_login")
 def oauth_login_google():
-    redirect_uri = url_for("oauth_google_callback", _external=True)
+    redirect_uri = url_for("google_callback", _external=True)
     return oauth.google.authorize_redirect(redirect_uri)
 
-@app.route("/google-callback", endpoint="oauth_google_callback")
+@app.route("/google-callback", endpoint="google_callback")
 def oauth_google_callback():
-    # Échange code -> token
     token = oauth.google.authorize_access_token()
-
-    # Récupère l'identité (OpenID)
-    user_info = oauth.google.parse_id_token(token)
+    user_info = token.get("userinfo") or oauth.google.parse_id_token(token)
 
     email = (user_info.get("email") or "").strip().lower()
     nom   = user_info.get("name") or ""
     if not email:
-        flash("Impossible de récupérer l'email Google.", "error")
+        flash("Impossible de récupérer l'adresse email Google.", "error")
         return redirect(url_for("accueil"))
 
-    # Enregistre / retrouve l'utilisateur puis ouvre la session
     conn = get_db_connection()
     user = conn.execute("SELECT * FROM clients WHERE email = ?", (email,)).fetchone()
     if not user:
-        # crée un compte "Google" minimal
         conn.execute("""
             INSERT INTO clients (nom_complet, email, auth_provider, is_email_confirmed, is_admin)
             VALUES (?, ?, 'google', 1, 0)
@@ -115,8 +128,9 @@ def oauth_google_callback():
     session['user_name'] = user['nom_complet']
     session['is_admin'] = bool(user['is_admin'])
 
-    flash("Connexion réussie.", "success")
+    flash("Connexion Google réussie!", "success")
     return redirect(url_for('admin_dashboard' if session['is_admin'] else 'dashboard'))
+
 
 # ───────────────────────────────────────────────────────────
 # DB helpers
@@ -218,14 +232,16 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_items_checklist ON checklist_items(id_checklist);
     CREATE INDEX IF NOT EXISTS idx_model_items_service ON checklist_model_items(id_service);
     """
-
     conn = get_db_connection()
     try:
         conn.executescript(schema_sql)
         # Seed défaut notification_settings (id=1) si absent
         row = conn.execute("SELECT 1 FROM notification_settings WHERE id = 1").fetchone()
         if not row:
-            conn.execute("INSERT INTO notification_settings (id, admin_emails, client_updates, admin_updates) VALUES (1, '', 1, 1)")
+            conn.execute("""
+                INSERT INTO notification_settings (id, admin_emails, client_updates, admin_updates)
+                VALUES (1, '', 1, 1)
+            """)
         conn.commit()
     finally:
         conn.close()
@@ -250,7 +266,11 @@ def send_email(to_list, subject, body):
     if isinstance(to_list, str):
         to_list = [to_list]
     try:
-        msg = Message(subject, sender=app.config['MAIL_USERNAME'], recipients=to_list)
+        msg = Message(
+            subject,
+            sender=app.config['MAIL_DEFAULT_SENDER'] or app.config['MAIL_USERNAME'],
+            recipients=to_list
+        )
         msg.body = body
         mail.send(msg)
     except Exception as e:
@@ -298,7 +318,6 @@ def get_notification_settings() -> dict:
 # Readiness / Pastille
 # ───────────────────────────────────────────────────────────
 def table_has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
-    """Return True if the given SQLite table contains the specified column."""
     try:
         info = conn.execute(f"PRAGMA table_info({table})").fetchall()
     except sqlite3.Error:
@@ -307,7 +326,6 @@ def table_has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
         (row["name"] if hasattr(row, "keys") else row[1]) == column
         for row in info
     )
-
 
 def compute_checklist_readiness(project_id: int) -> Tuple[bool, int, int]:
     """
@@ -362,6 +380,65 @@ def compute_checklist_readiness(project_id: int) -> Tuple[bool, int, int]:
 def pastille_color(is_ready: bool) -> str:
     # Rouge si pas prêt, Orange si prêt
     return "orange" if is_ready else "red"
+
+    # ───────────────────────────────────────────────────────────
+# Phases Projet (4 statuts + couleurs) + helpers
+# ───────────────────────────────────────────────────────────
+PROJECT_PHASES = [
+    ("Documents à donner", "red"),
+    ("Documents reçus", "blue"),
+    ("Travaux en cours", "orange"),
+    ("Travaux terminés", "green"),
+]
+
+# Variantes acceptées → label normalisé
+_PHASE_ALIAS = {
+    "documents a donner": "Documents à donner",
+    "document a donner": "Documents à donner",
+    "doc a donner": "Documents à donner",
+    "documents à donner": "Documents à donner",
+
+    "documents reçus": "Documents reçus",
+    "documents recus": "Documents reçus",
+    "doc recu": "Documents reçus",
+    "doc reçu": "Documents reçus",
+
+    "travaux en cours": "Travaux en cours",
+    "en cours": "Travaux en cours",
+
+    "travaux terminés": "Travaux terminés",
+    "travaux termines": "Travaux terminés",
+    "terminé": "Travaux terminés",
+    "termine": "Travaux terminés",
+    "terminés": "Travaux terminés",
+    "fini": "Travaux terminés",
+}
+
+def normalize_status(raw: str) -> str:
+    if not raw:
+        return "Documents à donner"
+    key = raw.strip().lower()
+    return _PHASE_ALIAS.get(key, raw.strip())
+
+def status_color(status_label: str) -> str:
+    """Couleur (red/blue/orange/green) selon la phase."""
+    lab = normalize_status(status_label)
+    for lbl, color in PROJECT_PHASES:
+        if lab == lbl:
+            return color
+    return "red"
+
+def status_badge_class(status_label: str) -> str:
+    """Classe CSS badge en fonction de la couleur de phase."""
+    color = status_color(status_label)
+    return f"badge badge-{color}"
+
+# Exposer les helpers aux templates
+app.jinja_env.globals.update(
+    normalize_status=normalize_status,
+    status_badge_class=status_badge_class
+)
+
 
 # ───────────────────────────────────────────────────────────
 # Routes Auth
@@ -507,7 +584,6 @@ def reset_password(token):
         return redirect(url_for('accueil'))
     return render_template('reset_password.html')
 
-
 # ───────────────────────────────────────────────────────────
 # Routes Client
 # ───────────────────────────────────────────────────────────
@@ -523,12 +599,7 @@ def dashboard():
     for p in projets:
         ready, done, total = compute_checklist_readiness(p['id'])
         projets_with_pastille.append(
-            {
-                "projet": p,
-                "pastille": pastille_color(ready),
-                "done": done,
-                "total": total
-            }
+            {"projet": p, "pastille": pastille_color(ready), "done": done, "total": total}
         )
     conn.close()
     return render_template('dashboard.html', projets=projets_with_pastille)
@@ -817,7 +888,11 @@ def add_client():
 def add_project():
     id_client = request.form.get('id_client')
     nom_projet = request.form.get('nom_projet','').strip()
-    statut = request.form.get('statut','').strip() or "Nouveau"
+
+    # Statut par défaut = Documents à donner, puis normalisation
+    statut = request.form.get('statut','').strip() or "Documents à donner"
+    statut = normalize_status(statut)
+
     lien_gdrive = request.form.get('lien_gdrive')
     id_service = request.form.get('id_service')
 
@@ -829,6 +904,7 @@ def add_project():
             VALUES (?, ?, ?, ?)
         """, (nom_projet, statut, lien_gdrive, id_client))
         id_projet = cur.lastrowid
+
 
         if id_service:
             cur.execute("INSERT INTO checklistes (id_projet) VALUES (?)", (id_projet,))
@@ -889,7 +965,11 @@ def edit_project(project_id):
     conn = get_db_connection()
     if request.method == 'POST':
         nom_projet = request.form.get('nom_projet','').strip()
-        statut = request.form.get('statut','').strip()
+
+        # Normaliser le statut (4 phases)
+        statut_raw = request.form.get('statut','').strip()
+        statut = normalize_status(statut_raw)
+
         lien_gdrive = request.form.get('lien_gdrive','')
         id_client = request.form.get('id_client')
 
@@ -900,8 +980,9 @@ def edit_project(project_id):
         """, (nom_projet, statut, lien_gdrive, id_client, project_id))
         conn.commit()
 
+        # Notification client si passage à "Travaux terminés"
         try:
-            if old and (old['statut'] != statut) and (statut.lower() == 'terminé'):
+            if old and (old['statut'] != statut) and (normalize_status(statut) == "Travaux terminés"):
                 settings = get_notification_settings()
                 if settings["client_updates"] == 1:
                     client = conn.execute("SELECT nom_complet, email FROM clients WHERE id = ?", (id_client,)).fetchone()
@@ -1008,5 +1089,31 @@ def delete_checklist_item(item_id):
 # ───────────────────────────────────────────────────────────
 # Main
 # ───────────────────────────────────────────────────────────
+
+# ───────────────────────────────────────────────────────────
+# Création manuelle d'un compte admin (exécuter une seule fois)
+# ───────────────────────────────────────────────────────────
+def create_admin():
+    conn = get_db_connection()
+    bcrypt = Bcrypt(app)
+    email = "info@cocktailmedia.ca"
+    password = "187132zZ!"
+    nom = "Admin Cocktail Media"
+
+    hashed = bcrypt.generate_password_hash(password).decode('utf-8')
+    exists = conn.execute("SELECT 1 FROM clients WHERE email = ?", (email,)).fetchone()
+    if not exists:
+        conn.execute("""
+            INSERT INTO clients (nom_complet, email, mot_de_passe_hash, auth_provider, is_email_confirmed, is_admin)
+            VALUES (?, ?, ?, 'password', 1, 1)
+        """, (nom, email, hashed))
+        conn.commit()
+        print("✅ Compte admin créé avec succès.")
+    else:
+        print("⚠️ Ce compte existe déjà.")
+    conn.close()
+
+create_admin()
+
 if __name__ == '__main__':
     app.run(debug=True)

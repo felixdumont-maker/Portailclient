@@ -96,28 +96,45 @@
         </tr>
       </thead>
       <tbody>
-        {% for row in projets %}
-          <tr>
-            <td>
-              <a href="{{ url_for('project_detail', project_id=row.p['id']) }}">
-                {{ row.p['nom_projet'] }}
-              </a>
-            </td>
-            <td>{{ row.p['nom_client'] if row.p.get('nom_client') else row.p['id_client'] }}</td>
-            <td>
-              <span class="pastille {{ row.pastille }}"></span>
-              <span class="ratio">{{ row.done }}/{{ row.total }}</span>
-            </td>
-            <td>{{ row.p['statut'] }}</td>
-            <td>
-              <a href="{{ url_for('edit_project', project_id=row.p['id']) }}" class="action-btn btn-edit">Modifier</a>
-              <a href="{{ url_for('delete_project', project_id=row.p['id']) }}" class="action-btn btn-delete" onclick="return confirm('Êtes-vous sûr de vouloir supprimer ce projet ?');">Supprimer</a>
-            </td>
-          </tr>
-        {% else %}
-          <tr><td colspan="5">Aucun projet trouvé.</td></tr>
-        {% endfor %}
-      </tbody>
+  {% for row in projets %}
+    <tr>
+      <!-- Nom du projet -->
+      <td>
+        <a href="{{ url_for('project_detail', project_id=row.p['id']) }}">
+          {{ row.p['nom_projet'] }}
+        </a>
+      </td>
+
+      <!-- Client -->
+      <td>
+        {{ row.p['nom_client'] if 'nom_client' in row.p.keys() else row.p['id_client'] }}
+      </td>
+
+      <!-- Pré-travaux / checklist -->
+      <td>
+        <span class="pastille {{ row.pastille }}"></span>
+        <span class="ratio">{{ row.done }}/{{ row.total }}</span>
+      </td>
+
+      <!-- Statut avec badge couleur -->
+      <td>
+        <span class="{{ status_badge_class(row.p['statut']) }}">
+          {{ normalize_status(row.p['statut']) }}
+        </span>
+      </td>
+
+      <!-- Actions -->
+      <td>
+        <a href="{{ url_for('edit_project', project_id=row.p['id']) }}" class="action-btn btn-edit">Modifier</a>
+        <a href="{{ url_for('delete_project', project_id=row.p['id']) }}" class="action-btn btn-delete"
+           onclick="return confirm('Êtes-vous sûr de vouloir supprimer ce projet ?');">Supprimer</a>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5">Aucun projet trouvé.</td></tr>
+  {% endfor %}
+</tbody>
+
     </table>
   </div>
 

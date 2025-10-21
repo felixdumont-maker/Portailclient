@@ -293,6 +293,39 @@ tr:hover{ background-color: #fff8f2; }
 .badge--danger{  background: #fdecea; color: var(--couleur-danger); }
 .badge--info{    background: #e8f0ff; color: var(--couleur-info); }
 
+.badge-red {
+  background: #e74c3c;
+  color: white;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.badge-blue {
+  background: #3498db;
+  color: white;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.badge-orange {
+  background: #f39c12;
+  color: white;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.badge-green {
+  background: #27ae60;
+  color: white;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+
 /* =================================
    9) ALERTES / FLASH MESSAGES
    ================================= */
