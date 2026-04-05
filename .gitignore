@@ -15,3 +15,14 @@ venv/
 *.db
 *.tar.gz
 *.swp
+service_account.json
+credentials.json
+*.save
+*.save.*
+fix_*.py
+patch_app*.py
+get_refresh_token.py
+__pycache__/
+*.pyc
+.env
+instance/
