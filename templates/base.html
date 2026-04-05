@@ -1,44 +1,69 @@
-<!-- templates/base.html -->
 <!doctype html>
 <html lang="fr">
 <head>
   <meta charset="utf-8">
-  <title>{% block title %}Portail Client{% endblock %}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Portail Client{% endblock %} — Cocktail Média</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
   <link href="{{ url_for('static', filename='style.css') }}" rel="stylesheet">
   {% block head %}{% endblock %}
 </head>
 <body>
-  <header class="container">
-    <nav class="topbar" aria-label="Navigation principale">
-      {% if session.get('user_id') %}
-        <a href="{{ url_for('dashboard') }}">Tableau de bord</a>
-        {% if session.get('is_admin') %}
-          <a href="{{ url_for('admin_dashboard') }}">Admin</a>
-          <a href="{{ url_for('admin_services') }}">Services</a>
-        {% endif %}
-        <a href="{{ url_for('profile') }}">Profil</a>
-        <a href="{{ url_for('logout') }}">Déconnexion</a>
-      {% else %}
-        <a href="{{ url_for('accueil') }}">Accueil</a>
-      {% endif %}
+
+  {# ── Navbar globale ── #}
+  {% if session.get('user_id') %}
+  <header>
+    <nav class="navbar" aria-label="Navigation principale">
+      <div class="nav-container">
+
+        <a href="{{ url_for('dashboard') }}" class="nav-brand" aria-label="Accueil tableau de bord">
+          Cocktail Média
+        </a>
+
+        <img
+          src="{{ url_for('static', filename='logo.png') }}"
+          alt=""
+          aria-hidden="true"
+          class="nav-logo"
+        >
+
+        <div class="nav-links">
+          {% if session.get('is_admin') %}
+            <a href="{{ url_for('admin_dashboard') }}" class="nav-link">Admin</a>
+            <a href="{{ url_for('admin_services') }}" class="nav-link">Services</a>
+          {% endif %}
+          <a href="{{ url_for('profile') }}" class="nav-link">Mon profil</a>
+          <a href="{{ url_for('logout') }}" class="btn btn-secondary" style="min-width:auto;padding:.5rem 1rem;font-size:.95rem;">
+            Déconnexion
+          </a>
+        </div>
+
+      </div>
     </nav>
   </header>
+  {% endif %}
 
-  <main class="container" role="main">
+  {# ── Contenu principal ── #}
+  <main class="container" role="main" id="main-content">
+
+    {# Flash messages #}
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
-        <div class="flashes" role="status" aria-live="polite">
+        <div role="status" aria-live="polite">
           {% for category, message in messages %}
-            <div class="flash-{{ category }}">{{ message }}</div>
+            <div class="flash flash-{{ category }}">{{ message }}</div>
           {% endfor %}
         </div>
       {% endif %}
     {% endwith %}
 
     {% block content %}{% endblock %}
+
   </main>
 
   {% block scripts %}{% endblock %}
+<script src="{{ url_for('static', filename='main.js') }}" defer></script>
 </body>
 </html>

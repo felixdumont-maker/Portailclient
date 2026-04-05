@@ -1,96 +1,335 @@
 {% extends "base.html" %}
-{% block title %}Gérer les Services | Portail Admin{% endblock %}
+{% block title %}Gérer les services{% endblock %}
+
+{% block head %}
+<style>
+  .service-card {
+    background: var(--couleur-blanc);
+    border: 1px solid var(--couleur-bordure);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm);
+    padding: var(--space-4);
+    margin-bottom: var(--space-4);
+    animation: fadeIn .35s ease both;
+  }
+
+  .service-header {
+    display: flex; align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--space-3);
+    flex-wrap: wrap; gap: var(--space-2);
+  }
+
+  .service-header h3 {
+    font-family: var(--font-display);
+    font-size: var(--fs-xl); letter-spacing: .5px;
+    color: var(--couleur-sombre-strong); margin: 0;
+  }
+
+  .service-meta { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-3); }
+
+  .checklist-tabs {
+    display: flex; gap: var(--space-2);
+    margin-bottom: var(--space-3);
+    border-bottom: 2px solid var(--couleur-bordure);
+  }
+
+  .tab-btn {
+    padding: .5rem 1rem; font-weight: 600; font-size: var(--fs-sm);
+    border: none; background: transparent; cursor: pointer;
+    border-bottom: 2px solid transparent; margin-bottom: -2px;
+    color: #7a7773; transition: all var(--t-fast);
+  }
+  .tab-btn.active { color: var(--couleur-principale); border-bottom-color: var(--couleur-principale); }
+  .tab-btn:hover { color: var(--couleur-principale); }
+
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  .checklist-items-list { display: grid; gap: var(--space-2); margin-bottom: var(--space-3); }
+
+  .checklist-item {
+    display: flex; align-items: center;
+    justify-content: space-between; gap: var(--space-3);
+    padding: .6rem var(--space-3);
+    background: var(--couleur-fond);
+    border: 1px solid var(--couleur-bordure);
+    border-radius: var(--radius-sm);
+  }
+
+  .checklist-item.is-revision { border-left: 3px solid #856404; background: #fffde7; }
+
+  .item-left { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; flex: 1; min-width: 0; }
+  .item-left strong { font-size: var(--fs-sm); color: var(--couleur-sombre-strong); }
+
+  .type-doc    { background: #e8f0ff; color: var(--couleur-info); }
+  .type-video  { background: #ede9fe; color: #7c3aed; }
+  .type-revision { background: #fffde7; color: #856404; }
+
+  .badges { display: flex; gap: .35rem; flex-wrap: wrap; }
+  .badge.req  { background: #e8f0ff; color: var(--couleur-info); }
+  .badge.must { background: #fff4e5; color: var(--couleur-warning); }
+
+  .add-item-form {
+    display: grid; gap: var(--space-2);
+    margin-top: var(--space-3); padding-top: var(--space-3);
+    border-top: 1px dashed var(--couleur-bordure);
+  }
+
+  .add-item-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+
+  .add-item-form input[type="text"],
+  .add-item-form input[type="url"],
+  .add-item-form select { flex: 1; min-width: 120px; padding: .6rem .85rem; }
+
+  .video-url-field { display: none; width: 100%; }
+  .video-url-field.visible { display: flex; }
+
+  .checkbox-inline {
+    display: flex; align-items: center; gap: .4rem;
+    font-size: var(--fs-sm); font-weight: 600;
+    cursor: pointer; white-space: nowrap;
+  }
+  .checkbox-inline input[type="checkbox"] { width: auto; margin: 0; accent-color: var(--couleur-principale); }
+
+  .add-item-form button { min-width: auto; padding: .6rem 1.1rem; font-size: .95rem; white-space: nowrap; }
+
+  .action-btn {
+    display: inline-flex; align-items: center;
+    font-family: var(--font-body); font-size: var(--fs-sm);
+    font-weight: 600; padding: .3rem .7rem;
+    border-radius: var(--radius-sm); text-decoration: none;
+    transition: opacity var(--t-fast);
+  }
+  .action-btn:hover { opacity: .8; text-decoration: none; }
+  .btn-delete       { color: var(--couleur-danger); background: #fdecea; }
+  .btn-small-delete { color: var(--couleur-danger); background: transparent; font-size: 1rem; padding: .2rem .4rem; flex-shrink: 0; }
+</style>
+{% endblock %}
 
 {% block content %}
-<nav class="navbar">
-  <div class="nav-container">
-    <a href="{{ url_for('admin_dashboard') }}" class="nav-brand">← Retour au Tableau de Bord</a>
-    <span class="nav-brand-center">Gérer les Services</span>
-    <a href="{{ url_for('logout') }}" class="nav-link">Se déconnecter</a>
-  </div>
-</nav>
 
-<div class="container">
-  <h1>Modèles de Services et Checklists</h1>
+<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:var(--space-3);margin-bottom:var(--space-5);">
+  <h1 style="margin:0;border:none;padding:0;">Services &amp; checklists modèles</h1>
+  <a href="{{ url_for('admin_dashboard') }}" class="btn btn-secondary" style="min-width:auto;">← Retour</a>
+</div>
 
-  <!-- Création d’un service -->
-  <div class="form-container">
-    <h2>Ajouter un nouveau service</h2>
-    <form action="{{ url_for('add_service') }}" method="post" novalidate>
-      <div class="form-group">
-        <label for="nom_service">Nom du nouveau service (ex: Site Web Vitrine)</label>
-        <input type="text" id="nom_service" name="nom_service" required>
-      </div>
+{# Formulaire nouveau service #}
+    <div class="card">
+  <h2 style="margin-top:0;">Ajouter un service</h2>
+  <form action="{{ url_for('add_service') }}" method="post" class="form" novalidate>
+    
+<div class="form-row">
+    <div class="form-group">
+      <label for="nom_service">Nom du service</label>
+      <input type="text" id="nom_service" name="nom_service" placeholder="ex: Photo immobilière" required>
+    </div>
       <div class="form-group">
         <label for="description">Description (optionnel)</label>
         <input type="text" id="description" name="description">
       </div>
-      <button type="submit" class="btn-green">Créer le service</button>
-    </form>
-  </div>
+    </div>
 
-  <h2 style="margin-top: 2rem;">Services existants</h2>
+<div style="display:flex;gap:var(--space-4);flex-wrap:wrap;align-items:center;">
+      <label class="checkbox-inline">
+        <input type="checkbox" name="documents_requis" value="1" checked>
+        Documents requis avant de commencer
+      </label>
+      <label class="checkbox-inline">
+        <input type="checkbox" name="localisation_requise" value="1">
+        Localisation requise
+      </label>
+      <div class="form-group" style="margin:0;">
+        <select name="icon" style="padding:.5rem .85rem;min-width:180px;">
+          <option value="photo">📷 Photographie</option>
+          <option value="video">🎬 Vidéographie</option>
+          <option value="graphisme">🎨 Graphisme</option>
+          <option value="web">🌐 Web</option>
+          <option value="info">📊 Infographie</option>
+          <option value="default">📁 Autre</option>
+        </select>
+      </div>
+    </div>
+    <button type="submit" style="margin-top:var(--space-3);">Créer le service</button>
+  </form>
+</div>
 
-  {% for s_data in services %}
-    <section class="service-card">
-      <header class="service-header">
-        <h3>{{ s_data['service']['nom_service'] }}</h3>
-        <div>
-          <a href="{{ url_for('delete_service', service_id=s_data['service']['id']) }}"
-             class="action-btn btn-delete"
-             onclick="return confirm('Attention ! Supprimer ce service supprimera aussi sa checklist modèle. Continuer ?');">
-            Supprimer
-          </a>
-        </div>
-      </header>
+{# Services existants #}
+<h2>Services existants</h2>
 
-      <h4>Checklist modèle</h4>
+{% for s_data in services %}
+  {% set sid = s_data['service']['id'] %}
+  {% set items_normal = [] %}
+  {% set items_revision = [] %}
+  {% for item in s_data['items'] %}
+    {% if item['is_revision_item'] %}
+      {% set _ = items_revision.append(item) %}
+    {% else %}
+      {% set _ = items_normal.append(item) %}
+    {% endif %}
+  {% endfor %}
 
-      {% if s_data['items'] %}
+  <section class="service-card">
+
+    <header class="service-header">
+      <h3>{{ s_data['service']['nom_service'] }}</h3>
+      <a href="{{ url_for('delete_service', service_id=sid) }}"
+         class="action-btn btn-delete"
+         onclick="return confirm('Supprimer ce service ?');">Supprimer</a>
+    </header>
+
+    <div class="service-meta">
+      {% if s_data['service']['documents_requis'] %}
+        <span class="badge badge--warning">📋 Documents requis</span>
+      {% else %}
+        <span class="badge badge--info">📅 Sans documents</span>
+      {% endif %}
+      {% if s_data['service']['localisation_requise'] %}
+        <span class="badge badge--info">📍 Localisation requise</span>
+      {% endif %}
+      {% if s_data['service']['description'] %}
+        <span class="meta">{{ s_data['service']['description'] }}</span>
+      {% endif %}
+    </div>
+
+    <div class="checklist-tabs">
+      <button class="tab-btn active" onclick="switchTab(this, 'tab-docs-{{ sid }}')">
+        📋 Checklist ({{ items_normal|length }})
+      </button>
+      <button class="tab-btn" onclick="switchTab(this, 'tab-rev-{{ sid }}')">
+        🟡 Révisions modèle ({{ items_revision|length }})
+      </button>
+    </div>
+
+    {# Tab checklist normale #}
+    <div class="tab-panel active" id="tab-docs-{{ sid }}">
+      {% if items_normal %}
         <div class="checklist-items-list">
-          {% for item in s_data['items'] %}
+          {% for item in items_normal %}
             <div class="checklist-item">
               <div class="item-left">
+                {% if item['item_type'] == 'video' %}
+                  <span class="badge type-video">▶ Vidéo</span>
+                {% else %}
+                  {# Afficher la catégorie de fichier #}
+                  {% set cat = file_categories.get(item['file_category'] or 'autre', {}) %}
+                  <span class="badge type-doc">{{ cat.get('label', '📄 Document') }}</span>
+                {% endif %}
                 <strong>{{ item['nom_item'] }}</strong>
-                <span class="badges">
-                  {% if item['requires_file'] %}
-                    <span class="badge req">Fichier requis</span>
-                  {% endif %}
-                  {% if item['is_required'] %}
-                    <span class="badge must">Obligatoire</span>
-                  {% endif %}
-                </span>
+                {% if item['video_url'] %}
+                  <a href="{{ item['video_url'] }}" target="_blank" class="muted" style="font-size:.8rem;">🔗 Lien</a>
+                {% endif %}
+                <div class="badges">
+                  {% if item['requires_file'] %}<span class="badge req">Fichier requis</span>{% endif %}
+                  {% if item['is_required'] %}<span class="badge must">Obligatoire</span>{% endif %}
+                </div>
               </div>
               <a href="{{ url_for('delete_checklist_item', item_id=item['id']) }}"
                  class="action-btn btn-small-delete"
-                 title="Supprimer cet item"
-                 onclick="return confirm('Supprimer cet item ?');">
-                ✖
-              </a>
+                 onclick="return confirm('Supprimer ?');">✖</a>
             </div>
           {% endfor %}
         </div>
       {% else %}
-        <p>Aucun item dans cette checklist modèle pour le moment.</p>
+        <p class="muted" style="margin-bottom:var(--space-3);">Aucun item pour le moment.</p>
       {% endif %}
 
-      <!-- Ajout d’un item -->
-      <form action="{{ url_for('add_checklist_item', service_id=s_data['service']['id']) }}"
+      <form action="{{ url_for('add_checklist_item', service_id=sid) }}"
             method="post" class="add-item-form" novalidate>
-        <input type="text" name="nom_item" placeholder="Ajouter un item à la checklist..." required>
-        <label class="checkbox-inline">
-          <input type="checkbox" name="requires_file" value="1">
-          Fichier requis
-        </label>
-        <label class="checkbox-inline">
-          <input type="checkbox" name="is_required" value="1" checked>
-          Obligatoire
-        </label>
-        <button type="submit">Ajouter</button>
+        <input type="hidden" name="is_revision_item" value="0">
+
+<div class="add-item-row">
+          <select name="type_unified" id="tu-{{ sid }}" onchange="toggleVideoUrl(this, 'vu-{{ sid }}')" style="max-width:200px;">
+            <option value="photo">📷 Photo</option>
+            <option value="vecteur">🎨 Vecteur/Graphique</option>
+            <option value="video_file">🎬 Vidéo (fichier)</option>
+            <option value="document">📄 Document</option>
+            <option value="donnees">📊 Données</option>
+            <option value="archive">📦 Archive</option>
+            <option value="video_url">▶ Vidéo (lien externe)</option>
+            <option value="autre">📁 Autre</option>
+          </select>
+          <input type="text" name="nom_item" placeholder="Nom de l'item..." required style="flex:1;">
+        </div>
+
+        <input type="url" name="video_url" placeholder="URL de la vidéo (Drive ou YouTube)..."
+               class="video-url-field" id="vu-{{ sid }}">
+
+        <div class="add-item-row">
+          <label class="checkbox-inline">
+            <input type="checkbox" name="is_required" value="1" checked> Obligatoire
+          </label>
+          <button type="submit">Ajouter</button>
+        </div>
+
+    {# Tab révision modèle #}
+    <div class="tab-panel" id="tab-rev-{{ sid }}">
+      <p class="muted" style="font-size:var(--fs-sm);margin-bottom:var(--space-3);">
+        Ces items s'ajoutent automatiquement lors du déclenchement d'une révision.
+      </p>
+      {% if items_revision %}
+        <div class="checklist-items-list">
+          {% for item in items_revision %}
+            <div class="checklist-item is-revision">
+              <div class="item-left">
+                <span class="badge type-revision">🟡 Révision</span>
+                <strong>{{ item['nom_item'] }}</strong>
+              </div>
+              <a href="{{ url_for('delete_checklist_item', item_id=item['id']) }}"
+                 class="action-btn btn-small-delete"
+                 onclick="return confirm('Supprimer ?');">✖</a>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="muted" style="margin-bottom:var(--space-3);">Aucun item de révision modèle.</p>
+      {% endif %}
+
+      <form action="{{ url_for('add_checklist_item', service_id=sid) }}"
+            method="post" class="add-item-form" novalidate>
+        <input type="hidden" name="is_revision_item" value="1">
+        <input type="hidden" name="item_type" value="document">
+        <input type="hidden" name="requires_file" value="0">
+        <input type="hidden" name="is_required" value="1">
+        <input type="hidden" name="file_category" value="autre">
+        <div class="add-item-row">
+          <input type="text" name="nom_item" placeholder="Item de révision modèle..." required style="flex:1;">
+          <button type="submit">Ajouter</button>
+        </div>
       </form>
-    </section>
-  {% else %}
-    <p>Aucun service n’a été créé pour le moment.</p>
-  {% endfor %}
-</div>
+    </div>
+
+  </section>
+{% else %}
+  <div class="empty">
+    <h3>Aucun service créé</h3>
+    <p>Ajoutez votre premier service ci-dessus.</p>
+  </div>
+{% endfor %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function switchTab(btn, panelId) {
+  const card = btn.closest('.service-card');
+  card.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  card.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById(panelId).classList.add('active');
+}
+
+function toggleVideoUrl(select, fieldId) {
+  const field = document.getElementById(fieldId);
+  if (select.value === 'video_url') {
+    field.classList.add('visible');
+    field.required = true;
+  } else {
+    field.classList.remove('visible');
+    field.required = false;
+    field.value = '';
+  }
+}
+
+</script>
 {% endblock %}

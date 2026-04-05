@@ -5,6 +5,8 @@ import sqlite3
 import pathlib
 from functools import wraps
 from typing import Tuple
+import unicodedata
+from rapidfuzz import fuzz
 
 from flask import (
     Flask, render_template, request, redirect, url_for, session, flash, send_file, jsonify
@@ -21,6 +23,7 @@ from dotenv import load_dotenv
 from pathlib import Path
 ENV_PATH = (Path(__file__).resolve().parent / ".." / ".env").resolve()
 load_dotenv(dotenv_path=ENV_PATH)
+from drive_service import create_folder, upload_file, get_folder_link
 
 # ───────────────────────────────────────────────────────────
 # App init
@@ -259,7 +262,28 @@ def is_password_strong(password: str) -> bool:
     if not re.search(r"\d", password): return False
     if not re.search(r"[!@#$%^&*]", password): return False
     return True
+def normalize_company_name(name: str) -> str:
+    if not name:
+        return ""
+    nfkd = unicodedata.normalize("NFKD", name.lower())
+    ascii_str = "".join(c for c in nfkd if not unicodedata.combining(c))
+    cleaned = re.sub(r"[^\w\s]", "", ascii_str)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = re.sub(r"s$", "", cleaned)
+    return cleaned
 
+def find_matching_company(nom_entreprise: str, conn: sqlite3.Connection, seuil: int = 85):
+    needle = normalize_company_name(nom_entreprise)
+    if not needle:
+        return None
+    rows = conn.execute(
+        "SELECT id, nom_entreprise, drive_folder_id FROM clients WHERE nom_entreprise IS NOT NULL AND nom_entreprise != ''"
+    ).fetchall()
+    for row in rows:
+        score = fuzz.ratio(needle, normalize_company_name(row["nom_entreprise"]))
+        if score >= seuil:
+            return row
+    return None
 def send_email(to_list, subject, body):
     if not to_list:
         return
@@ -276,8 +300,28 @@ def send_email(to_list, subject, body):
     except Exception as e:
         print(f"[MAIL] Erreur d’envoi: {e}")
 
+FILE_CATEGORIES = {
+    'photo':     {'label': '📸 Photo',            'extensions': {'jpg','jpeg','png','heic','webp'}},
+    'vecteur':   {'label': '🎨 Vecteur/Graphique', 'extensions': {'svg','ai','psd','png','eps'}},
+    'video':     {'label': '🎬 Vidéo',             'extensions': {'mp4','mov','avi','mkv'}},
+    'document':  {'label': '📄 Document',          'extensions': {'pdf','doc','docx','odt'}},
+    'donnees':   {'label': '📊 Données',           'extensions': {'xls','xlsx','csv'}},
+    'archive':   {'label': '📦 Archive',           'extensions': {'zip','rar'}},
+    'autre':     {'label': '🔗 Autre',             'extensions': set()},
+}
+
 def allowed(filename: str) -> bool:
     return "." in filename and filename.rsplit(".",1)[1].lower() in app.config["ALLOWED_EXTENSIONS"]
+
+def allowed_for_category(filename: str, category: str) -> bool:
+    """Vérifie si l'extension du fichier correspond à la catégorie attendue."""
+    if not filename or category not in FILE_CATEGORIES:
+        return True  # Pas de restriction si catégorie inconnue
+    cat = FILE_CATEGORIES[category]
+    if not cat['extensions']:
+        return True  # 'autre' = tout accepté
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    return ext in cat['extensions']
 
 def login_required(f):
     @wraps(f)
@@ -477,8 +521,12 @@ def register():
         email = request.form.get('email','').strip().lower()
         password = request.form.get('password','')
         password2 = request.form.get('password2','')
-        nom_entreprise = request.form.get('nom_entreprise')
-        telephone = request.form.get('telephone')
+        nom_entreprise = request.form.get('nom_entreprise','').strip()
+        telephone = request.form.get('telephone','').strip()
+
+        if not nom_entreprise:
+            flash("Le nom d'entreprise est obligatoire. Pour un travailleur autonome, inscrivez votre nom complet.", "error")
+            return redirect(url_for('register'))
 
         if password != password2:
             flash('Les mots de passe ne correspondent pas.', 'error')
@@ -494,12 +542,32 @@ def register():
             flash("Cette adresse email est déjà utilisée.", "error")
             return redirect(url_for('register'))
 
+        match = find_matching_company(nom_entreprise, conn)
+        # S'assurer que le match a bien un dossier Drive existant
+        drive_folder_id = match["drive_folder_id"] if match and match["drive_folder_id"] else None
         hashed = bcrypt.generate_password_hash(password).decode('utf-8')
         conn.execute("""
-            INSERT INTO clients (nom_complet, email, nom_entreprise, telephone, mot_de_passe_hash, auth_provider, is_email_confirmed, is_admin)
-            VALUES (?, ?, ?, ?, ?, 'password', 0, 0)
-        """, (nom, email, nom_entreprise, telephone, hashed))
+            INSERT INTO clients (nom_complet, email, nom_entreprise, telephone, mot_de_passe_hash, auth_provider, is_email_confirmed, is_admin, drive_folder_id)
+            VALUES (?, ?, ?, ?, ?, 'password', 0, 0, ?)
+        """, (nom, email, nom_entreprise, telephone, hashed, drive_folder_id))
         conn.commit()
+
+        if not drive_folder_id:
+            try:
+                new_folder_id = create_folder(
+                    nom_entreprise,
+                    parent_id=os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID')
+                )
+                conn.execute("UPDATE clients SET drive_folder_id = ? WHERE email = ?", (new_folder_id, email))
+                conn.commit()
+                # Mettre à jour tous les autres comptes de la même entreprise sans dossier
+                conn.execute("""
+                    UPDATE clients SET drive_folder_id = ?
+                    WHERE drive_folder_id IS NULL AND nom_entreprise = ? AND email != ?
+                """, (new_folder_id, nom_entreprise, email))
+                conn.commit()
+            except Exception as e:
+                print(f"[DRIVE] Création dossier client échouée: {e}")
         conn.close()
 
         try:
@@ -513,7 +581,6 @@ def register():
         return render_template('register.html', show_success_popup=True)
 
     return render_template('register.html', show_success_popup=False)
-
 @app.route('/confirm/<token>')
 def confirm_email(token):
     try:
@@ -594,7 +661,21 @@ def dashboard():
         return redirect(url_for('admin_dashboard'))
     user_id = session['user_id']
     conn = get_db_connection()
-    projets = conn.execute("SELECT * FROM projets WHERE id_client = ?", (user_id,)).fetchall()
+    projets_actifs = conn.execute("""
+        SELECT p.*, s.icon as service_icon, s.nom_service as service_nom
+        FROM projets p
+        LEFT JOIN services s ON s.nom_service = SUBSTR(p.nom_projet, INSTR(p.nom_projet, ' — ') + 3)
+        WHERE p.id_client = ? AND (p.is_archived = 0 OR p.is_archived IS NULL)
+        ORDER BY p.created_at DESC
+    """, (user_id,)).fetchall()
+    projets_archives = conn.execute("""
+        SELECT p.*, s.icon as service_icon, s.nom_service as service_nom
+        FROM projets p
+        LEFT JOIN services s ON s.nom_service = SUBSTR(p.nom_projet, INSTR(p.nom_projet, ' — ') + 3)
+        WHERE p.id_client = ? AND p.is_archived = 1
+        ORDER BY p.created_at DESC
+    """, (user_id,)).fetchall()
+
     projets_with_pastille = []
     for p in projets:
         ready, done, total = compute_checklist_readiness(p['id'])
@@ -608,7 +689,12 @@ def dashboard():
 @login_required
 def project_detail(project_id):
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id = ?", (project_id,)).fetchone()
+    projet = conn.execute("""
+        SELECT p.*, s.icon as service_icon, s.nom_service as service_nom
+        FROM projets p
+        LEFT JOIN services s ON s.nom_service = SUBSTR(p.nom_projet, INSTR(p.nom_projet, ' — ') + 3)
+        WHERE p.id = ?
+    """, (project_id,)).fetchone()
     if not projet:
         conn.close()
         flash("Projet introuvable.", "error")
@@ -708,7 +794,14 @@ def upload_item_file(item_id):
         flash("Élément introuvable.", "error")
         return redirect(url_for('dashboard'))
 
+    if item['file_category'] and not allowed_for_category(file.filename, item['file_category']):
+        conn.close()
+        cat_label = FILE_CATEGORIES.get(item['file_category'], {}).get('label', item['file_category'])
+        flash(f"Ce champ attend un fichier de type : {cat_label}", "error")
+        return redirect(request.referrer or url_for('dashboard'))
+
     checklist = conn.execute("SELECT id_projet FROM checklistes WHERE id = ?", (item['id_checklist'],)).fetchone()
+
     projet   = conn.execute("SELECT * FROM projets WHERE id = ?", (checklist['id_projet'],)).fetchone()
 
     is_owner = (projet['id_client'] == session['user_id'])
@@ -722,7 +815,17 @@ def upload_item_file(item_id):
     base_dir = os.path.join(app.config["UPLOAD_ROOT"], f"projet_{projet['id']}", f"item_{item_id}")
     pathlib.Path(base_dir).mkdir(parents=True, exist_ok=True)
     save_path = os.path.join(base_dir, safe_name)
+
     file.save(save_path)
+
+    # Upload vers Google Drive dans le dossier du projet
+    drive_file_id = None
+    try:
+        # Utiliser le dossier "Dépôt de fichiers" si disponible, sinon le dossier projet
+        target_folder_id = projet['depot_folder_id'] if projet['depot_folder_id'] else projet['drive_folder_id'] if projet['drive_folder_id'] else os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID')
+        drive_file_id, _ = upload_file(save_path, safe_name, target_folder_id)
+    except Exception as e:
+        print(f"[DRIVE] Upload fichier échoué: {e}")
 
     conn.execute("""
         INSERT INTO uploads (id_item, filename, filepath, uploaded_by)
@@ -841,6 +944,8 @@ def update_password():
 @app.route('/admin')
 @admin_required
 def admin_dashboard():
+    from datetime import date
+    today = str(date.today())
     conn = get_db_connection()
     clients = conn.execute("SELECT id, nom_complet, email, nom_entreprise FROM clients").fetchall()
     projets = conn.execute("""
@@ -848,12 +953,25 @@ def admin_dashboard():
         FROM projets p JOIN clients c ON p.id_client = c.id
     """).fetchall()
     services = conn.execute("SELECT * FROM services ORDER BY nom_service").fetchall()
+    services_localisation = {str(s['id']): bool(s['localisation_requise']) for s in services}
     conn.close()
-    projets_with_pastille = []
-    for p in projets:
+    actifs_with_pastille = []
+    for p in projets_actifs:
         ready, done, total = compute_checklist_readiness(p['id'])
-        projets_with_pastille.append({"p": p, "pastille": pastille_color(ready), "done": done, "total": total})
-    return render_template('admin_dashboard.html',
+        actifs_with_pastille.append(
+            {"projet": p, "pastille": pastille_color(ready), "done": done, "total": total}
+        )
+    archives_with_pastille = []
+    for p in projets_archives:
+        ready, done, total = compute_checklist_readiness(p['id'])
+        archives_with_pastille.append(
+            {"projet": p, "pastille": pastille_color(ready), "done": done, "total": total}
+        )
+    conn.close()
+    return render_template('dashboard.html', projets=actifs_with_pastille, projets_archives=archives_with_pastille)
+
+        today=today,
+        services_localisation=services_localisation,
                            clients=clients, projets=projets_with_pastille, services=services)
 
 @app.route('/admin/add_client', methods=['POST'])
@@ -876,6 +994,18 @@ def add_client():
             VALUES (?, ?, ?, ?, 'password', 1, 0)
         """, (nom, email, entreprise, hashed))
         conn.commit()
+
+        # Créer le dossier Drive du client
+        try:
+            dossier_nom = entreprise if entreprise else nom
+            drive_folder_id = create_folder(
+                dossier_nom,
+                parent_id=os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID')
+            )
+            conn.execute("UPDATE clients SET drive_folder_id=? WHERE email=?", (drive_folder_id, email))
+            conn.commit()
+        except Exception as e:
+            print(f"[DRIVE] Création dossier client échouée: {e}")
         flash(f"Le client '{nom}' a été ajouté avec succès.", "success")
     except sqlite3.IntegrityError:
         flash(f"Erreur : L'email '{email}' existe déjà.", "error")
@@ -886,23 +1016,27 @@ def add_client():
 @app.route('/admin/add_project', methods=['POST'])
 @admin_required
 def add_project():
+    from datetime import date
     id_client = request.form.get('id_client')
-    nom_projet = request.form.get('nom_projet','').strip()
-
-    # Statut par défaut = Documents à donner, puis normalisation
-    statut = request.form.get('statut','').strip() or "Documents à donner"
-    statut = normalize_status(statut)
-
-    lien_gdrive = request.form.get('lien_gdrive')
     id_service = request.form.get('id_service')
-
+    date_seance = request.form.get('date_seance') or str(date.today())
+    localisation = request.form.get('localisation', '').strip() or None
+    lien_gdrive = None
+    conn_tmp = get_db_connection()
+    service_row = conn_tmp.execute("SELECT nom_service, documents_requis FROM services WHERE id=?", (id_service,)).fetchone()
+    conn_tmp.close()
+    nom_service = service_row['nom_service'] if service_row else "Projet"
+    localisation = request.form.get('localisation', '').strip() or None
+    nom_projet = f"{date_seance} — {nom_service} — {localisation}" if localisation else f"{date_seance} — {nom_service}"    
+    documents_requis = bool(service_row['documents_requis']) if service_row else True
+    statut = "Documents à donner" if documents_requis else "En attente de rendez-vous"
     conn = get_db_connection()
     try:
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO projets (nom_projet, statut, lien_gdrive, id_client)
-            VALUES (?, ?, ?, ?)
-        """, (nom_projet, statut, lien_gdrive, id_client))
+            INSERT INTO projets (nom_projet, statut, lien_gdrive, id_client, localisation)
+            VALUES (?, ?, ?, ?, ?)
+        """, (nom_projet, statut, lien_gdrive, id_client, localisation))
         id_projet = cur.lastrowid
 
 
@@ -910,16 +1044,33 @@ def add_project():
             cur.execute("INSERT INTO checklistes (id_projet) VALUES (?)", (id_projet,))
             id_checklist = cur.lastrowid
             items_modele = conn.execute("""
-                SELECT nom_item, requires_file, is_required
+                SELECT nom_item, requires_file, is_required, item_type, video_url, is_revision_item, file_category
                 FROM checklist_model_items WHERE id_service = ?
             """, (id_service,)).fetchall()
+
+
+
             for m in items_modele:
-                cur.execute("""
-                    INSERT INTO checklist_items (id_checklist, nom_item, requires_file, is_required)
-                    VALUES (?, ?, ?, ?)
-                """, (id_checklist, m['nom_item'], int(m['requires_file'] or 0), int(m['is_required'] or 1)))
+                if not int(m['is_revision_item'] or 0):
+                    cur.execute("""
+                        INSERT INTO checklist_items (id_checklist, nom_item, requires_file, is_required, item_type, video_url, is_revision, file_category)
+                        VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+                    """, (id_checklist, m['nom_item'], int(m['requires_file'] or 0), int(m['is_required'] or 1), m['item_type'] or 'document', m['video_url'], m['file_category'] or 'autre'))
 
         conn.commit()
+        # Créer le dossier Drive du projet
+        try:
+            client = conn.execute("SELECT * FROM clients WHERE id=?", (id_client,)).fetchone()
+            parent = client['drive_folder_id'] if client and client['drive_folder_id'] else os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID')
+            projet_folder_id = create_folder(nom_projet, parent_id=parent)
+            # Créer le sous-dossier "Dépôt de fichiers" dans le dossier projet
+            depot_folder_id = create_folder("Dépôt de fichiers", parent_id=projet_folder_id)
+            lien_gdrive_new = get_folder_link(projet_folder_id)
+            conn.execute("UPDATE projets SET lien_gdrive=?, drive_folder_id=?, depot_folder_id=? WHERE id=?", (lien_gdrive_new, projet_folder_id, depot_folder_id, id_projet))
+            conn.commit()
+
+        except Exception as drive_e:
+            print(f"[DRIVE] Création dossier projet échouée: {drive_e}")
         flash(f"Le projet '{nom_projet}' a été ajouté avec succès.", "success")
     except Exception as e:
         conn.rollback()
@@ -1029,20 +1180,23 @@ def admin_services():
         items = conn.execute("""
             SELECT * FROM checklist_model_items
             WHERE id_service = ?
-            ORDER BY id ASC
+            ORDER BY is_revision_item ASC, id ASC
         """, (service['id'],)).fetchall()
         services_avec_items.append({'service': service, 'items': items})
     conn.close()
-    return render_template('admin_services.html', services=services_avec_items)
+    return render_template('admin_services.html', services=services_avec_items, file_categories=FILE_CATEGORIES)
 
 @app.route('/admin/add_service', methods=['POST'])
 @admin_required
 def add_service():
     nom_service = request.form.get('nom_service','').strip()
     description = request.form.get('description','')
+    localisation_requise = int(request.form.get('localisation_requise', 0))
+    documents_requis = int(request.form.get('documents_requis', 0))
     conn = get_db_connection()
     try:
-        conn.execute("INSERT INTO services (nom_service, description) VALUES (?, ?)", (nom_service, description))
+        icon = request.form.get('icon', 'default')
+        conn.execute("INSERT INTO services (nom_service, description, localisation_requise, documents_requis, icon) VALUES (?, ?, ?, ?, ?)", (nom_service, description, localisation_requise, documents_requis, icon))
         conn.commit()
         flash(f"Le service '{nom_service}' a été ajouté.", "success")
     except sqlite3.IntegrityError:
@@ -1066,13 +1220,28 @@ def delete_service(service_id):
 @admin_required
 def add_checklist_item(service_id):
     nom_item = request.form.get('nom_item','').strip()
-    requires_file = int(request.form.get('requires_file', 0))
     is_required = int(request.form.get('is_required', 1))
+    is_revision_item = int(request.form.get('is_revision_item', 0))
+    video_url = request.form.get('video_url', '').strip() or None
+    type_unified = request.form.get('type_unified', 'document')
+
+    # Déduction item_type + file_category + requires_file selon choix unique
+    TYPE_MAP = {
+        'photo':     ('document', 'photo',    1),
+        'vecteur':   ('document', 'vecteur',  1),
+        'video_file':('document', 'video',    1),
+        'document':  ('document', 'document', 1),
+        'donnees':   ('document', 'donnees',  1),
+        'archive':   ('document', 'archive',  1),
+        'video_url': ('video',    'autre',    0),
+        'autre':     ('document', 'autre',    0),
+    }
+    item_type, file_category, requires_file = TYPE_MAP.get(type_unified, ('document', 'autre', 0))
     conn = get_db_connection()
     conn.execute("""
-        INSERT INTO checklist_model_items (id_service, nom_item, requires_file, is_required)
-        VALUES (?, ?, ?, ?)
-    """, (service_id, nom_item, requires_file, is_required))
+        INSERT INTO checklist_model_items (id_service, nom_item, requires_file, is_required, item_type, video_url, is_revision_item, file_category)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (service_id, nom_item, requires_file, is_required, item_type, video_url, is_revision_item, file_category))
     conn.commit()
     conn.close()
     return redirect(url_for('admin_services'))
@@ -1085,6 +1254,97 @@ def delete_checklist_item(item_id):
     conn.commit()
     conn.close()
     return redirect(url_for('admin_services'))
+
+def update_project_status(project_id):
+    """Met à jour le statut du projet selon l'état de la checklist."""
+    conn = get_db_connection()
+    projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
+    if not projet:
+        conn.close()
+        return
+    checklist = conn.execute("SELECT id FROM checklistes WHERE id_projet=?", (project_id,)).fetchone()
+    if not checklist:
+        conn.close()
+        return
+    items = conn.execute("SELECT * FROM checklist_items WHERE id_checklist=?", (checklist['id'],)).fetchall()
+    if not items:
+        conn.close()
+        return
+    statut_actuel = projet['statut'].lower() if projet['statut'] else ''
+    # Si déjà en révision ou complété, on ne touche pas au statut automatiquement
+    if statut_actuel in ['en révision', 'complété', 'complete']:
+        conn.close()
+        return
+    items_requis = [i for i in items if int(i['is_required'] or 0) == 1 and int(i['is_revision'] or 0) == 0]
+    tous_coches = all(int(i['est_coche'] or 0) == 1 for i in items_requis)
+    if tous_coches and items_requis:
+        conn.execute("UPDATE projets SET statut='Travaux en cours' WHERE id=?", (project_id,))
+        conn.commit()
+    conn.close()
+
+@app.route('/admin/projet/<int:project_id>/revision', methods=['POST'])
+@admin_required
+def start_revision(project_id):
+    """Passe le projet en mode révision et ajoute des items de révision."""
+    conn = get_db_connection()
+    checklist = conn.execute("SELECT id FROM checklistes WHERE id_projet=?", (project_id,)).fetchone()
+    if not checklist:
+        conn.execute("INSERT INTO checklistes (id_projet) VALUES (?)", (project_id,))
+        conn.commit()
+        checklist = conn.execute("SELECT id FROM checklistes WHERE id_projet=?", (project_id,)).fetchone()
+    # Ajouter les items modèle de révision du service
+    projet_row = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
+    if projet_row:
+        # Trouver le service via le nom du projet
+        service_items_rev = []
+        # Items manuels du formulaire
+        items_revision = request.form.getlist('items_revision[]')
+        for nom in items_revision:
+            nom = nom.strip()
+            if nom:
+                conn.execute("""
+                    INSERT INTO checklist_items (id_checklist, nom_item, requires_file, is_required, is_revision)
+                    VALUES (?, ?, 0, 1, 1)
+                """, (checklist['id'], nom))
+    conn.execute("UPDATE projets SET statut='En révision' WHERE id=?", (project_id,))
+    conn.commit()
+    conn.close()
+    flash("Projet passé en révision.", "success")
+    return redirect(url_for('project_detail', project_id=project_id))
+
+@app.route('/admin/projet/<int:project_id>/force_status', methods=['POST'])
+@admin_required
+def force_status(project_id):
+    statut = request.form.get('statut', '').strip()
+    if statut:
+        conn = get_db_connection()
+        conn.execute("UPDATE projets SET statut=? WHERE id=?", (statut, project_id))
+        conn.commit()
+        conn.close()
+        flash(f"Statut mis à jour : {statut}", "success")
+    return redirect(url_for('project_detail', project_id=project_id))
+
+@app.route('/admin/projet/<int:project_id>/start', methods=['POST'])
+@admin_required
+def start_work(project_id):
+    """Démarre les travaux manuellement (pour services sans documents requis)."""
+    conn = get_db_connection()
+    conn.execute("UPDATE projets SET statut='Travaux en cours' WHERE id=?", (project_id,))
+    conn.commit()
+    conn.close()
+    flash("Travaux démarrés.", "success")
+    return redirect(url_for('project_detail', project_id=project_id))
+
+@app.route('/admin/projet/<int:project_id>/complete', methods=['POST'])
+@admin_required
+def complete_project(project_id):
+    """Marque le projet comme complété."""
+    conn = get_db_connection()
+    conn.execute("UPDATE projets SET statut='Complété' WHERE id=?", (project_id,))
+    conn.commit()
+    conn.close()
+    flash("Projet marqué comme complété.", "success")
+    return redirect(url_for('project_detail', project_id=project_id))
 
 # ───────────────────────────────────────────────────────────
 # Main
@@ -1114,6 +1374,68 @@ def create_admin():
     conn.close()
 
 create_admin()
+
+@app.route('/admin/projet/<int:project_id>/edit_items', methods=['POST'])
+@admin_required
+def edit_checklist_items(project_id):
+    conn = get_db_connection()
+    checklist = conn.execute("SELECT id FROM checklistes WHERE id_projet = ?", (project_id,)).fetchone()
+    if not checklist:
+        conn.close()
+        flash("Checklist introuvable.", "error")
+        return redirect(url_for('project_detail', project_id=project_id))
+
+    item_ids = request.form.getlist('item_id[]')
+    for iid in item_ids:
+        nom = request.form.get(f'nom_{iid}', '').strip()
+        type_unified = request.form.get(f'type_{iid}', 'document')
+        is_required = 1 if request.form.get(f'required_{iid}') else 0
+
+        TYPE_MAP = {
+            'photo':      ('document', 'photo',    1),
+            'vecteur':    ('document', 'vecteur',  1),
+            'video_file': ('document', 'video',    1),
+            'document':   ('document', 'document', 1),
+            'donnees':    ('document', 'donnees',  1),
+            'archive':    ('document', 'archive',  1),
+            'video_url':  ('video',    'autre',    0),
+            'autre':      ('document', 'autre',    0),
+        }
+        item_type, file_category, requires_file = TYPE_MAP.get(type_unified, ('document', 'autre', 0))
+
+        if nom:
+            conn.execute("""
+                UPDATE checklist_items
+                SET nom_item=?, item_type=?, file_category=?, requires_file=?, is_required=?
+                WHERE id=? AND id_checklist=?
+            """, (nom, item_type, file_category, requires_file, is_required, iid, checklist['id']))
+
+    conn.commit()
+    conn.close()
+    flash("Items mis à jour.", "success")
+    return redirect(url_for('project_detail', project_id=project_id))
+
+
+@app.route('/admin/projet/<int:project_id>/archive', methods=['POST'])
+@admin_required
+def archive_project(project_id):
+    conn = get_db_connection()
+    conn.execute("UPDATE projets SET is_archived = 1 WHERE id = ?", (project_id,))
+    conn.commit()
+    conn.close()
+    flash("Projet archivé.", "success")
+    return redirect(url_for('project_detail', project_id=project_id))
+
+@app.route('/admin/projet/<int:project_id>/unarchive', methods=['POST'])
+@admin_required
+def unarchive_project(project_id):
+    conn = get_db_connection()
+    conn.execute("UPDATE projets SET is_archived = 0 WHERE id = ?", (project_id,))
+    conn.commit()
+    conn.close()
+    flash("Projet désarchivé.", "success")
+    return redirect(url_for('project_detail', project_id=project_id))
+
 
 if __name__ == '__main__':
     app.run(debug=True)

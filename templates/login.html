@@ -1,30 +1,38 @@
 {% extends "base.html" %}
-{% block title %}Connexion | Portail Client{% endblock %}
+{% block title %}Connexion{% endblock %}
+
+{% block head %}
+<style>
+  .auth-page { display:flex; justify-content:center; align-items:center; min-height:70vh; padding:var(--space-6) var(--space-3); }
+  .auth-container { width:min(480px,100%); }
+  .auth-logo { display:block; margin:0 auto var(--space-4); height:70px; width:auto; }
+  .auth-link { text-align:center; margin-top:var(--space-2); font-size:var(--fs-sm); }
+  .separator { text-align:center; color:#aaa; margin:var(--space-3) 0; font-size:var(--fs-sm); position:relative; }
+  .separator::before, .separator::after { content:''; position:absolute; top:50%; width:42%; height:1px; background:var(--couleur-bordure); }
+  .separator::before { left:0; } .separator::after { right:0; }
+</style>
+{% endblock %}
 
 {% block content %}
 <div class="auth-page">
-  <div class="auth-container">
+  <div class="auth-container card">
+    <img src="{{ url_for('static', filename='logo 2.png') }}" alt="Logo Cocktail Média" class="auth-logo">
+    <h1 style="text-align:center;font-size:var(--fs-xl);border:none;padding:0;margin-bottom:var(--space-4);">Connexion au portail</h1>
 
-    <img src="{{ url_for('static', filename='logo 2.png') }}" alt="Logo Cocktail Media" class="auth-logo">
-
-    <h1>Connexion au Portail Client</h1>
-
-    <form method="post" action="{{ url_for('login') }}" class="auth-form" novalidate>
+    <form method="post" action="{{ url_for('login') }}" class="form" novalidate>
       <div class="form-group">
         <label for="email">Adresse email</label>
         <input type="email" id="email" name="email" required>
       </div>
-
       <div class="form-group">
         <label for="password">Mot de passe</label>
         <input type="password" id="password" name="password" required>
         <div class="show-password-container">
           <input type="checkbox" id="showPassword">
-          <label for="showPassword" style="font-weight:normal;margin-bottom:0;">Afficher le mot de passe</label>
+          <label for="showPassword">Afficher le mot de passe</label>
         </div>
       </div>
-
-      <button type="submit" class="btn-green">Se connecter</button>
+      <button type="submit" class="btn-block">Se connecter</button>
     </form>
 
     <div class="separator">ou</div>
@@ -34,22 +42,16 @@
       Se connecter avec Google
     </a>
 
-    <p class="auth-link">
-      <a href="{{ url_for('forgot_password') }}">Mot de passe oublié ?</a>
-    </p>
-    <p class="auth-link">
-      Pas encore de compte ? <a href="{{ url_for('register') }}">Inscrivez-vous</a>
-    </p>
+    <p class="auth-link"><a href="{{ url_for('forgot_password') }}">Mot de passe oublié ?</a></p>
+    <p class="auth-link">Pas encore de compte ? <a href="{{ url_for('register') }}">Inscrivez-vous</a></p>
   </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-document.getElementById("showPassword").addEventListener("click", function() {
-  const passwordInput = document.getElementById("password");
-  passwordInput.type = this.checked ? "text" : "password";
+document.getElementById('showPassword').addEventListener('change', function () {
+  document.getElementById('password').type = this.checked ? 'text' : 'password';
 });
 </script>
 {% endblock %}
-

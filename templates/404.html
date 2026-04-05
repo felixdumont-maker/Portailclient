@@ -2,9 +2,10 @@
 {% block title %}Page introuvable (404){% endblock %}
 
 {% block content %}
-<div class="container" style="text-align:center;padding:3rem 1rem;">
-  <h1>404</h1>
-  <p>Oups, la page que vous cherchez n’existe pas.</p>
-  <p><a href="{{ url_for('accueil') }}" class="nav-link">← Retour à l’accueil</a></p>
+<div class="empty" style="margin-top:var(--space-6);padding:var(--space-6);">
+  <h1 style="font-size:4rem;border:none;padding:0;margin-bottom:var(--space-2);">404</h1>
+  <h3>Page introuvable</h3>
+  <p>La page que vous cherchez n'existe pas ou a été déplacée.</p>
+  <a href="{{ url_for('accueil') }}" class="btn" style="margin-top:var(--space-3);">← Retour à l'accueil</a>
 </div>
 {% endblock %}

@@ -1,51 +1,419 @@
 {% extends "base.html" %}
-{% block title %}Projet – {{ projet['nom_projet'] }}{% endblock %}
+{% block title %}{{ projet['nom_projet'] }}{% endblock %}
 
-{% block content %}
-<nav class="navbar">
-  <div class="nav-container">
-    <img src="{{ url_for('static', filename='logo.png') }}" alt="Logo" class="nav-logo">
-    <div>
-      <a href="{{ url_for('dashboard') }}" class="nav-link" style="background-color:#6c757d;margin-right:1rem;">Retour au tableau de bord</a>
-      <a href="{{ url_for('logout') }}" class="nav-link">Se déconnecter</a>
-    </div>
-  </div>
-</nav>
+{% block head %}
 
-<div class="container">
-  <div class="project-header">
-    <h1>{{ projet['nom_projet'] }}</h1>
-    <span class="project-status">{{ projet['statut'] }}</span>
-  </div>
+<style>
+  .project-header {
+    display: flex; align-items: flex-start;
+    justify-content: space-between;
+    flex-wrap: wrap; gap: var(--space-3);
+    margin-bottom: var(--space-5);
+  }
+  .project-header h1 { margin: 0; border: none; padding: 0; }
+  .project-meta { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
 
-  <section class="project-section">
-    <h2>Fichiers du projet</h2>
-    {% if projet['lien_gdrive'] %}
-      <a href="{{ projet['lien_gdrive'] }}" target="_blank" rel="noopener noreferrer" class="gdrive-button">
-        Ouvrir le dossier Google Drive
-      </a>
-    {% else %}
-      <p>Aucun dossier Google Drive n’est associé à ce projet pour le moment.</p>
-    {% endif %}
-  </section>
+  /* Statuts */
+  .statut-rouge  { background: #fdecea; color: var(--couleur-danger);  border: 1px solid #f5c6cb; }
+  .statut-orange { background: #fff4e5; color: var(--couleur-warning); border: 1px solid #ffd699; }
+  .statut-jaune  { background: #fffde7; color: #856404;                border: 1px solid #ffe082; }
+  .statut-vert   { background: #e7f5ec; color: var(--couleur-success); border: 1px solid #a8d5b0; }
+  .statut-gris   { background: #f5f5f5; color: #666;                   border: 1px solid #ddd; }
 
-  <section class="project-section">
-    <h2>Checklist</h2>
-    {% if items and items|length > 0 %}
-      <ul class="checklist">
-        {% for item in items %}
-          <li class="checklist-item {% if item['est_coche'] %}completed{% endif %}">
-            <a href="{{ url_for('toggle_checklist_item', item_id=item['id']) }}" class="item-link">
-              {{ item['nom_item'] }}
-            </a>
-          </li>
-        {% endfor %}
-      </ul>
-    {% else %}
-      <p>Aucun item dans la checklist pour le moment.</p>
-    {% endif %}
-  </section>
-</div>
+  .statut-pill {
+    display: inline-flex; align-items: center; gap: .4rem;
+    padding: .4rem .9rem; border-radius: 999px;
+    font-weight: 700; font-size: var(--fs-sm);
+  }
+
+  /* Progression */
+  .progress-wrap { margin-bottom: var(--space-5); }
+  .progress-label { display: flex; justify-content: space-between; font-size: var(--fs-sm); font-weight: 600; margin-bottom: .4rem; }
+
+  .project-section { margin-bottom: var(--space-5); }
+
+  /* Checklist */
+  .checklist { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--space-2); }
+
+  .checklist-item {
+    background: var(--couleur-blanc);
+    border-left: 4px solid var(--couleur-bordure);
+    border-top: 1px solid var(--couleur-bordure);
+    border-right: 1px solid var(--couleur-bordure);
+    border-bottom: 1px solid var(--couleur-bordure);
+    border-radius: var(--radius-md);
+    padding: var(--space-3) var(--space-4);
+    transition: all var(--t-fast);
+  }
+
+  .checklist-item.item-rouge    { border-left-color: var(--couleur-danger); background: #fff8f8; }
+  .checklist-item.item-vert     { border-left-color: var(--couleur-success); background: #f0faf2; }
+  .checklist-item.item-video    { border-left-color: #7c3aed; background: #faf5ff; }
+  .checklist-item.item-revision { border-left-color: #856404; background: #fffde7; }
+  .checklist-item.completed .item-link { text-decoration: line-through; color: #7a7773; }
+
+  .item-row { display: flex; align-items: center; gap: var(--space-3); }
+
+  .item-check {
+    width: 22px; height: 22px; border-radius: 50%;
+    border: 2px solid var(--couleur-bordure); flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: .8rem; color: #fff; transition: all var(--t-fast);
+  }
+  .completed .item-check { background: var(--couleur-success); border-color: var(--couleur-success); }
+
+  .item-link {
+    color: var(--couleur-sombre); font-weight: 600;
+    font-size: var(--fs-sm); text-decoration: none; flex: 1;
+  }
+  .item-link:hover { color: var(--couleur-principale); text-decoration: none; }
+
+  .item-badges { display: flex; gap: .35rem; flex-shrink: 0; }
+
+  /* Upload */
+  .item-upload { margin-top: var(--space-2); padding-top: var(--space-2); border-top: 1px dashed var(--couleur-bordure); }
+  .file-already { display: flex; align-items: center; gap: var(--space-2); font-size: var(--fs-sm); color: var(--couleur-success); font-weight: 600; margin-bottom: var(--space-2); }
+  .upload-form { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+  .upload-form input[type="file"] { font-size: var(--fs-sm); padding: .4rem .6rem; flex: 1; min-width: 200px; background: var(--couleur-fond); border: 1px solid var(--couleur-bordure); border-radius: var(--radius-sm); cursor: pointer; }
+  .upload-form button { min-width: auto; padding: .5rem 1rem; font-size: .9rem; }
+
+  /* Vidéo */
+  .video-embed { margin-top: var(--space-2); }
+  .video-link { display: inline-flex; align-items: center; gap: .4rem; font-size: var(--fs-sm); font-weight: 600; color: #7c3aed; text-decoration: none; }
+  .video-link:hover { text-decoration: underline; }
+  .btn-video-done { min-width: auto; padding: .4rem .9rem; font-size: .85rem; background: #7c3aed; margin-top: var(--space-2); }
+  .btn-video-done:hover { background: #6d28d9; }
+
+  /* Actions admin */
+  .admin-actions { display: flex; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-4); }
+
+  .btn-start    { background: var(--couleur-warning); color: #fff; }
+  .btn-start:hover { background: #a05700; }
+  .btn-revision { background: #856404; color: #fff; }
+  .btn-revision:hover { background: #6b5003; }
+  .btn-complete { background: var(--couleur-success); color: #fff; }
+  .btn-complete:hover { background: #1b5e20; }
+  .btn-force { background: #555; color: #fff; font-size: .85rem; min-width: auto; padding: .4rem .9rem; }
+  .btn-force:hover { background: #333; }
+
+  /* Panel révision */
+  .revision-panel { background: #fffde7; border: 1px solid #ffe082; border-radius: var(--radius-md); padding: var(--space-4); margin-bottom: var(--space-4); }
+  .revision-panel h3 { margin-top: 0; font-size: var(--fs-lg); }
+  .revision-items-list { display: grid; gap: var(--space-2); margin-bottom: var(--space-3); }
+  .revision-item-row { display: flex; gap: var(--space-2); align-items: center; }
+  .revision-item-row input[type="text"] { flex: 1; }
+  .btn-add-revision { background: transparent; color: var(--couleur-principale); border: 1px dashed var(--couleur-principale); min-width: auto; padding: .4rem .9rem; font-size: .85rem; }
+
+  /* Panel forcer statut */
+  .force-panel { background: #f5f5f5; border: 1px solid #ddd; border-radius: var(--radius-md); padding: var(--space-4); margin-bottom: var(--space-4); }
+  .force-panel h3 { margin-top: 0; font-size: var(--fs-md); }
+  .force-panel select { padding: .5rem; border-radius: var(--radius-sm); border: 1px solid var(--couleur-bordure); }
+
+  @media (max-width: 480px) {
+    .project-header { flex-direction: column; }
+    .upload-form { flex-direction: column; }
+    .upload-form input[type="file"] { width: 100%; }
+  }
+.edit-items-panel { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: var(--radius-md); padding: var(--space-4); margin-bottom: var(--space-4); }
+.edit-items-panel h3 { margin-top: 0; font-size: var(--fs-md); font-weight: 700; margin-bottom: var(--space-3); }
+.edit-item-row { display: grid; grid-template-columns: 1fr 180px auto; gap: var(--space-2); align-items: center; margin-bottom: var(--space-2); padding: var(--space-2); background: #fff; border: 1px solid var(--couleur-bordure); border-radius: var(--radius-sm); }
+@media (max-width: 600px) { .edit-item-row { grid-template-columns: 1fr; } }
+</style>
 {% endblock %}
 
+{% block content %}
 
+{# Breadcrumb #}
+<nav class="breadcrumbs" aria-label="Fil d'Ariane">
+  <a href="{{ url_for('dashboard') }}">Tableau de bord</a>
+  <span class="sep">›</span>
+  <span>{{ projet['nom_projet'] }}</span>
+</nav>
+
+{# Statut #}
+{% set statut_lower = projet['statut']|lower if projet['statut'] else '' %}
+{% if 'document' in statut_lower %}
+  {% set statut_class = 'statut-rouge' %}
+  {% set statut_icon = '🔴' %}
+{% elif 'attente' in statut_lower %}
+  {% set statut_class = 'statut-gris' %}
+  {% set statut_icon = '⚪' %}
+{% elif 'travaux' in statut_lower or 'cours' in statut_lower %}
+  {% set statut_class = 'statut-orange' %}
+  {% set statut_icon = '🟠' %}
+{% elif 'révision' in statut_lower or 'revision' in statut_lower %}
+  {% set statut_class = 'statut-jaune' %}
+  {% set statut_icon = '🟡' %}
+{% elif 'complet' in statut_lower %}
+  {% set statut_class = 'statut-vert' %}
+  {% set statut_icon = '🟢' %}
+{% else %}
+  {% set statut_class = 'statut-gris' %}
+  {% set statut_icon = '⚪' %}
+{% endif %}
+
+<div class="project-header">
+  <div style="display:flex;align-items:center;gap:var(--space-3);">
+    {% set si = projet['service_icon'] or 'default' %}
+    {% if si == 'photo' %}{% set ic='ic-photo' %}{% set icon_svg %}<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6.827 6.175A2.31 2.31 0 0 1 5.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 0 0-1.134-.175 2.31 2.31 0 0 1-1.64-1.055l-.822-1.316a2.192 2.192 0 0 0-1.736-1.039 48.774 48.774 0 0 0-5.232 0 2.192 2.192 0 0 0-1.736 1.039l-.821 1.316Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 12.75a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0ZM18.75 10.5h.008v.008h-.008V10.5Z"/></svg>{% endset %}
+    {% elif si == 'video' %}{% set ic='ic-video' %}{% set icon_svg %}<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"/></svg>{% endset %}
+    {% elif si == 'graphisme' %}{% set ic='ic-graphisme' %}{% set icon_svg %}<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9.53 16.122a3 3 0 0 0-5.78 1.128 2.25 2.25 0 0 1-2.4 2.245 4.5 4.5 0 0 0 8.4-2.245c0-.399-.078-.78-.22-1.128Zm0 0a15.998 15.998 0 0 0 3.388-1.62m-5.043-.025a15.994 15.994 0 0 1 1.622-3.395m3.42 3.42a15.995 15.995 0 0 0 4.764-4.648l3.876-5.814a1.151 1.151 0 0 0-1.597-1.597L14.146 6.32a15.996 15.996 0 0 0-4.649 4.763m3.42 3.42a6.776 6.776 0 0 0-3.42-3.42"/></svg>{% endset %}
+    {% elif si == 'web' %}{% set ic='ic-web' %}{% set icon_svg %}<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582m15.686 0A11.953 11.953 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0 1 21 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0 1 12 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 0 1 3 12c0-1.605.42-3.113 1.157-4.418"/></svg>{% endset %}
+    {% elif si == 'info' %}{% set ic='ic-info' %}{% set icon_svg %}<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 0 1-1.125-1.125M3.375 19.5h1.5C5.496 19.5 6 18.996 6 18.375m-3.75 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-1.5A1.125 1.125 0 0 1 18 18.375M20.625 4.5H3.375m17.25 0c.621 0 1.125.504 1.125 1.125M20.625 4.5h-1.5C18.504 4.5 18 5.004 18 5.625m3.75 0v1.5c0 .621-.504 1.125-1.125 1.125M3.375 4.5c-.621 0-1.125.504-1.125 1.125M3.375 4.5h1.5C5.496 4.5 6 5.004 6 5.625m-3.75 0v1.5c0 .621.504 1.125 1.125 1.125m0 0h1.5"/></svg>{% endset %}
+    {% else %}{% set ic='ic-default' %}{% set icon_svg %}<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-8.69-6.44-2.12-2.12a1.5 1.5 0 0 0-1.061-.44H4.5A2.25 2.25 0 0 0 2.25 6v12a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9a2.25 2.25 0 0 0-2.25-2.25h-5.379a1.5 1.5 0 0 1-1.06-.44Z"/></svg>{% endset %}
+    {% endif %}
+    <div class="svc-icon {{ ic }}" style="width:52px;height:52px;border-radius:14px;flex-shrink:0;display:flex;align-items:center;justify-content:center;">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor" style="width:24px;height:24px;">{{ icon_svg }}</svg>
+    </div>
+    <div>
+      <h1 style="margin:0;border:none;padding:0;">{{ projet['nom_projet'] }}</h1>
+</div>
+    <div class="project-meta">
+      <span class="statut-pill {{ statut_class }}">{{ statut_icon }} {{ normalize_status(projet['statut']) }}</span>
+      {% if projet['localisation'] %}
+        <span class="meta"> {{ projet['localisation'] }}</span>
+      {% endif %}
+    </div>
+  </div>
+  {% if projet['lien_gdrive'] %}
+    <a href="{{ projet['lien_gdrive'] }}" target="_blank" rel="noopener noreferrer" class="gdrive-button">📁 Google Drive</a>
+  {% endif %}
+</div>
+
+{# Progression #}
+{% if items %}
+  {% set items_requis = items | selectattr('is_required') | rejectattr('is_revision', 'equalto', 1) | list %}
+  {% set items_coches = items_requis | selectattr('est_coche') | list %}
+  {% set pct = ((items_coches|length / items_requis|length) * 100)|int if items_requis|length > 0 else 0 %}
+  <div class="progress-wrap">
+    <div class="progress-label">
+      <span>Progression</span>
+      <span>{{ items_coches|length }}/{{ items_requis|length }}</span>
+    </div>
+    <div class="progress" role="progressbar" aria-valuenow="{{ pct }}" aria-valuemin="0" aria-valuemax="100">
+      <span style="width:{{ pct }}%"></span>
+    </div>
+  </div>
+{% endif %}
+
+{# Actions admin #}
+{% if session.get('is_admin') %}
+  <div class="admin-actions">
+
+    {# Sans documents — bouton démarrer travaux #}
+    {% if not documents_requis and ('attente' in statut_lower) %}
+      <form action="{{ url_for('start_work', project_id=projet['id']) }}" method="post">
+        <button type="submit" class="btn btn-start">🟠 Démarrer les travaux</button>
+      </form>
+    {% endif %}
+
+    {# Bouton révision — si travaux en cours #}
+    {% if 'travaux' in statut_lower or 'cours' in statut_lower %}
+      <button onclick="document.getElementById('revision-panel').style.display='block'" class="btn btn-revision">
+        🟡 Envoyer en révision
+      </button>
+    {% endif %}
+
+    {# Bouton complété — si en révision #}
+    {% if 'révision' in statut_lower or 'revision' in statut_lower %}
+      <form action="{{ url_for('complete_project', project_id=projet['id']) }}" method="post">
+        <button type="submit" class="btn btn-complete">🟢 Marquer complété</button>
+      </form>
+    {% endif %}
+
+    {# Joker — forcer statut #}
+    <button onclick="document.getElementById('force-panel').style.display='block'" class="btn btn-force">
+      ⚙️ Forcer le statut
+    </button>
+    <button onclick="document.getElementById('edit-items-panel').style.display='block'" class="btn btn-force">
+      ✏️ Modifier les items
+    </button>
+  </div>
+
+  {# Panel forcer statut #}
+  <div id="force-panel" class="force-panel" style="display:none;">
+    <h3>⚙️ Forcer le statut manuellement</h3>
+    <form action="{{ url_for('force_status', project_id=projet['id']) }}" method="post" style="display:flex;gap:var(--space-3);align-items:center;flex-wrap:wrap;">
+      <select name="statut">
+        <option value="Documents à donner">🔴 Documents à donner</option>
+        <option value="En attente de rendez-vous">⚪ En attente de rendez-vous</option>
+        <option value="Travaux en cours">🟠 Travaux en cours</option>
+        <option value="En révision">🟡 En révision</option>
+        <option value="Complété">🟢 Complété</option>
+      </select>
+      <button type="submit" class="btn btn-force">Appliquer</button>
+      <button type="button" class="btn btn-secondary" onclick="document.getElementById('force-panel').style.display='none'" style="min-width:auto;">Annuler</button>
+    </form>
+  </div>
+
+<div id="edit-items-panel" class="edit-items-panel" style="display:none;">
+    <h3>✏️ Modifier les items de la checklist</h3>
+    <form action="{{ url_for('edit_checklist_items', project_id=projet['id']) }}" method="post">
+      {% for item in items %}
+        {% if not item['is_revision'] %}
+          {% set tu = item['file_category'] if item['item_type'] == 'document' else 'video_url' %}
+          <div class="edit-item-row">
+            <input type="hidden" name="item_id[]" value="{{ item['id'] }}">
+            <input type="text" name="nom_{{ item['id'] }}" value="{{ item['nom_item'] }}" required>
+            <select name="type_{{ item['id'] }}">
+              <option value="photo"      {% if item['file_category']=='photo' %}selected{% endif %}>📷 Photo</option>
+              <option value="vecteur"    {% if item['file_category']=='vecteur' %}selected{% endif %}>🎨 Vecteur</option>
+              <option value="video_file" {% if item['file_category']=='video' %}selected{% endif %}>🎬 Vidéo (fichier)</option>
+              <option value="document"   {% if item['file_category']=='document' %}selected{% endif %}>📄 Document</option>
+              <option value="donnees"    {% if item['file_category']=='donnees' %}selected{% endif %}>📊 Données</option>
+              <option value="archive"    {% if item['file_category']=='archive' %}selected{% endif %}>📦 Archive</option>
+              <option value="video_url"  {% if item['item_type']=='video' %}selected{% endif %}>▶ Vidéo (lien)</option>
+              <option value="autre"      {% if item['file_category']=='autre' and item['item_type']!='video' %}selected{% endif %}>📁 Autre</option>
+            </select>
+            <label class="checkbox-inline">
+              <input type="checkbox" name="required_{{ item['id'] }}" value="1" {% if item['is_required'] %}checked{% endif %}> Obligatoire
+            </label>
+          </div>
+        {% endif %}
+      {% endfor %}
+      <div style="display:flex;gap:var(--space-3);margin-top:var(--space-3);">
+        <button type="submit" class="btn btn-force">Sauvegarder</button>
+        <button type="button" class="btn btn-secondary" onclick="document.getElementById('edit-items-panel').style.display='none'">Annuler</button>
+      </div>
+    </form>
+  </div>
+
+  {# Panel révision #}
+  <div id="revision-panel" class="revision-panel" style="display:none;">
+    <h3>🟡 Créer une liste de révisions</h3>
+    <form action="{{ url_for('start_revision', project_id=projet['id']) }}" method="post">
+      <div class="revision-items-list" id="revision-items">
+        <div class="revision-item-row">
+          <input type="text" name="items_revision[]" placeholder="Item de révision...">
+        </div>
+      </div>
+      <button type="button" class="btn btn-add-revision" onclick="addRevisionItem()">+ Ajouter un item</button>
+      <div style="display:flex;gap:var(--space-3);margin-top:var(--space-3);">
+        <button type="submit" class="btn btn-revision">Envoyer en révision</button>
+        <button type="button" class="btn btn-secondary" onclick="document.getElementById('revision-panel').style.display='none'">Annuler</button>
+      </div>
+    </form>
+  </div>
+{% endif %}
+
+{# Checklist principale #}
+{% set items_normaux = [] %}
+{% set items_revision_list = [] %}
+{% if items %}
+  {% for item in items %}
+    {% if item['is_revision'] %}
+      {% set _ = items_revision_list.append(item) %}
+    {% else %}
+      {% set _ = items_normaux.append(item) %}
+    {% endif %}
+  {% endfor %}
+{% endif %}
+
+{% if items_normaux %}
+<section class="project-section">
+  <h2>Checklist</h2>
+  <ul class="checklist">
+    {% for item in items_normaux %}
+      {% set is_done = item['est_coche'] %}
+      {% set needs_file = item['requires_file'] %}
+      {% set has_file = item['file_path'] %}
+      {% set is_video = item['item_type'] == 'video' %}
+
+      {% if is_video %}
+        {% set item_class = 'item-video' %}
+      {% elif is_done %}
+        {% set item_class = 'item-vert' %}
+      {% elif needs_file and not has_file %}
+        {% set item_class = 'item-rouge' %}
+      {% else %}
+        {% set item_class = '' %}
+      {% endif %}
+
+      <li class="checklist-item {{ item_class }} {% if is_done %}completed{% endif %}">
+        <div class="item-row">
+          <div class="item-check">{% if is_done %}✓{% endif %}</div>
+          {% if is_video %}
+            <span class="item-link">▶ {{ item['nom_item'] }}</span>
+          {% else %}
+            <a href="{{ url_for('toggle_checklist_item', item_id=item['id']) }}" class="item-link">{{ item['nom_item'] }}</a>
+          {% endif %}
+          <div class="item-badges">
+            {% if is_video %}
+              <span class="badge" style="background:#ede9fe;color:#7c3aed;">Vidéo</span>
+            {% elif needs_file %}
+              <span class="badge {% if has_file %}badge--success{% else %}badge--danger{% endif %}">
+                {% if has_file %}✓ Reçu{% else %}Requis{% endif %}
+              </span>
+            {% endif %}
+          </div>
+        </div>
+
+        {% if is_video and item['video_url'] %}
+          <div class="video-embed">
+            <a href="{{ item['video_url'] }}" target="_blank" class="video-link">▶ Visionner la vidéo</a>
+            {% if not is_done %}
+              <br>
+              <a href="{{ url_for('toggle_checklist_item', item_id=item['id']) }}" class="btn btn-video-done">J'ai visionné ✓</a>
+            {% endif %}
+          </div>
+        {% endif %}
+
+        {% if needs_file and not is_video %}
+          <div class="item-upload">
+            {% if has_file %}
+              <div class="file-already">✓ Fichier reçu — vous pouvez en envoyer un nouveau</div>
+            {% endif %}
+            <form action="{{ url_for('upload_item_file', item_id=item['id']) }}" method="post" enctype="multipart/form-data" class="upload-form">
+              <input type="file" name="document" required>
+              <button type="submit">Envoyer</button>
+            </form>
+          </div>
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{# Items de révision #}
+{% if items_revision_list %}
+<section class="project-section">
+  <h2>🟡 Liste de révisions</h2>
+  <ul class="checklist">
+    {% for item in items_revision_list %}
+      {% set is_done = item['est_coche'] %}
+      <li class="checklist-item item-revision {% if is_done %}completed{% endif %}">
+        <div class="item-row">
+          <div class="item-check">{% if is_done %}✓{% endif %}</div>
+          <a href="{{ url_for('toggle_checklist_item', item_id=item['id']) }}" class="item-link">{{ item['nom_item'] }}</a>
+          <div class="item-badges">
+            <span class="badge" style="background:#fffde7;color:#856404;">Révision</span>
+            {% if is_done %}<span class="badge badge--success">✓ Approuvé</span>{% endif %}
+          </div>
+        </div>
+      </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% if not items_normaux and not items_revision_list %}
+  <div class="empty" style="padding:var(--space-4);">
+    <p class="muted">Aucun item dans la checklist pour le moment.</p>
+  </div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function addRevisionItem() {
+  const list = document.getElementById('revision-items');
+  const row = document.createElement('div');
+  row.className = 'revision-item-row';
+  row.innerHTML = '<input type="text" name="items_revision[]" placeholder="Item de révision...">';
+  list.appendChild(row);
+  row.querySelector('input').focus();
+}
+</script>
+{% endblock %}

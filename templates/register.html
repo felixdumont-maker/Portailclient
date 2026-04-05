@@ -1,73 +1,104 @@
 {% extends "base.html" %}
-{% block title %}Inscription | Portail Client{% endblock %}
+{% block title %}Inscription{% endblock %}
+
+{% block head %}
+<style>
+  .auth-page { display:flex; justify-content:center; align-items:center; min-height:70vh; padding:var(--space-6) var(--space-3); }
+  .auth-container { width:min(520px,100%); }
+  .auth-logo { display:block; margin:0 auto var(--space-4); height:70px; width:auto; }
+  .auth-link { text-align:center; margin-top:var(--space-3); font-size:var(--fs-sm); }
+
+  /* Validation box */
+  .validation-box { display:none; margin-top:.5rem; padding:.6rem .85rem; background:var(--couleur-fond); border:1px solid var(--couleur-bordure); border-radius:var(--radius-sm); }
+  .validation-box p { margin:.2rem 0; font-size:.82rem; font-weight:600; }
+  .validation-box p.valid   { color:var(--couleur-success); }
+  .validation-box p.valid::before   { content:'✓ '; }
+  .validation-box p.invalid { color:var(--couleur-danger); }
+  .validation-box p.invalid::before { content:'✗ '; }
+
+  /* Popup succès */
+  .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; z-index:1000; padding:var(--space-4); }
+  .modal-content { background:#fff; border-radius:var(--radius-lg); padding:var(--space-5); width:min(480px,100%); text-align:center; box-shadow:var(--shadow-lg); }
+  .modal-content h2 { margin-bottom:var(--space-3); }
+  .modal-content p  { margin-bottom:var(--space-4); color:#7a7773; }
+
+  .tooltip-icon { display:inline-block; position:relative; cursor:help; font-size:.85rem; color:#888; margin-left:.3rem; }
+  .tooltip-icon .tooltip-text { display:none; position:absolute; bottom:calc(100% + 6px); left:50%; transform:translateX(-50%); background:#333; color:#fff; font-size:.78rem; padding:.4rem .65rem; border-radius:6px; white-space:nowrap; z-index:10; }
+  .tooltip-icon:hover .tooltip-text, .tooltip-icon:focus .tooltip-text { display:block; }
+</style>
+{% endblock %}
 
 {% block content %}
 <div class="auth-page">
-  <div class="auth-container">
-    <img src="{{ url_for('static', filename='logo 2.png') }}" alt="Logo Cocktail Media" class="auth-logo">
-    <h1>Créer un compte</h1>
+  <div class="auth-container card">
+    <img src="{{ url_for('static', filename='logo 2.png') }}" alt="Logo Cocktail Média" class="auth-logo">
+    <h1 style="text-align:center;font-size:var(--fs-xl);border:none;padding:0;margin-bottom:var(--space-4);">Créer un compte</h1>
 
-    <form method="post" action="{{ url_for('register') }}" id="register-form" class="auth-form" novalidate>
-      <div class="form-group">
-        <label for="nom_complet">Nom complet</label>
-        <input type="text" id="nom_complet" name="nom_complet" required>
+    <form method="post" action="{{ url_for('register') }}" id="register-form" class="form" novalidate>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="nom_complet">Nom complet</label>
+          <input type="text" id="nom_complet" name="nom_complet" required>
+        </div>
+        <div class="form-group">
+	<label for="nom_entreprise">
+  	  Nom d'entreprise
+  	  <span class="tooltip-icon" tabindex="0">ⓘ<span class="tooltip-text">Travailleur autonome ? Inscrivez votre nom complet.</span></span>
+	</label>
+	<input type="text" id="nom_entreprise" name="nom_entreprise" required>
+        </div>
       </div>
 
-      <div class="form-group">
-        <label for="nom_entreprise">Entreprise (optionnel)</label>
-        <input type="text" id="nom_entreprise" name="nom_entreprise">
-      </div>
-
-      <div class="form-group">
-        <label for="telephone">Téléphone (optionnel)</label>
-        <input type="text" id="telephone" name="telephone">
-      </div>
-
-      <div class="form-group">
-        <label for="email">Adresse email</label>
-        <input type="email" id="email" name="email" required>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="telephone">Téléphone (optionnel)</label>
+          <input type="text" id="telephone" name="telephone">
+        </div>
+        <div class="form-group">
+          <label for="email">Adresse email</label>
+          <input type="email" id="email" name="email" required>
+        </div>
       </div>
 
       <div class="form-group">
         <label for="password">Mot de passe</label>
         <input type="password" id="password" name="password" required>
-        <!-- Boîte de validation visuelle -->
         <div id="password-validation" class="validation-box">
           <p id="length" class="invalid">Au moins 8 caractères</p>
-          <p id="lower" class="invalid">Une lettre minuscule</p>
-          <p id="upper" class="invalid">Une lettre majuscule</p>
+          <p id="lower"  class="invalid">Une lettre minuscule</p>
+          <p id="upper"  class="invalid">Une lettre majuscule</p>
           <p id="number" class="invalid">Un chiffre</p>
           <p id="special" class="invalid">Un caractère spécial (!@#$%^&*)</p>
         </div>
       </div>
 
       <div class="form-group">
-        <label for="password2">Confirmez le mot de passe</label>
+        <label for="password2">Confirmer le mot de passe</label>
         <input type="password" id="password2" name="password2" required>
         <div id="password-match-validation" class="validation-box">
           <p id="match" class="invalid">Les mots de passe doivent correspondre</p>
         </div>
       </div>
 
-      <div class="form-group show-password-container">
+      <div class="show-password-container">
         <input type="checkbox" id="show-password-toggle">
-        <label for="show-password-toggle" style="font-weight:normal;margin-bottom:0;">Afficher les mots de passe</label>
+        <label for="show-password-toggle">Afficher les mots de passe</label>
       </div>
 
-      <button type="submit" id="submit-btn" class="btn-green" disabled>S'inscrire</button>
+      <button type="submit" id="submit-btn" class="btn-block" disabled style="margin-top:var(--space-3);">S'inscrire</button>
     </form>
 
     <p class="auth-link">Déjà un compte ? <a href="{{ url_for('accueil') }}">Connectez-vous</a></p>
   </div>
 </div>
 
-<!-- Popup succès conditionnel (show_success_popup géré par app.py) -->
 {% if show_success_popup %}
 <div class="modal-overlay" id="success-modal">
   <div class="modal-content">
     <h2>Inscription réussie !</h2>
-    <p>Votre compte a été créé. Veuillez consulter vos emails pour confirmer votre adresse avant de vous connecter.</p>
-    <button class="btn-green" onclick="redirectToLogin()">OK</button>
+    <p>Votre compte a été créé. Consultez vos emails pour confirmer votre adresse avant de vous connecter.</p>
+    <button class="btn" onclick="window.location.href='{{ url_for('accueil') }}'">OK</button>
   </div>
 </div>
 {% endif %}
@@ -75,68 +106,59 @@
 
 {% block scripts %}
 <script>
-  // Toggle affichage des mots de passe
-  (function () {
-    const chk = document.getElementById('show-password-toggle');
-    const p1 = document.getElementById('password');
-    const p2 = document.getElementById('password2');
-    if (chk) {
-      chk.addEventListener('change', function () {
-        const type = this.checked ? 'text' : 'password';
-        if (p1) p1.type = type;
-        if (p2) p2.type = type;
-      });
-    }
-  })();
-
-  // Redirection popup succès
-  function redirectToLogin() {
-    window.location.href = "{{ url_for('accueil') }}";
+(function () {
+  // Toggle affichage mots de passe
+  const chk = document.getElementById('show-password-toggle');
+  const p1  = document.getElementById('password');
+  const p2  = document.getElementById('password2');
+  if (chk) {
+    chk.addEventListener('change', function () {
+      const type = this.checked ? 'text' : 'password';
+      if (p1) p1.type = type;
+      if (p2) p2.type = type;
+    });
   }
 
-  // Validation live des mots de passe
-  (function () {
-    const passwordInput = document.getElementById('password');
-    const password2Input = document.getElementById('password2');
-    const submitBtn = document.getElementById('submit-btn');
-    const validationBox = document.getElementById('password-validation');
-    const matchBox = document.getElementById('password-match-validation');
+  // Validation live
+  const submitBtn   = document.getElementById('submit-btn');
+  const validBox    = document.getElementById('password-validation');
+  const matchBox    = document.getElementById('password-match-validation');
 
-    const validators = {
-      length: (p) => p.length >= 8,
-      lower:  (p) => /[a-z]/.test(p),
-      upper:  (p) => /[A-Z]/.test(p),
-      number: (p) => /\d/.test(p),
-      special:(p) => /[!@#$%^&*]/.test(p),
-      match:  (p1, p2) => p1 === p2 && p1.length > 0
-    };
+  const validators = {
+    length:  p => p.length >= 8,
+    lower:   p => /[a-z]/.test(p),
+    upper:   p => /[A-Z]/.test(p),
+    number:  p => /\d/.test(p),
+    special: p => /[!@#$%^&*]/.test(p),
+    match:   (a, b) => a === b && a.length > 0
+  };
 
-    function validatePasswords() {
-      const pass = passwordInput.value;
-      const pass2 = password2Input.value;
-      let allStrong = true;
+  function validate() {
+    const pass  = p1.value;
+    const pass2 = p2.value;
+    let allOk = true;
 
-      ['length','lower','upper','number','special'].forEach(rule => {
-        const el = document.getElementById(rule);
-        const ok = validators[rule](pass);
-        if (el) el.className = ok ? 'valid' : 'invalid';
-        if (!ok) allStrong = false;
-      });
+    ['length','lower','upper','number','special'].forEach(rule => {
+      const el = document.getElementById(rule);
+      const ok = validators[rule](pass);
+      if (el) el.className = ok ? 'valid' : 'invalid';
+      if (!ok) allOk = false;
+    });
 
-      const matchEl = document.getElementById('match');
-      const okMatch = validators.match(pass, pass2);
-      if (matchEl) matchEl.className = okMatch ? 'valid' : 'invalid';
+    const matchEl = document.getElementById('match');
+    const okMatch = validators.match(pass, pass2);
+    if (matchEl) matchEl.className = okMatch ? 'valid' : 'invalid';
 
-      submitBtn.disabled = !(allStrong && okMatch);
-    }
+    submitBtn.disabled = !(allOk && okMatch);
+  }
 
-    if (passwordInput && password2Input) {
-      passwordInput.addEventListener('focus', () => { if (validationBox) validationBox.style.display = 'block'; });
-      password2Input.addEventListener('focus', () => { if (matchBox) matchBox.style.display = 'block'; });
-      passwordInput.addEventListener('keyup', validatePasswords);
-      password2Input.addEventListener('keyup', validatePasswords);
-    }
-  })();
+  if (p1 && p2) {
+    p1.addEventListener('focus', () => { if (validBox) validBox.style.display = 'block'; });
+    p2.addEventListener('focus', () => { if (matchBox) matchBox.style.display = 'block'; });
+    // "input" capte aussi l'autofill — fix du bouton qui restait disabled
+    p1.addEventListener('input', validate);
+    p2.addEventListener('input', validate);
+  }
+})();
 </script>
 {% endblock %}
-

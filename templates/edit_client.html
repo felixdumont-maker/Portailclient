@@ -1,51 +1,47 @@
 {% extends "base.html" %}
-{% block title %}Modifier le projet | Portail Admin{% endblock %}
+{% block title %}Modifier le client{% endblock %}
 
 {% block content %}
-<nav class="navbar">
-  <div class="nav-container">
-    <span class="nav-brand">Portail Admin – Modifier un projet</span>
-    <div>
-      <a href="{{ url_for('admin_dashboard') }}" class="nav-link" style="background-color:#6c757d;margin-right:1rem;">Retour</a>
-      <a href="{{ url_for('logout') }}" class="nav-link">Se déconnecter</a>
-    </div>
-  </div>
+
+<nav class="breadcrumbs" aria-label="Fil d'Ariane">
+  <a href="{{ url_for('admin_dashboard') }}">Tableau de bord admin</a>
+  <span class="sep">›</span>
+  <span>Modifier un client</span>
 </nav>
 
-<div class="container">
-  <div class="form-container">
-    <h1>Modifier le projet : {{ projet['nom_projet'] }}</h1>
+<h1>Modifier le client</h1>
 
-    <form method="post" action="{{ url_for('edit_project', project_id=projet['id']) }}" novalidate>
+<div class="card">
+  <form method="post" action="{{ url_for('edit_client', client_id=client['id']) }}" class="form" novalidate>
+
+    <div class="form-row">
       <div class="form-group">
-        <label for="nom_projet">Nom du projet</label>
-        <input type="text" id="nom_projet" name="nom_projet" value="{{ projet['nom_projet'] }}" required>
+        <label for="nom_complet">Nom complet</label>
+        <input type="text" id="nom_complet" name="nom_complet" value="{{ client['nom_complet'] }}" required>
       </div>
-
       <div class="form-group">
-        <label for="statut">Statut</label>
-        <input type="text" id="statut" name="statut" value="{{ projet['statut'] or '' }}" required>
+        <label for="nom_entreprise">Entreprise (optionnel)</label>
+        <input type="text" id="nom_entreprise" name="nom_entreprise" value="{{ client['nom_entreprise'] or '' }}">
       </div>
+    </div>
 
+    <div class="form-row">
       <div class="form-group">
-        <label for="lien_gdrive">Lien Google Drive (optionnel)</label>
-        <input type="url" id="lien_gdrive" name="lien_gdrive" value="{{ projet['lien_gdrive'] or '' }}" placeholder="https://...">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" value="{{ client['email'] }}" required>
       </div>
-
       <div class="form-group">
-        <label for="id_client">Client associé</label>
-        <select id="id_client" name="id_client" required>
-          {% for c in clients %}
-            <option value="{{ c['id'] }}" {% if c['id'] == projet['id_client'] %}selected{% endif %}>
-              {{ c['nom_complet'] }}
-            </option>
-          {% endfor %}
-        </select>
+        <label for="telephone">Téléphone (optionnel)</label>
+        <input type="text" id="telephone" name="telephone" value="{{ client['telephone'] or '' }}">
       </div>
+    </div>
 
-      <button type="submit" class="btn-green">Enregistrer les modifications</button>
-    </form>
-  </div>
+    <div style="display:flex;gap:var(--space-3);margin-top:var(--space-2);">
+      <button type="submit">Enregistrer les modifications</button>
+      <a href="{{ url_for('admin_dashboard') }}" class="btn btn-secondary">Annuler</a>
+    </div>
+
+  </form>
 </div>
-{% endblock %}
 
+{% endblock %}
