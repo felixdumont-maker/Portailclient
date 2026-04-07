@@ -535,6 +535,55 @@ app.jinja_env.globals.update(
     status_badge_class=status_badge_class
 )
 
+# ───────────────────────────────────────────────────────────
+# API v1 — JSON endpoints pour Next.js
+# ───────────────────────────────────────────────────────────
+from flask import jsonify
+from flask_cors import CORS
+
+CORS(app, origins=["http://192.168.10.10:3001", "http://localhost:3001"], supports_credentials=True)
+
+@app.route('/api/v1/auth/login', methods=['POST'])
+def api_login():
+    data = request.get_json()
+    email = data.get('email', '').strip().lower()
+    password = data.get('password', '')
+
+    conn = get_db_connection()
+    user = conn.execute("SELECT * FROM clients WHERE email = ?", (email,)).fetchone()
+    conn.close()
+
+    if user and user['auth_provider'] == 'password' and bcrypt.check_password_hash(user['mot_de_passe_hash'], password):
+        if not int(user['is_email_confirmed'] or 0):
+            return jsonify({"error": "Email non confirmé"}), 403
+        session['user_id'] = user['id']
+        session['user_name'] = user['nom_complet']
+        session['is_admin'] = bool(user['is_admin'])
+        return jsonify({
+            "success": True,
+            "user": {
+                "id": user['id'],
+                "nom": user['nom_complet'],
+                "email": user['email'],
+                "is_admin": bool(user['is_admin'])
+            }
+        })
+    return jsonify({"error": "Email ou mot de passe incorrect"}), 401
+
+@app.route('/api/v1/auth/logout', methods=['POST'])
+def api_logout():
+    session.clear()
+    return jsonify({"success": True})
+
+@app.route('/api/v1/auth/me', methods=['GET'])
+def api_me():
+    if 'user_id' not in session:
+        return jsonify({"error": "Non authentifié"}), 401
+    return jsonify({
+        "id": session['user_id'],
+        "nom": session['user_name'],
+        "is_admin": session.get('is_admin', False)
+    })
 
 # ───────────────────────────────────────────────────────────
 # Routes Auth

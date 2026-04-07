@@ -16,3 +16,5 @@ google-api-python-client>=2.0
 rapidfuzz
 reportlab
 APScheduler
+flask-cors
+flask-cors
