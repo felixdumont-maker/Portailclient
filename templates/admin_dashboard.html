@@ -167,6 +167,100 @@
   </table>
 </div>
 
+{# ── Section Factures ── #}
+<h2>Factures</h2>
+
+{# Factures ouvertes (clients mensuels) #}
+{% if factures_ouvertes %}
+<div class="card" style="padding:0;overflow:hidden;margin-bottom:var(--space-4);">
+  <div style="background:#fff4e9;padding:.75rem 1.25rem;border-bottom:1px solid var(--couleur-bordure);display:flex;justify-content:space-between;align-items:center;">
+    <span style="font-family:var(--font-display);font-size:1.1rem;letter-spacing:1px;">FACTURES OUVERTES — CLIENTS MENSUELS</span>
+    <span class="badge badge--warning">{{ factures_ouvertes|length }} en attente</span>
+  </div>
+  <table>
+    <thead>
+      <tr><th>Client</th><th>Période</th><th>Lignes</th><th>Sous-total</th><th>Total TTC</th><th>Actions</th></tr>
+    </thead>
+    <tbody>
+      {% for f in factures_ouvertes %}
+      <tr>
+        <td><strong>{{ f['nom_complet'] }}</strong><br><span class="muted" style="font-size:.8rem;">{{ f['nom_entreprise'] or '' }}</span></td>
+        <td>{{ f['periode_mois'] or '—' }}</td>
+        <td>{{ f['nb_lignes'] }}</td>
+        <td>{{ "%.2f"|format(f['sous_total']) }} $CA</td>
+        <td><strong>{{ "%.2f"|format(f['total']) }} $CA</strong></td>
+        <td>
+          <form action="{{ url_for('fermer_facture', facture_id=f['id']) }}" method="post" style="display:inline;">
+            <button type="submit" class="btn" style="min-width:auto;padding:.4rem .8rem;font-size:.85rem;"
+              onclick="return confirm('Fermer et envoyer cette facture au client ?');">
+              Fermer et envoyer
+            </button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{# Toutes les factures #}
+<div class="card" style="padding:0;overflow:hidden;">
+  <div style="background:#fff4e9;padding:.75rem 1.25rem;border-bottom:1px solid var(--couleur-bordure);">
+    <span style="font-family:var(--font-display);font-size:1.1rem;letter-spacing:1px;">TOUTES LES FACTURES</span>
+  </div>
+  <table>
+    <thead>
+      <tr><th>Numéro</th><th>Client</th><th>Date</th><th>Échéance</th><th>Total</th><th>Type</th><th>Statut</th><th>Actions</th></tr>
+    </thead>
+    <tbody>
+      {% for f in toutes_factures %}
+      <tr>
+        <td><strong>{{ f['numero'] }}</strong></td>
+        <td>{{ f['nom_complet'] }}<br><span class="muted" style="font-size:.8rem;">{{ f['nom_entreprise'] or '' }}</span></td>
+        <td>{{ f['date_emission'] or '—' }}</td>
+        <td>{{ f['date_echeance'] or 'À réception' }}</td>
+        <td><strong>{{ "%.2f"|format(f['total']) }} $CA</strong></td>
+        <td>
+          {% if f['type_facturation'] == 'mensuel' %}
+            <span class="badge badge--info">Mensuel</span>
+          {% else %}
+            <span class="badge badge--warning">Par projet</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if f['statut'] == 'payee' %}
+            <span class="badge badge--success">✓ Payée</span>
+          {% elif f['statut'] == 'envoyee' %}
+            <span class="badge badge--warning">Envoyée</span>
+          {% else %}
+            <span class="badge" style="background:#f5f5f5;color:#666;">Ouverte</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if f['statut'] != 'payee' %}
+          <form action="{{ url_for('marquer_facture_payee', facture_id=f['id']) }}" method="post" style="display:inline;">
+            <button type="submit" class="btn btn-secondary" style="min-width:auto;padding:.35rem .7rem;font-size:.8rem;"
+              onclick="return confirm('Marquer comme payée ?');">
+              ✓ Payée
+            </button>
+          </form>
+          {% endif %}
+          <form action="{{ url_for('supprimer_facture', facture_id=f['id']) }}" method="post" style="display:inline;">
+            <button type="submit" class="btn" style="min-width:auto;padding:.35rem .7rem;font-size:.8rem;background:#c62828;"
+              onclick="return confirm('Supprimer définitivement cette facture ?');">
+              Supprimer
+            </button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+        <tr><td colspan="8" class="muted" style="padding:var(--space-4);text-align:center;">Aucune facture.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
 {% block scripts %}
 <script>
 const servicesLocalisation = {{ services_localisation | tojson }};

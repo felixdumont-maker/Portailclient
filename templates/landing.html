@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Portail Client — Cocktail Média</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:'Poppins',sans-serif;background:#faf7f3;color:#2b2b2b;}
+    .hero{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:2rem;text-align:center;}
+    .logo{height:60px;width:auto;margin-bottom:2rem;}
+    h1{font-family:'Bebas Neue',sans-serif;font-size:clamp(2.5rem,6vw,4rem);letter-spacing:2px;margin-bottom:1rem;line-height:1.1;}
+    h1 span{color:#e83b14;}
+    .desc{font-size:1.05rem;color:#555;max-width:520px;line-height:1.7;margin-bottom:2.5rem;}
+    .features{display:flex;gap:1.5rem;flex-wrap:wrap;justify-content:center;margin-bottom:3rem;max-width:700px;}
+    .feature{background:#fff;border:1px solid #e0d9d3;border-radius:12px;padding:1.25rem 1.5rem;text-align:left;width:200px;}
+    .feature-icon{font-size:1.5rem;margin-bottom:.5rem;}
+    .feature h3{font-size:.95rem;font-weight:700;margin-bottom:.3rem;}
+    .feature p{font-size:.82rem;color:#777;line-height:1.5;}
+    .cta{display:inline-block;background:#e83b14;color:#fff;padding:.9rem 2rem;border-radius:6px;font-family:'Bebas Neue',sans-serif;font-size:1.2rem;letter-spacing:1.5px;text-decoration:none;transition:background .2s;}
+    .cta:hover{background:#d4310d;}
+    .footer{margin-top:3rem;font-size:.78rem;color:#aaa;}
+    .footer a{color:#e83b14;text-decoration:none;}
+  </style>
+<link rel="privacy-policy" href="https://cocktailmedia.ca/politiques">
+</head>
+<body>
+  <div class="hero">
+    <img src="/static/cocktailos-logo.png" alt="CocktailOS" class="logo">
+    <h1>Portail Client<br><span>Cocktail Média</span></h1>
+    <p class="desc">
+      Plateforme privée de gestion de projets créatifs pour les clients de Cocktail Média.
+      Suivez vos projets en temps réel, transmettez vos documents et consultez vos factures — le tout au même endroit.
+    </p>
+    <div class="features">
+      <div class="feature">
+        <div class="feature-icon">📁</div>
+        <h3>Gestion de projets</h3>
+        <p>Suivez l'avancement de vos projets photo, vidéo, graphisme et web.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">📄</div>
+        <h3>Transmission de fichiers</h3>
+        <p>Envoyez vos documents directement dans votre dossier Google Drive.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🧾</div>
+        <h3>Factures en ligne</h3>
+        <p>Consultez et téléchargez vos factures en tout temps.</p>
+      </div>
+    </div>
+    <a href="/login" class="cta">Accéder à mon portail</a>
+    <p class="footer">
+      Réservé aux clients de Cocktail Média<br>
+      <a href="https://cocktailmedia.ca/politiques" target="_blank" rel="noopener">Politique de confidentialité</a>
+      &nbsp;·&nbsp;
+      <a href="https://cocktailmedia.ca" target="_blank" rel="noopener">cocktailmedia.ca</a>
+    </p>
+
+</body>
+</html>

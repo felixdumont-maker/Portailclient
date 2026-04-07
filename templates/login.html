@@ -16,9 +16,8 @@
 {% block content %}
 <div class="auth-page">
   <div class="auth-container card">
-    <img src="{{ url_for('static', filename='logo 2.png') }}" alt="Logo Cocktail Média" class="auth-logo">
     <h1 style="text-align:center;font-size:var(--fs-xl);border:none;padding:0;margin-bottom:var(--space-4);">Connexion au portail</h1>
-
+    <img src="{{ url_for('static', filename='cocktailos-logo-noir.png') }}" alt="CocktailOS" class="auth-logo">
     <form method="post" action="{{ url_for('login') }}" class="form" novalidate>
       <div class="form-group">
         <label for="email">Adresse email</label>
@@ -44,6 +43,9 @@
 
     <p class="auth-link"><a href="{{ url_for('forgot_password') }}">Mot de passe oublié ?</a></p>
     <p class="auth-link">Pas encore de compte ? <a href="{{ url_for('register') }}">Inscrivez-vous</a></p>
+    <p class="auth-link" style="font-size:.78rem;color:#9a948f;margin-top:var(--space-3);">
+      En vous connectant, vous acceptez nos <a href="https://cocktailmedia.ca/politiques" target="_blank" rel="noopener">politiques de confidentialité</a>.
+    </p>
   </div>
 </div>
 {% endblock %}

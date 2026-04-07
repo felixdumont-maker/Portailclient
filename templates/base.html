@@ -3,6 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon-32x32.png') }}">
+  <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon-16x16.png') }}">
+  <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
   <title>{% block title %}Portail Client{% endblock %} — Cocktail Média</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -17,27 +21,20 @@
   <header>
     <nav class="navbar" aria-label="Navigation principale">
       <div class="nav-container">
-
-        <a href="{{ url_for('dashboard') }}" class="nav-brand" aria-label="Accueil tableau de bord">
-          Cocktail Média
+        <a href="{{ url_for('dashboard') }}" class="nav-brand" aria-label="Accueil tableau de bord" style="display:flex;flex-direction:column;align-items:flex-start;gap:2px;">
+          <img src="{{ url_for('static', filename='cocktailos-logo.png') }}" alt="CocktailOS" style="height:32px;width:auto;">
+          <span style="font-size:.55rem;color:#888;font-family:var(--font-body);font-weight:400;letter-spacing:.5px;line-height:1;">Développé par Cocktail Média</span>
         </a>
-
-        <img
-          src="{{ url_for('static', filename='logo.png') }}"
-          alt=""
-          aria-hidden="true"
-          class="nav-logo"
-        >
-
-        <div class="nav-links">
+ 
+      <div class="nav-links">
           {% if session.get('is_admin') %}
             <a href="{{ url_for('admin_dashboard') }}" class="nav-link">Admin</a>
             <a href="{{ url_for('admin_services') }}" class="nav-link">Services</a>
+          {% else %}
+            <a href="{{ url_for('dashboard') }}" class="nav-link">Tableau de bord</a>
           {% endif %}
           <a href="{{ url_for('profile') }}" class="nav-link">Mon profil</a>
-          <a href="{{ url_for('logout') }}" class="btn btn-secondary" style="min-width:auto;padding:.5rem 1rem;font-size:.95rem;">
-            Déconnexion
-          </a>
+          <a href="{{ url_for('logout') }}" class="btn btn-secondary" style="min-width:auto;padding:.5rem 1rem;font-size:.95rem;">Déconnexion</a>
         </div>
 
       </div>

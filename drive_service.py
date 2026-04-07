@@ -69,3 +69,35 @@ def upload_file(filepath, filename, folder_id):
 def get_folder_link(folder_id):
     """Retourne le lien web d'un dossier Drive."""
     return f"https://drive.google.com/drive/folders/{folder_id}"
+def list_files_in_folder(folder_id):
+    """Liste les fichiers dans un dossier Drive."""
+    service = get_drive_service()
+    results = service.files().list(
+        q=f"'{folder_id}' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'",
+        fields="files(id, name, webViewLink, createdTime, size)",
+        orderBy="createdTime desc",
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True
+    ).execute()
+    return results.get('files', [])
+
+def make_file_public(file_id):
+    """Rend un fichier Drive public et retourne son URL directe pour affichage."""
+    service = get_drive_service()
+    service.permissions().create(
+        fileId=file_id,
+        body={'type': 'anyone', 'role': 'reader'},
+        supportsAllDrives=True
+    ).execute()
+    # URL directe pour affichage image (pas webViewLink)
+    return f"https://lh3.googleusercontent.com/d/{file_id}"
+
+def delete_drive_folder(folder_id):
+    """Supprime un dossier Drive et tout son contenu."""
+    if not folder_id:
+        return
+    service = get_drive_service()
+    try:
+        service.files().delete(fileId=folder_id, supportsAllDrives=True).execute()
+    except Exception as e:
+        print(f"[DRIVE] Suppression dossier échouée ({folder_id}): {e}")

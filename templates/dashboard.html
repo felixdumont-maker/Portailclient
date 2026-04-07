@@ -230,14 +230,29 @@
               <div class="card-name">{{ row.projet['nom_projet'] }}</div>
               <div class="card-meta">{{ svc }}{% if row.projet['created_at'] %} · {{ row.projet['created_at'][:10] }}{% endif %}</div>
             </div>
+
             <div class="card-right">
               <span class="status-chip {{ chip }}">{{ normalize_status(row.projet['statut']) }}</span>
-              <div class="prog-wrap">
-                <div class="prog-bar">
-                  <div class="prog-fill" data-pct="{{ pct_val / 100 }}"></div>
+              {% set s = normalize_status(row.projet['statut']) | lower %}
+              {% if row.total == 0 %}
+                {# Pas de documents requis — rien #}
+              {% elif row.done == row.total and row.total > 0 %}
+                <div style="display:flex;align-items:center;gap:.4rem;">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="#2f9e44" style="width:20px;height:20px;flex-shrink:0;"><path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5"/></svg>
+                  <span style="font-size:.75rem;color:#2f9e44;font-weight:700;">Complet</span>
                 </div>
-                <span class="prog-ratio">{{ row.done }}/{{ row.total }}</span>
-              </div>
+              {% elif 'cours' in s and row.projet['date_livraison_estimee'] %}
+                <span style="font-size:.72rem;color:#9a948f;font-weight:600;">
+                  Livraison : {{ row.projet['date_livraison_estimee'] }}
+                </span>
+              {% else %}
+                <div class="prog-wrap">
+                  <div class="prog-bar">
+                    <div class="prog-fill" data-pct="{{ pct_val / 100 }}"></div>
+                  </div>
+                  <span class="prog-ratio">{{ row.done }}/{{ row.total }}</span>
+                </div>
+              {% endif %}
             </div>
           </a>
         </li>

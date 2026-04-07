@@ -132,8 +132,8 @@ h2{
   max-width: var(--container-w); margin: 0 auto; position: relative;
 }
 
-.nav-brand{ font-size: 1.8rem; color: var(--couleur-blanc); }
-.nav-brand:hover{ color: var(--couleur-principale); transition: color var(--t-fast); }
+.nav-brand{ font-size: 1.8rem; color: var(--couleur-blanc); text-decoration: none; }
+.nav-brand:hover{ color: var(--couleur-principale); transition: color var(--t-fast); text-decoration: none; }
 
 .nav-links{ display: flex; gap: var(--space-3); align-items: center; }
 .nav-link{ color: var(--couleur-blanc); font-size: 1.1rem; }
@@ -392,15 +392,20 @@ tr:hover{ background-color: #fff8f2; }
 }
 
 @media (max-width: 768px){
-  h1{ font-size: 2rem; }
-  h2{ font-size: 1.4rem; }
+  h1{ font-size: 1.8rem; }
+  h2{ font-size: 1.3rem; }
   .container{ padding: var(--space-4) var(--space-3); }
-  .nav-logo{ display:none; } /* garde la brand + liens sur mobile */
   .form-row{ grid-template-columns: 1fr; }
   .grid-3{ grid-template-columns: repeat(2, 1fr); }
   .grid-4{ grid-template-columns: repeat(2, 1fr); }
+  .nav-logo{ display:none; }
 }
 
+@media (max-width: 480px){
+  .container{ padding: var(--space-3) var(--space-2); overflow-x: hidden; }
+  .grid-2, .grid-3, .grid-4{ grid-template-columns: 1fr; }
+  .btn, button[type="submit"]{ width: 100%; }
+}
 @media (max-width: 480px){
   .container{ padding: var(--space-4) var(--space-2); }
   .grid-2, .grid-3, .grid-4{ grid-template-columns: 1fr; }
@@ -466,3 +471,78 @@ tr:hover{ background-color: #fff8f2; }
 }
 .empty h3{ font-size: 1.25rem; margin-bottom: .5rem; }
 .empty p{ color:#6f6b67; margin-bottom: var(--space-3); }
+
+.nav-dashboard-btn {
+  background: var(--couleur-sombre);
+  color: var(--couleur-blanc);
+  border: 1px solid #444;
+  min-width: auto;
+  padding: .5rem 1rem;
+  font-size: .95rem;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.nav-dashboard-btn:hover {
+  background: var(--couleur-principale);
+  color: #fff;
+  border-color: var(--couleur-principale);
+}
+
+/* ── Mobile overflow fix ── */
+html, body {
+  overflow-x: hidden;
+  max-width: 100%;
+}
+
+/* ── Navbar mobile ── */
+@media (max-width: 600px) {
+  .nav-container {
+    flex-wrap: nowrap;
+    gap: .5rem;
+  }
+  .nav-brand {
+    font-size: 1.1rem;
+    white-space: nowrap;
+  }
+  .nav-links {
+    gap: .5rem;
+    flex-wrap: nowrap;
+  }
+  .nav-link {
+    font-size: .75rem;
+    white-space: nowrap;
+  }
+  .btn.btn-secondary {
+    font-size: .75rem;
+    padding: .4rem .6rem;
+    min-width: auto;
+  }
+}
+
+/* ── Dashboard cards mobile ── */
+@media (max-width: 600px) {
+  .project-card {
+    flex-wrap: wrap;
+    padding: .85rem 1rem;
+  }
+  .card-name {
+    font-size: .95rem;
+    max-width: 100%;
+    white-space: normal;
+    word-break: break-word;
+  }
+  .card-right {
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding-right: 0;
+  }
+  .project-card::after { display: none; }
+}
+
+/* ── Login logo fix ── */
+.auth-logo {
+  max-width: 200px;
+  height: auto;
+  object-fit: contain;
+}

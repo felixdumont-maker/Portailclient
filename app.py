@@ -23,8 +23,15 @@ from dotenv import load_dotenv
 from pathlib import Path
 ENV_PATH = (Path(__file__).resolve().parent / ".." / ".env").resolve()
 load_dotenv(dotenv_path=ENV_PATH)
-from drive_service import create_folder, upload_file, get_folder_link
-
+from drive_service import create_folder, upload_file, get_folder_link, list_files_in_folder, make_file_public, delete_drive_folder
+from calendar_service import create_production_event, delete_production_event
+from invoice_service import creer_facture_projet
+from email_templates import (
+    email_bienvenue, email_projet_cree, email_documents_requis,
+    email_travaux_en_cours, email_en_revision, email_livraison,
+    email_archive, email_nouvelle_facture, _base_confirm, email_documents_recus,
+    email_travaux_en_cours_avec_date, email_annulation
+)
 # ───────────────────────────────────────────────────────────
 # App init
 # ───────────────────────────────────────────────────────────
@@ -39,7 +46,9 @@ class Config:
     SECRET_KEY = os.getenv("SECRET_KEY", "change-me")
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = "Lax"
-    SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "true").lower() == "true"
+    SESSION_COOKIE_SECURE = True
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_NAME = "cocktailmedia_session"
 
     MAIL_SERVER = os.getenv("MAIL_SERVER", "smtp.gmail.com")
     MAIL_PORT = int(os.getenv("MAIL_PORT", "587"))
@@ -234,6 +243,46 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_checklist_projet ON checklistes(id_projet);
     CREATE INDEX IF NOT EXISTS idx_items_checklist ON checklist_items(id_checklist);
     CREATE INDEX IF NOT EXISTS idx_model_items_service ON checklist_model_items(id_service);
+    CREATE TABLE IF NOT EXISTS decision_boards (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id_projet INTEGER NOT NULL UNIQUE,
+        accent_color TEXT DEFAULT '#E83B14',
+        accent_color_rgb TEXT DEFAULT '232,59,20',
+        show_directions INTEGER DEFAULT 1,
+        directions_json TEXT,
+        show_names INTEGER DEFAULT 1,
+        names_json TEXT,
+        show_icons INTEGER DEFAULT 1,
+        icons_json TEXT,
+        show_typos INTEGER DEFAULT 1,
+        typos_json TEXT,
+        show_palettes INTEGER DEFAULT 1,
+        palettes_json TEXT,
+        show_logos INTEGER DEFAULT 1,
+        logos_json TEXT,
+        is_active INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (id_projet) REFERENCES projets(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS decision_board_choices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id_projet INTEGER NOT NULL UNIQUE,
+        choix_directions TEXT,
+        choix_noms TEXT,
+        choix_icones TEXT,
+        choix_typos TEXT,
+        choix_palettes TEXT,
+        choix_logos TEXT,
+        nom_suggestion TEXT,
+        commentaires TEXT,
+        submitted_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (id_projet) REFERENCES projets(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_decision_board_projet ON decision_boards(id_projet);
+    CREATE INDEX IF NOT EXISTS idx_decision_choices_projet ON decision_board_choices(id_projet);
     """
     conn = get_db_connection()
     try:
@@ -284,7 +333,8 @@ def find_matching_company(nom_entreprise: str, conn: sqlite3.Connection, seuil: 
         if score >= seuil:
             return row
     return None
-def send_email(to_list, subject, body):
+
+def send_email(to_list, subject, body, html=None):
     if not to_list:
         return
     if isinstance(to_list, str):
@@ -296,9 +346,11 @@ def send_email(to_list, subject, body):
             recipients=to_list
         )
         msg.body = body
+        if html:
+            msg.html = html
         mail.send(msg)
     except Exception as e:
-        print(f"[MAIL] Erreur d’envoi: {e}")
+        print(f"[MAIL] Erreur d'envoi: {e}")
 
 FILE_CATEGORIES = {
     'photo':     {'label': '📸 Photo',            'extensions': {'jpg','jpeg','png','heic','webp'}},
@@ -491,6 +543,10 @@ app.jinja_env.globals.update(
 def accueil():
     return render_template('login.html')
 
+@app.route('/connexion')
+def connexion():
+    return render_template('login.html')
+
 @app.route('/login', methods=['GET','POST'])
 def login():
     if request.method == 'POST':
@@ -558,7 +614,9 @@ def register():
                     nom_entreprise,
                     parent_id=os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID')
                 )
-                conn.execute("UPDATE clients SET drive_folder_id = ? WHERE email = ?", (new_folder_id, email))
+                factures_folder_id = create_folder("Factures", parent_id=new_folder_id)
+                conn.execute("UPDATE clients SET drive_folder_id = ?, factures_folder_id = ? WHERE email = ?", (new_folder_id, factures_folder_id, email))
+
                 conn.commit()
                 # Mettre à jour tous les autres comptes de la même entreprise sans dossier
                 conn.execute("""
@@ -573,11 +631,15 @@ def register():
         try:
             token = s.dumps(email, salt='email-confirm-salt')
             confirm_url = url_for('confirm_email', token=token, _external=True)
-            body = f"Bonjour {nom},\n\nMerci pour votre inscription ! Veuillez cliquer pour activer votre compte :\n{confirm_url}\n\nL'équipe Cocktail Média"
-            send_email(email, "Confirmez votre compte - Portail Client", body)
+            html_confirm = _base_confirm(nom, confirm_url)
+            send_email(
+                email,
+                "Confirmez votre compte — Cocktail Média",
+                f"Bonjour {nom}, veuillez confirmer votre compte : {confirm_url}",
+                html=html_confirm
+            )
         except Exception as e:
             print(f"[MAIL] Confirmation échouée: {e}")
-
         return render_template('register.html', show_success_popup=True)
 
     return render_template('register.html', show_success_popup=False)
@@ -592,10 +654,19 @@ def confirm_email(token):
     conn = get_db_connection()
     conn.execute("UPDATE clients SET is_email_confirmed = 1 WHERE email = ?", (email,))
     conn.commit()
+    user = conn.execute("SELECT * FROM clients WHERE email = ?", (email,)).fetchone()
     conn.close()
+    try:
+        send_email(
+            email,
+            "Bienvenue chez Cocktail Média !",
+            f"Bonjour {user['nom_complet']}, votre compte est maintenant actif.",
+            html=email_bienvenue(user['nom_complet'], email)
+        )
+    except Exception as e:
+        print(f"[MAIL] Email bienvenue échoué: {e}")
     flash("Votre compte a été confirmé avec succès !", "success")
     return redirect(url_for('accueil'))
-
 @app.route('/logout')
 def logout():
     session.clear()
@@ -676,15 +747,20 @@ def dashboard():
         ORDER BY p.created_at DESC
     """, (user_id,)).fetchall()
 
-    projets_with_pastille = []
-    for p in projets:
+    actifs_with_pastille = []
+    for p in projets_actifs:
         ready, done, total = compute_checklist_readiness(p['id'])
-        projets_with_pastille.append(
+        actifs_with_pastille.append(
+            {"projet": p, "pastille": pastille_color(ready), "done": done, "total": total}
+        )
+    archives_with_pastille = []
+    for p in projets_archives:
+        ready, done, total = compute_checklist_readiness(p['id'])
+        archives_with_pastille.append(
             {"projet": p, "pastille": pastille_color(ready), "done": done, "total": total}
         )
     conn.close()
-    return render_template('dashboard.html', projets=projets_with_pastille)
-
+    return render_template('dashboard.html', projets=actifs_with_pastille, projets_archives=archives_with_pastille)
 @app.route('/projet/<int:project_id>')
 @login_required
 def project_detail(project_id):
@@ -715,13 +791,17 @@ def project_detail(project_id):
             WHERE id_checklist = ?
             ORDER BY id ASC
         """, (checklist['id'],)).fetchall()
-    conn.close()
 
     ready, done, total = compute_checklist_readiness(project_id)
     color = pastille_color(ready)
+    board = conn.execute("SELECT * FROM decision_boards WHERE id_projet=? AND is_active=1", (project_id,)).fetchone()
+    choices = conn.execute("SELECT id FROM decision_board_choices WHERE id_projet=?", (project_id,)).fetchone()
+    conn.close()
+
     return render_template('project_detail.html',
                            projet=projet, checklist=checklist, items=items,
-                           readiness={"ready": ready, "done": done, "total": total, "color": color})
+                           readiness={"ready": ready, "done": done, "total": total, "color": color},
+                           board=board, already_submitted=choices)
 
 @app.route('/item/toggle/<int:item_id>')
 @login_required
@@ -770,6 +850,24 @@ def toggle_checklist_item(item_id):
                 f"Accéder: {url_for('project_detail', project_id=projet['id'], _external=True)}"
             )
             send_email(settings["admin_emails"], subject, body)
+    if new_status == 1 and normalize_status(projet['statut']) == "Documents à donner":
+        ready, done, total = compute_checklist_readiness(projet['id'])
+        if ready:
+            conn2 = get_db_connection()
+            conn2.execute("UPDATE projets SET statut='Documents reçus' WHERE id=?", (projet['id'],))
+            conn2.commit()
+            try:
+                lien = url_for('project_detail', project_id=projet['id'], _external=True)
+                send_email(
+                    client_notif['email'],
+                    f"Documents reçus — {projet['nom_projet']}",
+                    f"Bonjour {client_notif['nom_complet']}, nous avons bien reçu tous vos documents.",
+                    html=email_documents_recus(client_notif['nom_complet'], projet['nom_projet'], lien)
+                )
+
+            except Exception as e:
+                print(f"[MAIL] Email auto-statut échoué: {e}")
+            conn2.close()
 
     return redirect(url_for('project_detail', project_id=projet['id']))
 
@@ -842,6 +940,27 @@ def upload_item_file(item_id):
     conn.close()
 
     flash("Fichier téléversé.", "success")
+
+    # Auto-changement de statut si tous les documents sont reçus
+    if normalize_status(projet['statut']) == "Documents à donner":
+        ready, done, total = compute_checklist_readiness(projet['id'])
+        if ready:
+            conn3 = get_db_connection()
+            conn3.execute("UPDATE projets SET statut='Documents reçus' WHERE id=?", (projet['id'],))
+            conn3.commit()
+            try:
+                client_notif = conn3.execute("SELECT * FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
+                lien = url_for('project_detail', project_id=projet['id'], _external=True)
+                send_email(
+                    client_notif['email'],
+                    f"Documents reçus — {projet['nom_projet']}",
+                    f"Bonjour {client_notif['nom_complet']}, nous avons reçu tous vos documents.",
+                    html=email_documents_recus(client_notif['nom_complet'], projet['nom_projet'], lien)
+                )
+            except Exception as e:
+                print(f"[MAIL] Email auto-statut upload échoué: {e}")
+            conn3.close()
+
     return redirect(url_for('project_detail', project_id=projet['id']))
 
 @app.route('/item/file/<int:upload_id>')
@@ -875,8 +994,27 @@ def download_uploaded_file(upload_id):
 def profile():
     conn = get_db_connection()
     user = conn.execute("SELECT * FROM clients WHERE id = ?", (session['user_id'],)).fetchone()
+    projets_actifs = conn.execute("""
+        SELECT * FROM projets WHERE id_client = ? AND (is_archived = 0 OR is_archived IS NULL)
+        ORDER BY created_at DESC
+    """, (session['user_id'],)).fetchall()
+    projets_archives = conn.execute("""
+        SELECT * FROM projets WHERE id_client = ? AND is_archived = 1
+        ORDER BY created_at DESC
+    """, (session['user_id'],)).fetchall()
+
+    # Factures depuis la DB
+    factures_db = conn.execute("""
+        SELECT * FROM factures
+        WHERE id_client = ? AND statut != 'ouverte'
+        ORDER BY created_at DESC
+    """, (session['user_id'],)).fetchall()
     conn.close()
-    return render_template('profile.html', user=user)
+
+    return render_template('profile.html', user=user,
+                           projets_actifs=projets_actifs,
+                           projets_archives=projets_archives,
+                           factures_db=factures_db)
 
 @app.route('/update-profile', methods=['POST'])
 @login_required
@@ -954,25 +1092,40 @@ def admin_dashboard():
     """).fetchall()
     services = conn.execute("SELECT * FROM services ORDER BY nom_service").fetchall()
     services_localisation = {str(s['id']): bool(s['localisation_requise']) for s in services}
-    conn.close()
-    actifs_with_pastille = []
-    for p in projets_actifs:
-        ready, done, total = compute_checklist_readiness(p['id'])
-        actifs_with_pastille.append(
-            {"projet": p, "pastille": pastille_color(ready), "done": done, "total": total}
-        )
-    archives_with_pastille = []
-    for p in projets_archives:
-        ready, done, total = compute_checklist_readiness(p['id'])
-        archives_with_pastille.append(
-            {"projet": p, "pastille": pastille_color(ready), "done": done, "total": total}
-        )
-    conn.close()
-    return render_template('dashboard.html', projets=actifs_with_pastille, projets_archives=archives_with_pastille)
 
+    # Factures ouvertes (clients mensuels)
+    factures_ouvertes = conn.execute("""
+        SELECT f.*, c.nom_complet, c.nom_entreprise,
+               COUNT(fl.id) as nb_lignes
+        FROM factures f
+        JOIN clients c ON c.id = f.id_client
+        LEFT JOIN facture_lignes fl ON fl.id_facture = f.id
+        WHERE f.statut = 'ouverte'
+        GROUP BY f.id
+        ORDER BY f.created_at DESC
+    """).fetchall()
+
+    # Toutes les factures
+    toutes_factures = conn.execute("""
+        SELECT f.*, c.nom_complet, c.nom_entreprise
+        FROM factures f
+        JOIN clients c ON c.id = f.id_client
+        WHERE f.statut != 'ouverte'
+        ORDER BY f.created_at DESC
+    """).fetchall()
+
+    conn.close()
+    projets_with_pastille = []
+    for p in projets:
+        ready, done, total = compute_checklist_readiness(p['id'])
+        projets_with_pastille.append({"p": p, "pastille": pastille_color(ready), "done": done, "total": total})
+
+    return render_template('admin_dashboard.html',
         today=today,
         services_localisation=services_localisation,
-                           clients=clients, projets=projets_with_pastille, services=services)
+        clients=clients, projets=projets_with_pastille, services=services,
+        factures_ouvertes=factures_ouvertes,
+        toutes_factures=toutes_factures)
 
 @app.route('/admin/add_client', methods=['POST'])
 @admin_required
@@ -1002,8 +1155,10 @@ def add_client():
                 dossier_nom,
                 parent_id=os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID')
             )
-            conn.execute("UPDATE clients SET drive_folder_id=? WHERE email=?", (drive_folder_id, email))
+            factures_folder_id = create_folder("Factures", parent_id=drive_folder_id)
+            conn.execute("UPDATE clients SET drive_folder_id=?, factures_folder_id=? WHERE email=?", (drive_folder_id, factures_folder_id, email))
             conn.commit()
+
         except Exception as e:
             print(f"[DRIVE] Création dossier client échouée: {e}")
         flash(f"Le client '{nom}' a été ajouté avec succès.", "success")
@@ -1034,9 +1189,9 @@ def add_project():
     try:
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO projets (nom_projet, statut, lien_gdrive, id_client, localisation)
-            VALUES (?, ?, ?, ?, ?)
-        """, (nom_projet, statut, lien_gdrive, id_client, localisation))
+            INSERT INTO projets (nom_projet, statut, lien_gdrive, id_client, localisation, id_service)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (nom_projet, statut, lien_gdrive, id_client, localisation, id_service))
         id_projet = cur.lastrowid
 
 
@@ -1071,6 +1226,18 @@ def add_project():
 
         except Exception as drive_e:
             print(f"[DRIVE] Création dossier projet échouée: {drive_e}")
+        try:
+            client_notif = conn.execute("SELECT * FROM clients WHERE id=?", (id_client,)).fetchone()
+            if client_notif and client_notif['email']:
+                lien_projet = url_for('project_detail', project_id=id_projet, _external=True)
+                send_email(
+                    client_notif['email'],
+                    f"Nouveau projet — {nom_projet}",
+                    f"Bonjour {client_notif['nom_complet']}, un nouveau projet vous a été assigné : {nom_projet}",
+                    html=email_projet_cree(client_notif['nom_complet'], nom_projet, lien_projet)
+                )
+        except Exception as e:
+            print(f"[MAIL] Email projet créé échoué: {e}")        
         flash(f"Le projet '{nom_projet}' a été ajouté avec succès.", "success")
     except Exception as e:
         conn.rollback()
@@ -1087,8 +1254,20 @@ def edit_client(client_id):
         nom = request.form.get('nom_complet','').strip()
         email = request.form.get('email','').strip().lower()
         entreprise = request.form.get('nom_entreprise','')
-        conn.execute("UPDATE clients SET nom_complet=?, email=?, nom_entreprise=? WHERE id=?",
-                     (nom, email, entreprise, client_id))
+        mode_facturation = request.form.get('mode_facturation', 'projet')
+        adresse_facturation = request.form.get('adresse_facturation','').strip()
+        ville_facturation = request.form.get('ville_facturation','').strip()
+        province_facturation = request.form.get('province_facturation','Québec').strip()
+        code_postal_facturation = request.form.get('code_postal_facturation','').strip()
+        pays_facturation = request.form.get('pays_facturation','Canada').strip()
+        conn.execute("""
+            UPDATE clients SET nom_complet=?, email=?, nom_entreprise=?,
+            mode_facturation=?, adresse_facturation=?, ville_facturation=?,
+            province_facturation=?, code_postal_facturation=?, pays_facturation=?
+            WHERE id=?
+        """, (nom, email, entreprise, mode_facturation, adresse_facturation,
+               ville_facturation, province_facturation, code_postal_facturation,
+               pays_facturation, client_id))
         conn.commit()
         conn.close()
         flash(f"Le client '{nom}' a été mis à jour.", "success")
@@ -1133,21 +1312,35 @@ def edit_project(project_id):
 
         # Notification client si passage à "Travaux terminés"
         try:
-            if old and (old['statut'] != statut) and (normalize_status(statut) == "Travaux terminés"):
-                settings = get_notification_settings()
-                if settings["client_updates"] == 1:
-                    client = conn.execute("SELECT nom_complet, email FROM clients WHERE id = ?", (id_client,)).fetchone()
-                    subject = f"Votre projet « {nom_projet} » est terminé 🎉"
-                    body = (
-                        f"Bonjour {client['nom_complet']},\n\n"
-                        f"Bonne nouvelle : votre projet « {nom_projet} » est maintenant au statut TERMINÉ.\n"
-                        f"Vous pouvez le consulter ici : {url_for('project_detail', project_id=project_id, _external=True)}\n\n"
-                        f"— L’équipe Cocktail Média"
-                    )
-                    send_email(client['email'], subject, body)
+            if old and (old['statut'] != statut):
+                client = conn.execute("SELECT * FROM clients WHERE id = ?", (id_client,)).fetchone()
+                if client and client['email']:
+                    lien = url_for('project_detail', project_id=project_id, _external=True)
+                    statut_norm = normalize_status(statut)
+                    subject = None
+                    body_txt = None
+                    body_html = None
+                    if statut_norm == "Documents à donner":
+                        subject = f"Documents requis — {nom_projet}"
+                        body_txt = f"Bonjour {client['nom_complet']}, nous avons besoin de vos documents pour le projet : {nom_projet}"
+                        body_html = email_documents_requis(client['nom_complet'], nom_projet, lien)
+                    elif statut_norm == "Travaux en cours":
+                        subject = f"Les travaux sont en cours — {nom_projet}"
+                        body_txt = f"Bonjour {client['nom_complet']}, les travaux sont maintenant en cours sur votre projet : {nom_projet}"
+                        body_html = email_travaux_en_cours(client['nom_complet'], nom_projet, lien)
+                    elif statut_norm == "En révision":
+                        subject = f"Votre projet est en révision — {nom_projet}"
+                        body_txt = f"Bonjour {client['nom_complet']}, votre projet est en révision : {nom_projet}"
+                        body_html = email_en_revision(client['nom_complet'], nom_projet, lien)
+                    elif statut_norm in ["Travaux terminés", "Complété"]:
+                        subject = f"Votre projet est terminé — {nom_projet}"
+                        body_txt = f"Bonjour {client['nom_complet']}, votre projet est terminé : {nom_projet}"
+                        lien_drive = conn.execute("SELECT lien_gdrive FROM projets WHERE id=?", (project_id,)).fetchone()
+                        body_html = email_livraison(client['nom_complet'], nom_projet, lien, lien_drive['lien_gdrive'] if lien_drive else None)
+                    if subject and body_txt:
+                        send_email(client['email'], subject, body_txt, html=body_html)
         except Exception as e:
             print(f"[MAIL] Notification client échouée: {e}")
-
         conn.close()
         flash(f"Le projet '{nom_projet}' a été mis à jour.", "success")
         return redirect(url_for('admin_dashboard'))
@@ -1196,7 +1389,17 @@ def add_service():
     conn = get_db_connection()
     try:
         icon = request.form.get('icon', 'default')
-        conn.execute("INSERT INTO services (nom_service, description, localisation_requise, documents_requis, icon) VALUES (?, ?, ?, ?, ?)", (nom_service, description, localisation_requise, documents_requis, icon))
+        duree_heures = int(request.form.get('duree_heures', 1))
+        duree_minutes_form = int(request.form.get('duree_minutes', 0))
+        duree_production_minutes = (duree_heures * 60) + duree_minutes_form
+        delai_fixe_heures = int(request.form.get('delai_fixe_heures', 0))
+        prix = float(request.form.get('prix', 0) or 0)
+        exonere_taxes = 1 if request.form.get('exonere_taxes') else 0
+        conn.execute("""
+            INSERT INTO services (nom_service, description, localisation_requise, documents_requis, icon, duree_production_minutes, delai_fixe_heures, prix, exonere_taxes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (nom_service, description, localisation_requise, documents_requis, icon, duree_production_minutes, delai_fixe_heures, prix, exonere_taxes))
+
         conn.commit()
         flash(f"Le service '{nom_service}' a été ajouté.", "success")
     except sqlite3.IntegrityError:
@@ -1318,32 +1521,45 @@ def force_status(project_id):
     statut = request.form.get('statut', '').strip()
     if statut:
         conn = get_db_connection()
+        projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
+        client = conn.execute("SELECT * FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
         conn.execute("UPDATE projets SET statut=? WHERE id=?", (statut, project_id))
         conn.commit()
+        try:
+            if client and client['email']:
+                lien = url_for('project_detail', project_id=project_id, _external=True)
+                nom_projet = projet['nom_projet']
+                statut_norm = normalize_status(statut)
+                subject = None
+                body_txt = None
+                body_html = None
+                if statut_norm == "Documents à donner":
+                    subject = f"Documents requis — {nom_projet}"
+                    body_txt = f"Bonjour {client['nom_complet']}, nous avons besoin de vos documents."
+                    body_html = email_documents_requis(client['nom_complet'], nom_projet, lien)
+                elif statut_norm == "Travaux en cours":
+                    subject = f"Les travaux sont en cours — {nom_projet}"
+                    body_txt = f"Bonjour {client['nom_complet']}, les travaux sont en cours."
+                    body_html = email_travaux_en_cours(client['nom_complet'], nom_projet, lien)
+                elif statut_norm == "En révision":
+                    subject = f"Votre projet est en révision — {nom_projet}"
+                    body_txt = f"Bonjour {client['nom_complet']}, votre projet est en révision."
+                    body_html = email_en_revision(client['nom_complet'], nom_projet, lien)
+                elif statut_norm in ["Travaux terminés", "Complété"]:
+                    subject = f"Votre projet est terminé — {nom_projet}"
+                    body_txt = f"Bonjour {client['nom_complet']}, votre projet est terminé."
+                    lien_drive = projet['lien_gdrive'] if projet['lien_gdrive'] else None
+                    body_html = email_livraison(client['nom_complet'], nom_projet, lien, lien_drive)
+                elif statut_norm == "Annulé":
+                    subject = f"Projet annulé — {nom_projet}"
+                    body_txt = f"Bonjour {client['nom_complet']}, votre projet a été annulé."
+                    body_html = email_annulation(client['nom_complet'], nom_projet)
+                if subject and body_txt:
+                    send_email(client['email'], subject, body_txt, html=body_html)
+        except Exception as e:
+            print(f"[MAIL] Email force_status échoué: {e}")
         conn.close()
         flash(f"Statut mis à jour : {statut}", "success")
-    return redirect(url_for('project_detail', project_id=project_id))
-
-@app.route('/admin/projet/<int:project_id>/start', methods=['POST'])
-@admin_required
-def start_work(project_id):
-    """Démarre les travaux manuellement (pour services sans documents requis)."""
-    conn = get_db_connection()
-    conn.execute("UPDATE projets SET statut='Travaux en cours' WHERE id=?", (project_id,))
-    conn.commit()
-    conn.close()
-    flash("Travaux démarrés.", "success")
-    return redirect(url_for('project_detail', project_id=project_id))
-
-@app.route('/admin/projet/<int:project_id>/complete', methods=['POST'])
-@admin_required
-def complete_project(project_id):
-    """Marque le projet comme complété."""
-    conn = get_db_connection()
-    conn.execute("UPDATE projets SET statut='Complété' WHERE id=?", (project_id,))
-    conn.commit()
-    conn.close()
-    flash("Projet marqué comme complété.", "success")
     return redirect(url_for('project_detail', project_id=project_id))
 
 # ───────────────────────────────────────────────────────────
@@ -1353,6 +1569,140 @@ def complete_project(project_id):
 # ───────────────────────────────────────────────────────────
 # Création manuelle d'un compte admin (exécuter une seule fois)
 # ───────────────────────────────────────────────────────────
+@app.route('/admin/projet/<int:project_id>/start', methods=['POST'])
+@admin_required
+def start_work(project_id):
+    """Démarre les travaux — crée un bloc Calendar et calcule la date de livraison."""
+    conn = get_db_connection()
+    projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
+    client = conn.execute("SELECT * FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
+
+    service_row = conn.execute("SELECT s.* FROM services s WHERE s.id = ?", (projet['id_service'],)).fetchone()
+
+    duree_minutes = service_row['duree_production_minutes'] if service_row and service_row['duree_production_minutes'] else 60
+    delai_fixe = service_row['delai_fixe_heures'] if service_row and service_row['delai_fixe_heures'] else 0
+    icon_service = service_row['icon'] if service_row and service_row['icon'] else 'default'
+
+    event_id, date_livraison = create_production_event(
+        projet['nom_projet'], icon_service, duree_minutes, delai_fixe
+    )
+
+    conn.execute("""
+        UPDATE projets SET statut='Travaux en cours',
+        calendar_event_id=?, date_livraison_estimee=? WHERE id=?
+    """, (event_id, str(date_livraison) if date_livraison else None, project_id))
+    conn.commit()
+
+    try:
+        if client and client['email']:
+            lien = url_for('project_detail', project_id=project_id, _external=True)
+            from calendar_service import format_date_fr
+            date_str = format_date_fr(date_livraison) if date_livraison else 'à déterminer'
+
+            # ── Génération facture ──
+            facture = None
+            pdf_path = None
+            mode = client['mode_facturation'] if 'mode_facturation' in client.keys() else 'projet'
+            if mode == 'mensuel':
+                try:
+                    from datetime import date as _date
+                    service_row2 = conn.execute("SELECT * FROM services WHERE id=?", (projet['id_service'],)).fetchone()
+                    prix_service = float(service_row2['prix'] or 0) if service_row2 else 0
+                    if prix_service > 0:
+                        loc = projet['localisation'] if projet['localisation'] else None
+                        ajouter_ligne_facture_mensuelle(
+                            client['id'], project_id,
+                            service_row2['nom_service'] if service_row2 else projet['nom_projet'],
+                            _date.today().strftime("%Y-%m-%d"),
+                            loc, prix_service, conn
+                        )
+                except Exception as e:
+                    print(f"[INVOICE] Ajout ligne mensuelle échoué: {e}")
+            if mode == 'projet':
+                try:
+                    facture = creer_facture_projet(project_id, conn)
+                    if facture:
+                        pdf_path = facture['pdf_path']
+                        try:
+                            client_row = conn.execute(
+                                "SELECT factures_folder_id FROM clients WHERE id=?",
+                                (projet['id_client'],)
+                            ).fetchone()
+                            if client_row and client_row['factures_folder_id']:
+                                drive_file_id, _ = upload_file(
+                                    pdf_path,
+                                    f"{facture['numero']}.pdf",
+                                    client_row['factures_folder_id']
+                                )
+                                conn.execute(
+                                    "UPDATE factures SET drive_file_id=? WHERE id=?",
+                                    (drive_file_id, facture['id'])
+                                )
+                                conn.commit()
+                        except Exception as e:
+                            print(f"[DRIVE] Upload facture échoué: {e}")
+                except Exception as e:
+                    print(f"[INVOICE] Génération facture échouée: {e}")
+
+            # ── Email avec facture en pièce jointe ──
+            msg = Message(
+                f"Les travaux sont en cours — {projet['nom_projet']}",
+                sender=app.config['MAIL_DEFAULT_SENDER'],
+                recipients=[client['email']]
+            )
+            msg.body = f"Bonjour {client['nom_complet']}, les travaux sont en cours. Livraison estimée : {date_str}"
+            msg.html = email_travaux_en_cours_avec_date(
+                client['nom_complet'], projet['nom_projet'], lien, date_str,
+                facture_numero=facture['numero'] if facture else None,
+                facture_total=facture['total'] if facture else None,
+                facture_echeance=facture['date_echeance'] if facture else None
+            )
+            if pdf_path and os.path.exists(pdf_path):
+                with open(pdf_path, 'rb') as f:
+                    msg.attach(
+                        f"{facture['numero']}.pdf",
+                        'application/pdf',
+                        f.read()
+                    )
+            mail.send(msg)
+    except Exception as e:
+        print(f"[MAIL] Email start_work échoué: {e}")
+
+    conn.close()
+    flash(f"Travaux démarrés.{' Livraison estimée : ' + str(date_livraison) if date_livraison else ''}", "success")
+    return redirect(url_for('project_detail', project_id=project_id))
+
+@app.route('/admin/projet/<int:project_id>/complete', methods=['POST'])
+@admin_required
+def complete_project(project_id):
+    conn = get_db_connection()
+    conn.execute("UPDATE projets SET statut='Complété' WHERE id=?", (project_id,))
+    conn.commit()
+    conn.close()
+    flash("Projet marqué comme complété.", "success")
+    return redirect(url_for('project_detail', project_id=project_id))
+
+@app.route('/admin/edit_service/<int:service_id>', methods=['POST'])
+@admin_required
+def edit_service(service_id):
+    documents_requis = int(request.form.get('documents_requis', 0))
+    localisation_requise = int(request.form.get('localisation_requise', 0))
+    icon = request.form.get('icon', 'default')
+    duree_heures = int(request.form.get('duree_heures', 1))
+    duree_minutes_form = int(request.form.get('duree_minutes', 0))
+    duree_production_minutes = (duree_heures * 60) + duree_minutes_form
+    delai_fixe_heures = int(request.form.get('delai_fixe_heures', 0))
+    prix = float(request.form.get('prix', 0) or 0)
+    exonere_taxes = 1 if request.form.get('exonere_taxes') else 0
+    conn.execute("""
+        UPDATE services SET documents_requis=?, localisation_requise=?, icon=?,
+        duree_production_minutes=?, delai_fixe_heures=?, prix=?, exonere_taxes=? WHERE id=?
+    """, (documents_requis, localisation_requise, icon, duree_production_minutes, delai_fixe_heures, prix, exonere_taxes, service_id))
+    conn.commit()
+    conn.close()
+    flash("Service mis à jour.", "success")
+    return redirect(url_for('admin_services'))
+
 def create_admin():
     conn = get_db_connection()
     bcrypt = Bcrypt(app)
@@ -1420,11 +1770,24 @@ def edit_checklist_items(project_id):
 @admin_required
 def archive_project(project_id):
     conn = get_db_connection()
+    projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
     conn.execute("UPDATE projets SET is_archived = 1 WHERE id = ?", (project_id,))
     conn.commit()
+    try:
+        client = conn.execute("SELECT * FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
+        if client and client['email']:
+            send_email(
+                client['email'],
+                f"Projet archivé — {projet['nom_projet']}",
+                f"Bonjour {client['nom_complet']}, votre projet {projet['nom_projet']} a été archivé.",
+                html=email_archive(client['nom_complet'], projet['nom_projet'])
+            )
+    except Exception as e:
+        print(f"[MAIL] Email archivage échoué: {e}")
     conn.close()
     flash("Projet archivé.", "success")
     return redirect(url_for('project_detail', project_id=project_id))
+
 
 @app.route('/admin/projet/<int:project_id>/unarchive', methods=['POST'])
 @admin_required
@@ -1435,7 +1798,381 @@ def unarchive_project(project_id):
     conn.close()
     flash("Projet désarchivé.", "success")
     return redirect(url_for('project_detail', project_id=project_id))
+    conn.close()
+    flash("Projet désarchivé.", "success")
+    return redirect(url_for('project_detail', project_id=project_id))
 
+@app.route('/admin/client/<int:client_id>/notifier_facture', methods=['POST'])
+@admin_required
+def notifier_facture(client_id):
+    conn = get_db_connection()
+    client = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
+    conn.close()
+    if client:
+        try:
+            lien = get_folder_link(client['factures_folder_id']) if client['factures_folder_id'] else '#'
+            body = (
+                f"Bonjour {client['nom_complet']},\n\n"
+                f"Une nouvelle facture est disponible dans votre portail client.\n"
+                f"Vous pouvez la consulter ici : {lien}\n\n"
+                f"— L'équipe Cocktail Média"
+            )
+            send_email(
+                client['email'],
+                "Nouvelle facture disponible — Cocktail Média",
+                body,
+                html=email_nouvelle_facture(client['nom_complet'])
+            )
+
+            flash("Notification envoyée au client.", "success")
+        except Exception as e:
+            flash(f"Erreur d'envoi: {e}", "error")
+    return redirect(url_for('admin_dashboard'))
+
+# ───────────────────────────────────────────────────────────
+# Decision Board
+# ───────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────
+@app.route('/admin/projet/<int:project_id>/decision', methods=['GET', 'POST'])
+@admin_required
+def admin_decision_board(project_id):
+    import json, tempfile
+    conn = get_db_connection()
+    projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
+    if not projet:
+        conn.close()
+        flash("Projet introuvable.", "error")
+        return redirect(url_for('admin_dashboard'))
+
+    if request.method == 'POST':
+        is_active  = 1 if request.form.get('is_active') else 0
+
+        # JSON unique — validation
+        config_raw = request.form.get('config_json', '').strip()
+        config_json = None
+        config = {}
+        if config_raw:
+            try:
+                config = json.loads(config_raw)
+                config_json = config_raw
+            except Exception:
+                flash("JSON invalide. Vérifiez la syntaxe.", "error")
+                conn.close()
+                return redirect(url_for('admin_decision_board', project_id=project_id))
+
+        # Récupérer le board existant
+        existing = conn.execute("SELECT * FROM decision_boards WHERE id_projet=?", (project_id,)).fetchone()
+
+        # Créer le dossier DecisionBoardAssets sur Drive si nécessaire
+        assets_folder_id = existing['assets_folder_id'] if existing and existing['assets_folder_id'] else None
+        if not assets_folder_id:
+            try:
+                client = conn.execute("SELECT * FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
+                parent = client['drive_folder_id'] if client and client['drive_folder_id'] else os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID')
+                assets_folder_id = create_folder("DecisionBoardAssets", parent_id=parent)
+            except Exception as e:
+                print(f"[DRIVE] Création dossier assets échouée: {e}")
+
+        # Upload images — icônes et logos
+        ALLOWED_ASSETS = {'png', 'svg', 'avif', 'webp', 'jpg', 'jpeg'}
+
+        def upload_asset(field_name, old_url):
+            file = request.files.get(field_name)
+            if not file or file.filename == '':
+                return old_url  # Garde l'ancienne URL
+            ext = file.filename.rsplit('.', 1)[-1].lower()
+            if ext not in ALLOWED_ASSETS:
+                return old_url
+            if not assets_folder_id:
+                return old_url
+            try:
+                safe_name = secure_filename(file.filename)
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}')
+                file.save(tmp.name)
+                tmp.close()
+                file_id, _ = upload_file(tmp.name, safe_name, assets_folder_id)
+                os.unlink(tmp.name)
+                public_url = make_file_public(file_id)
+                return public_url
+            except Exception as e:
+                print(f"[DRIVE] Upload asset {field_name} échoué: {e}")
+                return old_url
+
+        old = existing if existing else {}
+        def g(col): return old[col] if old and old[col] else None
+
+        icon1_url = upload_asset('icon1', g('icon1_url'))
+        icon2_url = upload_asset('icon2', g('icon2_url'))
+        icon3_url = upload_asset('icon3', g('icon3_url'))
+        icon4_url = upload_asset('icon4', g('icon4_url'))
+        logo1_url = upload_asset('logo1', g('logo1_url'))
+        logo2_url = upload_asset('logo2', g('logo2_url'))
+        logo3_url = upload_asset('logo3', g('logo3_url'))
+        logo4_url = upload_asset('logo4', g('logo4_url'))
+
+        icon1_name = request.form.get('icon1_name', g('icon1_name') or 'Style A').strip()
+        icon2_name = request.form.get('icon2_name', g('icon2_name') or 'Style B').strip()
+        icon3_name = request.form.get('icon3_name', g('icon3_name') or 'Style C').strip()
+        icon4_name = request.form.get('icon4_name', g('icon4_name') or 'Style D').strip()
+        logo1_name = request.form.get('logo1_name', g('logo1_name') or 'Composition A').strip()
+        logo2_name = request.form.get('logo2_name', g('logo2_name') or 'Composition B').strip()
+        logo3_name = request.form.get('logo3_name', g('logo3_name') or 'Composition C').strip()
+        logo4_name = request.form.get('logo4_name', g('logo4_name') or 'Composition D').strip()
+
+        if existing:
+            conn.execute("""
+                UPDATE decision_boards SET
+                    config_json=?, is_active=?, assets_folder_id=?,
+                    icon1_url=?, icon1_name=?, icon2_url=?, icon2_name=?,
+                    icon3_url=?, icon3_name=?, icon4_url=?, icon4_name=?,
+                    logo1_url=?, logo1_name=?, logo2_url=?, logo2_name=?,
+                    logo3_url=?, logo3_name=?, logo4_url=?, logo4_name=?,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE id_projet=?
+            """, (config_json, is_active, assets_folder_id,
+                  icon1_url, icon1_name, icon2_url, icon2_name,
+                  icon3_url, icon3_name, icon4_url, icon4_name,
+                  logo1_url, logo1_name, logo2_url, logo2_name,
+                  logo3_url, logo3_name, logo4_url, logo4_name,
+                  project_id))
+        else:
+            conn.execute("""
+                INSERT INTO decision_boards (
+                    id_projet, config_json, is_active, assets_folder_id,
+                    icon1_url, icon1_name, icon2_url, icon2_name,
+                    icon3_url, icon3_name, icon4_url, icon4_name,
+                    logo1_url, logo1_name, logo2_url, logo2_name,
+                    logo3_url, logo3_name, logo4_url, logo4_name
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (project_id, config_json, is_active, assets_folder_id,
+                  icon1_url, icon1_name, icon2_url, icon2_name,
+                  icon3_url, icon3_name, icon4_url, icon4_name,
+                  logo1_url, logo1_name, logo2_url, logo2_name,
+                  logo3_url, logo3_name, logo4_url, logo4_name))
+        conn.commit()
+        conn.close()
+        flash("Decision board sauvegardé.", "success")
+        return redirect(url_for('admin_decision_board', project_id=project_id))
+
+    board   = conn.execute("SELECT * FROM decision_boards WHERE id_projet=?", (project_id,)).fetchone()
+    choices = conn.execute("SELECT * FROM decision_board_choices WHERE id_projet=?", (project_id,)).fetchone()
+    conn.close()
+    return render_template('admin_decision_board.html', projet=projet, board=board, choices=choices)
+
+@app.route('/projet/<int:project_id>/decision')
+@login_required
+def client_decision_board(project_id):
+    conn = get_db_connection()
+    projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
+    if not projet or projet['id_client'] != session['user_id']:
+        conn.close()
+        flash("Accès non autorisé.", "error")
+        return redirect(url_for('dashboard'))
+
+    if normalize_status(projet['statut']) != "En révision":
+        conn.close()
+        flash("Le decision board n'est pas encore disponible.", "error")
+        return redirect(url_for('project_detail', project_id=project_id))
+
+    board = conn.execute("SELECT * FROM decision_boards WHERE id_projet=? AND is_active=1", (project_id,)).fetchone()
+    if not board:
+        conn.close()
+        flash("Le decision board n'est pas encore configuré.", "error")
+        return redirect(url_for('project_detail', project_id=project_id))
+
+    already_submitted = conn.execute("SELECT id FROM decision_board_choices WHERE id_projet=?", (project_id,)).fetchone()
+    conn.close()
+    
+    conn2 = get_db_connection()
+    client = conn2.execute("SELECT nom_complet FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
+    conn2.close()
+    client_name = client['nom_complet'] if client else 'Votre marque'
+    return render_template('client_decision_board.html', projet=projet, board=board, already_submitted=already_submitted, client_name=client_name)
+
+@app.route('/projet/<int:project_id>/decision/submit', methods=['POST'])
+@login_required
+def submit_decision_board(project_id):
+    conn = get_db_connection()
+    projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
+    if not projet or projet['id_client'] != session['user_id']:
+        conn.close()
+        flash("Accès non autorisé.", "error")
+        return redirect(url_for('dashboard'))
+
+    already = conn.execute("SELECT id FROM decision_board_choices WHERE id_projet=?", (project_id,)).fetchone()
+    if already:
+        conn.close()
+        flash("Vous avez déjà soumis vos choix.", "error")
+        return redirect(url_for('project_detail', project_id=project_id))
+
+    choix_directions = request.form.get('choix_directions', '')
+    choix_noms       = request.form.get('choix_noms', '')
+    choix_icones     = request.form.get('choix_icones', '')
+    choix_typos      = request.form.get('choix_typos', '')
+    choix_palettes   = request.form.get('choix_palettes', '')
+    choix_logos      = request.form.get('choix_logos', '')
+    nom_suggestion   = request.form.get('nom_suggestion', '').strip()
+    commentaires     = request.form.get('commentaires', '').strip()
+
+    conn.execute("""
+        INSERT INTO decision_board_choices
+        (id_projet, choix_directions, choix_noms, choix_icones, choix_typos, choix_palettes, choix_logos, nom_suggestion, commentaires)
+        VALUES (?,?,?,?,?,?,?,?,?)
+    """, (project_id, choix_directions, choix_noms, choix_icones, choix_typos, choix_palettes, choix_logos, nom_suggestion, commentaires))
+    conn.commit()
+
+    # Email admin
+    try:
+        client = conn.execute("SELECT * FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
+        settings = get_notification_settings()
+        if settings["admin_emails"]:
+            subject = f"[Decision Board] {client['nom_complet']} a soumis ses choix — {projet['nom_projet']}"
+            body = (
+                f"Client : {client['nom_complet']} ({client['email']})\n"
+                f"Projet : {projet['nom_projet']}\n\n"
+                f"Directions : {choix_directions or 'Aucun'}\n"
+                f"Noms : {choix_noms or 'Aucun'}\n"
+                f"Suggestion nom : {nom_suggestion or 'Aucune'}\n"
+                f"Icônes : {choix_icones or 'Aucun'}\n"
+                f"Typographies : {choix_typos or 'Aucun'}\n"
+                f"Palettes : {choix_palettes or 'Aucun'}\n"
+                f"Logos : {choix_logos or 'Aucun'}\n\n"
+                f"Commentaires : {commentaires or 'Aucun'}\n\n"
+                f"Voir le projet : {url_for('project_detail', project_id=project_id, _external=True)}"
+            )
+            send_email(settings["admin_emails"], subject, body)
+    except Exception as e:
+        print(f"[MAIL] Email decision board échoué: {e}")
+
+    conn.close()
+    flash("Vos choix ont été soumis avec succès. Merci !", "success")
+    return redirect(url_for('project_detail', project_id=project_id))
+
+# ───────────────────────────────────────────────────────────
+# Routes Factures Admin
+# ───────────────────────────────────────────────────────────
+@app.route('/admin/facture/<int:facture_id>/fermer', methods=['POST'])
+@admin_required
+def fermer_facture(facture_id):
+    from invoice_service import generer_pdf_facture, calculer_taxes
+    from datetime import date, timedelta
+    conn = get_db_connection()
+    facture = conn.execute("SELECT * FROM factures WHERE id=?", (facture_id,)).fetchone()
+    if not facture or facture['statut'] != 'ouverte':
+        conn.close()
+        flash("Facture introuvable ou déjà fermée.", "error")
+        return redirect(url_for('admin_dashboard'))
+
+    client = conn.execute("SELECT * FROM clients WHERE id=?", (facture['id_client'],)).fetchone()
+    lignes = conn.execute("SELECT * FROM facture_lignes WHERE id_facture=? ORDER BY date_service", (facture_id,)).fetchall()
+
+    today    = date.today()
+    date_str = today.strftime("%Y-%m-%d")
+
+    # Générer PDF
+    import pathlib, os
+    upload_root  = os.getenv("UPLOAD_ROOT", "/data/uploads")
+    factures_dir = os.path.join(upload_root, "factures", f"client_{client['id']}")
+    pathlib.Path(factures_dir).mkdir(parents=True, exist_ok=True)
+    pdf_path = os.path.join(factures_dir, f"{facture['numero']}.pdf")
+
+    lignes_dict = []
+    for l in lignes:
+        lignes_dict.append({
+            "description":   l['description'],
+            "date_service":  l['date_service'] or '',
+            "localisation":  l['localisation'] or '',
+            "quantite":      l['quantite'],
+            "prix_unitaire": l['prix_unitaire'],
+        })
+
+    facture_dict = {
+        "numero":            facture['numero'],
+        "date_emission":     date_str,
+        "date_echeance":     "À la réception",
+        "exonere_taxes":     False,
+        "stripe_payment_url": facture['stripe_payment_url'],
+    }
+
+    generer_pdf_facture(facture_dict, lignes_dict, dict(client), pdf_path)
+
+    # Upload Drive
+    drive_file_id = None
+    try:
+        client_row = conn.execute(
+            "SELECT factures_folder_id FROM clients WHERE id=?", (client['id'],)
+        ).fetchone()
+        if client_row and client_row['factures_folder_id']:
+            drive_file_id, _ = upload_file(
+                pdf_path, f"{facture['numero']}.pdf", client_row['factures_folder_id']
+            )
+    except Exception as e:
+        print(f"[DRIVE] Upload facture mensuelle échoué: {e}")
+
+    # Mettre à jour DB
+    conn.execute("""
+        UPDATE factures SET statut='envoyee', date_emission=?, date_echeance='À la réception',
+        pdf_path=?, drive_file_id=? WHERE id=?
+    """, (date_str, pdf_path, drive_file_id, facture_id))
+    conn.commit()
+
+    # Envoyer email avec PDF
+    try:
+        if client and client['email']:
+            from flask_mail import Message as MailMessage
+            msg = MailMessage(
+                f"Votre facture {facture['numero']} — Cocktail Média",
+                sender=app.config['MAIL_DEFAULT_SENDER'],
+                recipients=[client['email']]
+            )
+            msg.body = f"Bonjour {client['nom_complet']}, veuillez trouver ci-joint votre facture {facture['numero']}."
+            msg.html = email_nouvelle_facture(client['nom_complet'])
+            if os.path.exists(pdf_path):
+                with open(pdf_path, 'rb') as f:
+                    msg.attach(f"{facture['numero']}.pdf", 'application/pdf', f.read())
+            mail.send(msg)
+    except Exception as e:
+        print(f"[MAIL] Email facture mensuelle échoué: {e}")
+
+    conn.close()
+    flash(f"Facture {facture['numero']} fermée et envoyée.", "success")
+    return redirect(url_for('admin_dashboard'))
+
+
+@app.route('/admin/facture/<int:facture_id>/payee', methods=['POST'])
+@admin_required
+def marquer_facture_payee(facture_id):
+    conn = get_db_connection()
+    conn.execute("UPDATE factures SET statut='payee' WHERE id=?", (facture_id,))
+    conn.commit()
+    conn.close()
+    flash("Facture marquée comme payée.", "success")
+    return redirect(url_for('admin_dashboard'))
+
+@app.route('/admin/facture/<int:facture_id>/supprimer', methods=['POST'])
+@admin_required
+def supprimer_facture(facture_id):
+    conn = get_db_connection()
+    facture = conn.execute("SELECT * FROM factures WHERE id=?", (facture_id,)).fetchone()
+    if not facture:
+        conn.close()
+        flash("Facture introuvable.", "error")
+        return redirect(url_for('admin_dashboard'))
+
+    # Supprimer PDF local
+    if facture['pdf_path'] and os.path.exists(facture['pdf_path']):
+        try:
+            os.remove(facture['pdf_path'])
+        except Exception as e:
+            print(f"[INVOICE] Suppression PDF échouée: {e}")
+
+    # Supprimer lignes + facture en DB
+    conn.execute("DELETE FROM facture_lignes WHERE id_facture=?", (facture_id,))
+    conn.execute("DELETE FROM factures WHERE id=?", (facture_id,))
+    conn.commit()
+    conn.close()
+    flash(f"Facture {facture['numero']} supprimée.", "success")
+    return redirect(url_for('admin_dashboard'))
 
 if __name__ == '__main__':
     app.run(debug=True)

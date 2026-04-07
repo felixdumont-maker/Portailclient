@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}Decision Board — {{ projet.nom_projet }}{% endblock %}
+{% block content %}
+<div class="breadcrumbs">
+  <a href="{{ url_for('admin_dashboard') }}">Admin</a>
+  <span class="sep">›</span>
+  <a href="{{ url_for('project_detail', project_id=projet.id) }}">{{ projet.nom_projet }}</a>
+  <span class="sep">›</span>
+  Decision Board
+</div>
+
+<h1>Decision Board</h1>
+<p class="muted" style="margin-bottom:2rem;">{{ projet.nom_projet }}</p>
+
+{% if choices %}
+<div class="card" style="border-color:#2e7d32;background:#f0faf0;margin-bottom:2rem;">
+  <div class="card-header">
+    <span class="card-title" style="color:#2e7d32;">✅ Choix soumis par le client</span>
+    <span class="muted" style="font-size:.85rem;">{{ choices.submitted_at }}</span>
+  </div>
+  <div style="display:grid;gap:.5rem;font-size:.9rem;">
+    {% if choices.choix_directions %}<p><strong>Directions :</strong> {{ choices.choix_directions }}</p>{% endif %}
+    {% if choices.choix_noms %}<p><strong>Noms :</strong> {{ choices.choix_noms }}</p>{% endif %}
+    {% if choices.nom_suggestion %}<p><strong>Suggestion nom :</strong> {{ choices.nom_suggestion }}</p>{% endif %}
+    {% if choices.choix_icones %}<p><strong>Icônes :</strong> {{ choices.choix_icones }}</p>{% endif %}
+    {% if choices.choix_typos %}<p><strong>Typographies :</strong> {{ choices.choix_typos }}</p>{% endif %}
+    {% if choices.choix_palettes %}<p><strong>Palettes :</strong> {{ choices.choix_palettes }}</p>{% endif %}
+    {% if choices.choix_logos %}<p><strong>Logos :</strong> {{ choices.choix_logos }}</p>{% endif %}
+    {% if choices.commentaires %}<p><strong>Commentaires :</strong> {{ choices.commentaires }}</p>{% endif %}
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <form method="POST" enctype="multipart/form-data">
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2rem;">
+      <h2 style="margin:0;border:none;">Configuration</h2>
+      <label style="display:flex;align-items:center;gap:.75rem;cursor:pointer;font-weight:700;color:var(--couleur-principale);">
+        <input type="checkbox" name="is_active" style="width:auto;" {{ 'checked' if board and board.is_active }}>
+        Activer (visible par le client)
+      </label>
+    </div>
+
+    <!-- JSON CONFIG -->
+    <div class="form-group">
+      <label>Configuration JSON <span class="muted">(sections absentes = cachées)</span></label>
+      <textarea name="config_json" rows="12" style="font-family:monospace;font-size:.82rem;" placeholder='{
+  "accent_color": "#E83B14",
+  "accent_color_rgb": "232,59,20",
+  "directions": [
+    {"emoji":"✨","title":"Signature personnelle","description":"...","vibe":"Chaleureux, authentique","examples":["Prénom Concept","Concept Prénom"]}
+  ],
+  "names": ["Nom Option 1","Nom Option 2","Nom Option 3"],
+  "typos": [
+    {"title":"Serif classique","titleFont":"Playfair Display, serif","titleWeight":"500","bodyFont":"Lato, sans-serif","bodyWeight":"300","titleFontName":"Playfair Display","bodyFontName":"Lato Light"}
+  ],
+  "palettes": [
+    {"title":"Palette A","colors":["#2C2C2C","#E83B14","#FAF7F3","#E0D9D3","#FF6F3D"],"tag":"premium"}
+  ]
+}'>{{ board.config_json if board and board.config_json else '' }}</textarea>
+      <p class="muted" style="font-size:.8rem;margin-top:.5rem;">Clés supportées : <code>accent_color</code>, <code>accent_color_rgb</code>, <code>directions</code>, <code>names</code>, <code>typos</code>, <code>palettes</code>. Les icônes et logos sont uploadés ci-dessous.</p>
+    </div>
+
+    <hr style="border:none;border-top:1px solid var(--couleur-bordure);margin:2rem 0;">
+
+    <!-- ICÔNES -->
+    <h2 style="margin-top:0;">Icônes (max 4)</h2>
+    <div class="grid grid-2" style="gap:1.5rem;">
+      {% for i in range(1,5) %}
+      {% set url_val = board['icon' ~ i ~ '_url'] if board and board['icon' ~ i ~ '_url'] else None %}
+      {% set name_val = board['icon' ~ i ~ '_name'] if board and board['icon' ~ i ~ '_name'] else '' %}
+      <div style="border:1px solid var(--couleur-bordure);border-radius:8px;padding:1rem;">
+        <p style="font-weight:600;margin-bottom:.75rem;">Icône {{ i }}</p>
+        {% if url_val %}
+          <img src="{{ url_val }}" alt="Icône {{ i }}" style="height:80px;width:80px;object-fit:contain;background:#f5f5f5;border-radius:6px;display:block;margin-bottom:.75rem;">
+        {% endif %}
+        <div class="form-group" style="margin-bottom:.5rem;">
+          <label style="font-size:.8rem;">Nom affiché</label>
+          <input type="text" name="icon{{ i }}_name" value="{{ name_val }}" placeholder="Style {{ 'ABCD'[i-1] }}">
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label style="font-size:.8rem;">Image (PNG, SVG, AVIF, WEBP)</label>
+          <input type="file" name="icon{{ i }}" accept=".png,.svg,.avif,.webp,.jpg,.jpeg" style="font-size:.85rem;">
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <hr style="border:none;border-top:1px solid var(--couleur-bordure);margin:2rem 0;">
+
+    <!-- LOGOS -->
+    <h2 style="margin-top:0;">Formes de logo (max 4)</h2>
+    <div class="grid grid-2" style="gap:1.5rem;">
+      {% for i in range(1,5) %}
+      {% set url_val = board['logo' ~ i ~ '_url'] if board and board['logo' ~ i ~ '_url'] else None %}
+      {% set name_val = board['logo' ~ i ~ '_name'] if board and board['logo' ~ i ~ '_name'] else '' %}
+      <div style="border:1px solid var(--couleur-bordure);border-radius:8px;padding:1rem;">
+        <p style="font-weight:600;margin-bottom:.75rem;">Logo {{ i }}</p>
+        {% if url_val %}
+          <img src="{{ url_val }}" alt="Logo {{ i }}" style="height:100px;width:100%;object-fit:contain;background:#f5f5f5;border-radius:6px;display:block;margin-bottom:.75rem;">
+        {% endif %}
+        <div class="form-group" style="margin-bottom:.5rem;">
+          <label style="font-size:.8rem;">Nom affiché</label>
+          <input type="text" name="logo{{ i }}_name" value="{{ name_val }}" placeholder="Composition {{ 'ABCD'[i-1] }}">
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label style="font-size:.8rem;">Image (PNG, SVG, AVIF, WEBP)</label>
+          <input type="file" name="logo{{ i }}" accept=".png,.svg,.avif,.webp,.jpg,.jpeg" style="font-size:.85rem;">
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <hr style="border:none;border-top:1px solid var(--couleur-bordure);margin:2rem 0;">
+
+    <div style="display:flex;gap:1rem;">
+      <button type="submit" class="btn">💾 Sauvegarder</button>
+      <a href="{{ url_for('project_detail', project_id=projet.id) }}" class="btn btn-secondary">Annuler</a>
+    </div>
+
+  </form>
+</div>
+{% endblock %}

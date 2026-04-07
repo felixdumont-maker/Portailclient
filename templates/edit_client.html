@@ -35,13 +35,45 @@
         <input type="text" id="telephone" name="telephone" value="{{ client['telephone'] or '' }}">
       </div>
     </div>
-
+<div class="form-row">
+      <div class="form-group">
+        <label for="mode_facturation">Mode de facturation</label>
+        <select id="mode_facturation" name="mode_facturation">
+          <option value="projet" {% if client['mode_facturation'] == 'projet' or not client['mode_facturation'] %}selected{% endif %}>Par projet (facture automatique)</option>
+          <option value="mensuel" {% if client['mode_facturation'] == 'mensuel' %}selected{% endif %}>Mensuel (facture consolidée fin de mois)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="adresse_facturation">Adresse de facturation</label>
+        <input type="text" id="adresse_facturation" name="adresse_facturation" value="{{ client['adresse_facturation'] or '' }}" placeholder="123 rue Exemple">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="ville_facturation">Ville</label>
+        <input type="text" id="ville_facturation" name="ville_facturation" value="{{ client['ville_facturation'] or '' }}">
+      </div>
+      <div class="form-group">
+        <label for="province_facturation">Province</label>
+        <input type="text" id="province_facturation" name="province_facturation" value="{{ client['province_facturation'] or 'Québec' }}">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="code_postal_facturation">Code postal</label>
+        <input type="text" id="code_postal_facturation" name="code_postal_facturation" value="{{ client['code_postal_facturation'] or '' }}">
+      </div>
+      <div class="form-group">
+        <label for="pays_facturation">Pays</label>
+        <input type="text" id="pays_facturation" name="pays_facturation" value="{{ client['pays_facturation'] or 'Canada' }}">
+      </div>
+    </div>
     <div style="display:flex;gap:var(--space-3);margin-top:var(--space-2);">
       <button type="submit">Enregistrer les modifications</button>
       <a href="{{ url_for('admin_dashboard') }}" class="btn btn-secondary">Annuler</a>
     </div>
-
   </form>
+
 </div>
 
 {% endblock %}

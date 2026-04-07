@@ -1,0 +1,277 @@
+{% extends "base.html" %}
+{% block title %}Mes choix — {{ projet.nom_projet }}{% endblock %}
+
+{% block head %}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Sora:wght@300;400;500;600&family=Montserrat:wght@300;400;500&family=Tenor+Sans&family=Playfair+Display:wght@400;500;600;700&family=Lato:wght@300;400;700&family=Great+Vibes&family=Cormorant+Infant:wght@400;500;600;700&family=Nunito+Sans:opsz,wght@6..12,300;6..12,400;6..12,500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --db-accent: {{ board.accent_color if board and board.accent_color else '#E83B14' }};
+    --db-accent-rgb: {{ board.accent_color_rgb if board and board.accent_color_rgb else '232,59,20' }};
+  }
+  .db-section { margin-bottom: 3rem; }
+  .db-section-header { display:flex; align-items:baseline; gap:14px; margin-bottom:1.5rem; border-bottom:2px solid var(--couleur-bordure); padding-bottom:.75rem; }
+  .db-section-number { font-family:var(--font-display); font-size:2.5rem; color:var(--db-accent); opacity:.5; line-height:1; }
+  .db-section-title { font-family:var(--font-display); font-size:1.4rem; letter-spacing:2px; }
+  .db-section-subtitle { font-size:.8rem; color:#aaa; font-weight:300; margin-top:2px; }
+  .db-grid { display:grid; gap:1rem; }
+  .db-grid-2 { grid-template-columns: repeat(2,1fr); }
+  .db-grid-3 { grid-template-columns: repeat(3,1fr); }
+  .db-grid-4 { grid-template-columns: repeat(4,1fr); }
+  .db-card { background:#fff; border:2px solid var(--couleur-bordure); border-radius:8px; cursor:pointer; transition:.25s ease; position:relative; padding:1.25rem; }
+  .db-card:hover { border-color:rgba(var(--db-accent-rgb),.4); transform:translateY(-2px); box-shadow:0 4px 12px rgba(0,0,0,.06); }
+  .db-card.selected { border-color:var(--db-accent); }
+  .db-card.selected::after { content:'✓'; position:absolute; top:8px; right:10px; width:24px; height:24px; background:var(--db-accent); color:#fff; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; }
+  .db-dir-emoji { font-size:1.5rem; margin-bottom:.5rem; }
+  .db-dir-title { font-family:var(--font-display); font-size:1.1rem; letter-spacing:1px; margin-bottom:.5rem; }
+  .db-dir-desc { font-size:.82rem; color:#666; font-weight:300; line-height:1.6; margin-bottom:.75rem; }
+  .db-dir-vibe { font-size:.75rem; color:var(--db-accent); font-style:italic; margin-bottom:.75rem; }
+  .db-dir-tags { display:flex; flex-wrap:wrap; gap:6px; border-top:1px solid var(--couleur-bordure); padding-top:.75rem; }
+  .db-dir-tag { font-size:.75rem; background:var(--couleur-fond); border:1px solid var(--couleur-bordure); padding:3px 10px; border-radius:20px; }
+  .db-name-card { text-align:center; padding:1.25rem .75rem; }
+  .db-name-card h3 { font-size:.95rem; font-weight:400; }
+  .db-icon-wrap { width:100%; aspect-ratio:1; background:#fafafa; display:flex; align-items:center; justify-content:center; padding:1.5rem; border-radius:6px 6px 0 0; }
+  .db-icon-wrap img { max-width:80%; max-height:80%; object-fit:contain; }
+  .db-icon-label { padding:.5rem; font-size:.75rem; color:#666; text-align:center; border-top:1px solid var(--couleur-bordure); }
+  .db-icon-card { padding:0; overflow:hidden; }
+  .db-typo-label { font-size:.65rem; text-transform:uppercase; letter-spacing:2px; color:#aaa; margin-bottom:.75rem; }
+  .db-typo-preview-title { font-size:1.6rem; line-height:1.1; margin-bottom:.4rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .db-typo-preview-body { font-size:.68rem; color:#999; line-height:1.3; margin-bottom:.5rem; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; font-style:italic; }
+  .db-typo-font-names { font-size:.6rem; color:#bbb; border-top:1px solid var(--couleur-bordure); padding-top:.5rem; line-height:1.4; }
+  .db-typo-label { font-size:.58rem; text-transform:uppercase; letter-spacing:1.5px; color:#ccc; margin-bottom:.6rem; line-height:1.4; }
+  .db-typo-font-names { font-size:.65rem; color:#aaa; border-top:1px solid var(--couleur-bordure); padding-top:.5rem; }
+  .db-palette-card { padding:0; overflow:hidden; }
+  .db-swatches { display:flex; height:60px; }
+  .db-swatch { flex:1; }
+  .db-palette-info { padding:.75rem 1rem; }
+  .db-palette-title { font-size:.85rem; font-weight:500; margin-bottom:.25rem; }
+  .db-palette-tag { font-size:.65rem; text-transform:uppercase; letter-spacing:1px; padding:2px 8px; border-radius:3px; display:inline-block; margin-bottom:.35rem; }
+  .db-palette-tag.premium { background:rgba(var(--db-accent-rgb),.12); color:var(--db-accent); }
+  .db-palette-tag.accessible { background:#f0ede8; color:#666; }
+  .db-palette-hex { font-size:.65rem; color:#aaa; font-family:monospace; }
+  .db-logo-card { padding:0; overflow:hidden; }
+  .db-logo-card img { width:100%; aspect-ratio:1; object-fit:contain; display:block; background:#fafafa; }
+  .db-logo-label { padding:.75rem; font-size:.75rem; color:#666; text-align:center; border-top:1px solid var(--couleur-bordure); }
+  .db-other-input { background:#fff; border:2px dashed var(--couleur-bordure); border-radius:8px; padding:1rem 1.25rem; display:flex; align-items:center; gap:1rem; margin-top:1rem; }
+  .db-other-input label { font-size:.8rem; color:#aaa; white-space:nowrap; font-weight:400; margin:0; }
+  .db-other-input input { flex:1; background:transparent; border:none; border-bottom:1px solid var(--couleur-bordure); color:var(--couleur-sombre); font-family:var(--font-body); font-size:.9rem; padding:4px 0; outline:none; }
+  .db-submit-btn { font-family:var(--font-display); font-size:1.25rem; letter-spacing:3px; background:var(--couleur-sombre); color:#fff; border:none; padding:1rem 3rem; border-radius:6px; cursor:pointer; transition:.25s ease; display:block; width:100%; max-width:400px; margin:2rem auto 0; }
+  .db-submit-btn:hover { background:var(--db-accent); transform:translateY(-2px); box-shadow:0 6px 20px rgba(0,0,0,.12); }
+  @keyframes pulse { 0%,100%{box-shadow:0 0 0 0 rgba(var(--db-accent-rgb),.4)} 50%{box-shadow:0 0 0 8px rgba(var(--db-accent-rgb),0)} }
+  @media(max-width:768px){.db-grid-2,.db-grid-3{grid-template-columns:1fr 1fr}.db-grid-4{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:480px){.db-grid-2,.db-grid-3,.db-grid-4{grid-template-columns:1fr 1fr}}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="breadcrumbs">
+  <a href="{{ url_for('dashboard') }}">Tableau de bord</a>
+  <span class="sep">›</span>
+  <a href="{{ url_for('project_detail', project_id=projet.id) }}">{{ projet.nom_projet }}</a>
+  <span class="sep">›</span>
+  Mes choix
+</div>
+
+{% if already_submitted %}
+<div class="card" style="text-align:center;padding:3rem;">
+  <p style="font-size:2rem;margin-bottom:1rem;">✅</p>
+  <h2 style="border:none;margin:0 0 .5rem;">Vos choix ont été soumis</h2>
+  <p class="muted">Merci ! Nous avons bien reçu vos préférences et nous travaillons à votre projet.</p>
+  <a href="{{ url_for('project_detail', project_id=projet.id) }}" class="btn" style="margin-top:1.5rem;display:inline-flex;">Retour au projet</a>
+</div>
+{% else %}
+
+<div style="text-align:center;padding:2rem 0 2.5rem;">
+  <p style="font-size:.7rem;letter-spacing:3px;text-transform:uppercase;color:#aaa;margin-bottom:.75rem;">{{ projet.nom_projet }}</p>
+  <h1 style="font-size:2.2rem;border:none;margin-bottom:.5rem;">VOS PRÉFÉRENCES</h1>
+  <p class="muted">Sélectionnez vos options pour chaque section. Vous pouvez choisir plusieurs.</p>
+</div>
+
+<form method="POST" action="{{ url_for('submit_decision_board', project_id=projet.id) }}" id="dbForm">
+  <input type="hidden" name="choix_directions" id="hid_directions">
+  <input type="hidden" name="choix_noms" id="hid_noms">
+  <input type="hidden" name="choix_icones" id="hid_icones">
+  <input type="hidden" name="choix_typos" id="hid_typos">
+  <input type="hidden" name="choix_palettes" id="hid_palettes">
+  <input type="hidden" name="choix_logos" id="hid_logos">
+
+  <!-- Sections générées dynamiquement par JS selon le config_json -->
+  <div id="db-sections"></div>
+
+  <!-- COMMENTAIRES toujours présents -->
+  <div class="db-section">
+    <div class="db-section-header">
+      <span class="db-section-number" id="num-comments">01</span>
+      <div>
+        <div class="db-section-title">COMMENTAIRES</div>
+        <div class="db-section-subtitle">Des précisions, un feeling, une direction</div>
+      </div>
+    </div>
+    <textarea name="commentaires" rows="4" style="width:100%;padding:1rem;border:2px solid var(--couleur-bordure);border-radius:8px;font-family:var(--font-body);font-size:.9rem;resize:vertical;outline:none;background:var(--couleur-fond);" placeholder="Vos commentaires additionnels..."></textarea>
+  </div>
+
+  <button type="submit" class="db-submit-btn" onclick="return prepareSubmit()">SOUMETTRE MES CHOIX</button>
+</form>
+{% endif %}
+
+<script>
+// Config parsée depuis le serveur
+const RAW_CONFIG = {{ board.config_json | safe if board and board.config_json else '{}' }};
+const CLIENT_NAME = {{ client_name | tojson }};
+const ICONS = [
+  {% for i in range(1,5) %}
+  {% set url = board['icon' ~ i ~ '_url'] if board and board['icon' ~ i ~ '_url'] else None %}
+  {% set name = board['icon' ~ i ~ '_name'] if board and board['icon' ~ i ~ '_name'] else None %}
+  {% if url %}{ url: {{ url | tojson }}, name: {{ name | tojson }} },{% endif %}
+  {% endfor %}
+];
+const LOGOS = [
+  {% for i in range(1,5) %}
+  {% set url = board['logo' ~ i ~ '_url'] if board and board['logo' ~ i ~ '_url'] else None %}
+  {% set name = board['logo' ~ i ~ '_name'] if board and board['logo' ~ i ~ '_name'] else None %}
+  {% if url %}{ url: {{ url | tojson }}, name: {{ name | tojson }} },{% endif %}
+  {% endfor %}
+];
+
+// Appliquer accent color depuis config si présente
+if (RAW_CONFIG.accent_color) {
+  document.documentElement.style.setProperty('--db-accent', RAW_CONFIG.accent_color);
+}
+if (RAW_CONFIG.accent_color_rgb) {
+  document.documentElement.style.setProperty('--db-accent-rgb', RAW_CONFIG.accent_color_rgb);
+}
+
+const state = {
+  directions: new Set(), names: new Set(), icons: new Set(),
+  typos: new Set(), palettes: new Set(), logos: new Set()
+};
+
+function toggle(el, id, set) {
+  if (set.has(id)) { set.delete(id); el.classList.remove('selected'); }
+  else { set.add(id); el.classList.add('selected'); }
+}
+
+function makeSection(num, title, subtitle, innerHtml) {
+  return `
+    <div class="db-section">
+      <div class="db-section-header">
+        <span class="db-section-number">0${num}</span>
+        <div>
+          <div class="db-section-title">${title}</div>
+          <div class="db-section-subtitle">${subtitle}</div>
+        </div>
+      </div>
+      ${innerHtml}
+    </div>
+  `;
+}
+
+function buildAll() {
+  const container = document.getElementById('db-sections');
+  let html = '';
+  let num = 1;
+
+  // DIRECTIONS
+  if (RAW_CONFIG.directions && RAW_CONFIG.directions.length) {
+    let cards = RAW_CONFIG.directions.map((d, i) => {
+      const tags = (d.examples || []).map(e => `<span class="db-dir-tag">${e}</span>`).join('');
+      return `<div class="db-card" data-section="directions" data-val="${d.title}">
+        <div class="db-dir-emoji">${d.emoji || ''}</div>
+        <div class="db-dir-title">${d.title}</div>
+        <div class="db-dir-desc">${d.description || ''}</div>
+        ${d.vibe ? `<div class="db-dir-vibe">${d.vibe}</div>` : ''}
+        ${tags ? `<div class="db-dir-tags">${tags}</div>` : ''}
+      </div>`;
+    }).join('');
+    html += makeSection(num++, 'DIRECTION DE MARQUE', 'Quelle approche vous ressemble le plus ?', `<div class="db-grid db-grid-2">${cards}</div>`);
+  }
+
+  // NOMS
+  if (RAW_CONFIG.names && RAW_CONFIG.names.length) {
+    let cards = RAW_CONFIG.names.map(n =>
+      `<div class="db-card db-name-card" data-section="names" data-val="${n}"><h3>${n}</h3></div>`
+    ).join('');
+    let extra = `<div class="db-other-input"><label>Autre suggestion :</label><input type="text" name="nom_suggestion" placeholder="Votre idée ici..."></div>`;
+    html += makeSection(num++, 'CHOIX DU NOM', 'Sélectionnez vos favoris — ou proposez le vôtre', `<div class="db-grid db-grid-3">${cards}</div>${extra}`);
+  }
+
+  // ICÔNES
+  if (ICONS.length) {
+    let cards = ICONS.map(ic =>
+      `<div class="db-card db-icon-card" data-section="icons" data-val="${ic.name}">
+        <div class="db-icon-wrap"><img src="${ic.url}" alt="${ic.name}" loading="lazy"></div>
+        <div class="db-icon-label">${ic.name}</div>
+      </div>`
+    ).join('');
+    html += makeSection(num++, 'STYLE D\'ICÔNE', 'Choisissez le dessin qui vous représente le mieux', `<div class="db-grid db-grid-${Math.min(ICONS.length, 4)}">${cards}</div>`);
+  }
+
+  // TYPOS
+  if (RAW_CONFIG.typos && RAW_CONFIG.typos.length) {
+    let cards = RAW_CONFIG.typos.map(t =>
+      `<div class="db-card" data-section="typos" data-val="${t.title}">
+        <div class="db-typo-label">${t.title}</div>
+        <div class="db-typo-preview-title" style="font-family:${t.titleFont};font-weight:${t.titleWeight};">${CLIENT_NAME}</div>
+        <div class="db-typo-preview-body" style="font-family:${t.bodyFont};font-weight:${t.bodyWeight};">Soins personnalisés · Bien-être naturel</div>
+        <div class="db-typo-font-names">${t.titleFontName} + ${t.bodyFontName}</div>
+      </div>`
+    ).join('');
+    html += makeSection(num++, 'TYPOGRAPHIE', 'Choisissez le style de caractères qui vous parle', `<div class="db-grid db-grid-4">${cards}</div>`);
+  }
+
+  // PALETTES
+  if (RAW_CONFIG.palettes && RAW_CONFIG.palettes.length) {
+    let cards = RAW_CONFIG.palettes.map(p => {
+      const sw = (p.colors || []).map(c => `<div class="db-swatch" style="background:${c}"></div>`).join('');
+      return `<div class="db-card db-palette-card" data-section="palettes" data-val="${p.title}">
+        <div class="db-swatches">${sw}</div>
+        <div class="db-palette-info">
+          <span class="db-palette-tag ${p.tag || ''}">${p.tag || ''}</span>
+          <div class="db-palette-title">${p.title.replace(/ — .+/, '')}</div>
+          <div class="db-palette-hex">${(p.colors || []).join(' · ')}</div>
+        </div>
+      </div>`;
+    }).join('');
+    html += makeSection(num++, 'PALETTE DE COULEURS', 'Choisissez les couleurs qui vous représentent', `<div class="db-grid db-grid-2">${cards}</div>`);
+  }
+
+  // LOGOS
+  if (LOGOS.length) {
+    let cards = LOGOS.map(l =>
+      `<div class="db-card db-logo-card" data-section="logos" data-val="${l.name}">
+        <img src="${l.url}" alt="${l.name}" loading="lazy">
+        <div class="db-logo-label">${l.name}</div>
+      </div>`
+    ).join('');
+    html += makeSection(num++, 'FORME DU LOGO', 'Cliquez sur vos compositions favorites', `<div class="db-grid db-grid-2">${cards}</div>`);
+  }
+
+  container.innerHTML = html;
+
+  // Numéro commentaires
+  document.getElementById('num-comments').textContent = '0' + num;
+
+  // Attacher les events sur toutes les cards
+  container.querySelectorAll('.db-card').forEach(card => {
+    card.addEventListener('click', () => {
+      const section = card.dataset.section;
+      const val = card.dataset.val;
+      const setMap = { directions: state.directions, names: state.names, icons: state.icons, typos: state.typos, palettes: state.palettes, logos: state.logos };
+      toggle(card, val, setMap[section]);
+    });
+  });
+}
+
+function prepareSubmit() {
+  document.getElementById('hid_directions').value = [...state.directions].join(', ');
+  document.getElementById('hid_noms').value = [...state.names].join(', ');
+  document.getElementById('hid_icones').value = [...state.icons].join(', ');
+  document.getElementById('hid_typos').value = [...state.typos].join(', ');
+  document.getElementById('hid_palettes').value = [...state.palettes].join(', ');
+  document.getElementById('hid_logos').value = [...state.logos].join(', ');
+  return true;
+}
+
+document.addEventListener('DOMContentLoaded', buildAll);
+</script>
+{% endblock %}

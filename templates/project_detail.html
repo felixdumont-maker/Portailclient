@@ -118,6 +118,12 @@
 .edit-items-panel h3 { margin-top: 0; font-size: var(--fs-md); font-weight: 700; margin-bottom: var(--space-3); }
 .edit-item-row { display: grid; grid-template-columns: 1fr 180px auto; gap: var(--space-2); align-items: center; margin-bottom: var(--space-2); padding: var(--space-2); background: #fff; border: 1px solid var(--couleur-bordure); border-radius: var(--radius-sm); }
 @media (max-width: 600px) { .edit-item-row { grid-template-columns: 1fr; } }
+
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(232,59,20,.4); }
+  50%       { box-shadow: 0 0 0 8px rgba(232,59,20,0); }
+}
+
 </style>
 {% endblock %}
 
@@ -176,7 +182,19 @@
     </div>
   </div>
   {% if projet['lien_gdrive'] %}
-    <a href="{{ projet['lien_gdrive'] }}" target="_blank" rel="noopener noreferrer" class="gdrive-button">📁 Google Drive</a>
+      <a href="{{ projet['lien_gdrive'] }}" target="_blank" rel="noopener noreferrer" class="gdrive-button">📁 Google Drive</a>
+  {% endif %}
+
+  {% if ('révision' in projet['statut']|lower or 'revision' in projet['statut']|lower) %}
+    {% if session.get('is_admin') %}
+      <a href="{{ url_for('admin_decision_board', project_id=projet.id) }}" class="btn btn-revision" style="min-width:auto;">⚙️ Configurer le Decision Board</a>
+    {% else %}
+      {% if already_submitted %}
+        <span class="btn" style="background:#2e7d32;cursor:default;min-width:auto;">✅ Choix soumis</span>
+      {% elif board %}
+        <a href="{{ url_for('client_decision_board', project_id=projet.id) }}" class="btn" style="background:var(--couleur-principale);animation:pulse 2s infinite;min-width:auto;">🎨 Voir mes options de design</a>
+      {% endif %}
+    {% endif %}
   {% endif %}
 </div>
 
@@ -225,6 +243,15 @@
     <button onclick="document.getElementById('force-panel').style.display='block'" class="btn btn-force">
       ⚙️ Forcer le statut
     </button>
+    {% if projet["is_archived"] %}
+      <form action="{{ url_for('unarchive_project', project_id=projet['id']) }}" method="post">
+        <button type="submit" class="btn btn-secondary">↩ Désarchiver</button>
+      </form>
+    {% else %}
+      <form action="{{ url_for('archive_project', project_id=projet['id']) }}" method="post">
+        <button type="submit" class="btn btn-secondary" onclick="return confirm('Archiver ce projet ?');">Archiver</button>
+      </form>
+    {% endif %}
     <button onclick="document.getElementById('edit-items-panel').style.display='block'" class="btn btn-force">
       ✏️ Modifier les items
     </button>
@@ -240,6 +267,7 @@
         <option value="Travaux en cours">🟠 Travaux en cours</option>
         <option value="En révision">🟡 En révision</option>
         <option value="Complété">🟢 Complété</option>
+        <option value="Annulé">❌ Annulé</option>
       </select>
       <button type="submit" class="btn btn-force">Appliquer</button>
       <button type="button" class="btn btn-secondary" onclick="document.getElementById('force-panel').style.display='none'" style="min-width:auto;">Annuler</button>

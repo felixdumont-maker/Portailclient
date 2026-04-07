@@ -146,8 +146,40 @@
           <option value="graphisme">🎨 Graphisme</option>
           <option value="web">🌐 Web</option>
           <option value="info">📊 Infographie</option>
+          <option value="immobilier">🏠 Immobilier</option>
           <option value="default">📁 Autre</option>
         </select>
+      </div>
+    </div>
+    <div style="display:flex;gap:var(--space-4);flex-wrap:wrap;align-items:flex-end;margin-top:var(--space-3);">
+      <div class="form-group" style="margin:0;">
+        <label>Durée de production</label>
+        <div style="display:flex;gap:.5rem;align-items:center;">
+          <input type="number" name="duree_heures" min="0" max="12" value="1" style="width:70px;padding:.5rem;">
+          <span style="font-size:var(--fs-sm);color:#7a7773;">h</span>
+          <input type="number" name="duree_minutes" min="0" max="59" step="5" value="0" style="width:70px;padding:.5rem;">
+          <span style="font-size:var(--fs-sm);color:#7a7773;">min</span>
+        </div>
+      </div>
+      <div class="form-group" style="margin:0;">
+        <label>Délai livraison fixe (0 = calculé automatiquement)</label>
+        <div style="display:flex;gap:.5rem;align-items:center;">
+          <input type="number" name="delai_fixe_heures" min="0" max="168" value="0" style="width:80px;padding:.5rem;">
+          <span style="font-size:var(--fs-sm);color:#7a7773;">heures (ex: 48 pour immobilier)</span>
+        </div>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group" style="margin:0;">
+        <label>Prix du service ($CA, sans taxes)</label>
+        <div style="display:flex;gap:.5rem;align-items:center;">
+          <input type="number" name="prix" min="0" step="0.01" value="0" style="width:120px;padding:.5rem;">
+          <span style="font-size:var(--fs-sm);color:#7a7773;">$CA</span>
+        </div>
+      </div>
+      <div class="form-group" style="margin:0;display:flex;align-items:center;gap:.5rem;padding-top:1.8rem;">
+        <input type="checkbox" name="exonere_taxes" value="1" id="exonere_taxes_new">
+        <label for="exonere_taxes_new" style="font-weight:500;margin:0;">Exonéré de taxes</label>
       </div>
     </div>
     <button type="submit" style="margin-top:var(--space-3);">Créer le service</button>
@@ -171,12 +203,66 @@
 
   <section class="service-card">
 
-    <header class="service-header">
+<header class="service-header">
       <h3>{{ s_data['service']['nom_service'] }}</h3>
-      <a href="{{ url_for('delete_service', service_id=sid) }}"
-         class="action-btn btn-delete"
-         onclick="return confirm('Supprimer ce service ?');">Supprimer</a>
+      <div style="display:flex;gap:.5rem;align-items:center;">
+        <button onclick="document.getElementById('edit-service-{{ sid }}').style.display=document.getElementById('edit-service-{{ sid }}').style.display=='none'?'block':'none'" class="action-btn btn-edit">Modifier</button>
+        <a href="{{ url_for('delete_service', service_id=sid) }}"
+           class="action-btn btn-delete"
+           onclick="return confirm('Supprimer ce service ?');">Supprimer</a>
+      </div>
     </header>
+
+    <div id="edit-service-{{ sid }}" style="display:none;background:#f8f9fa;border:1px solid #dee2e6;border-radius:var(--radius-sm);padding:var(--space-3);margin-bottom:var(--space-3);">
+      <form action="{{ url_for('edit_service', service_id=sid) }}" method="post">
+        <div style="display:flex;gap:var(--space-3);flex-wrap:wrap;align-items:flex-end;">
+          <label class="checkbox-inline">
+            <input type="checkbox" name="documents_requis" value="1" {% if s_data['service']['documents_requis'] %}checked{% endif %}>
+            Documents requis
+          </label>
+          <label class="checkbox-inline">
+            <input type="checkbox" name="localisation_requise" value="1" {% if s_data['service']['localisation_requise'] %}checked{% endif %}>
+            Localisation requise
+          </label>
+          <div class="form-group" style="margin:0;">
+            <select name="icon" style="padding:.4rem .75rem;">
+              <option value="photo"      {% if s_data['service']['icon']=='photo' %}selected{% endif %}>📷 Photographie</option>
+              <option value="video"      {% if s_data['service']['icon']=='video' %}selected{% endif %}>🎬 Vidéographie</option>
+              <option value="graphisme"  {% if s_data['service']['icon']=='graphisme' %}selected{% endif %}>🎨 Graphisme</option>
+              <option value="web"        {% if s_data['service']['icon']=='web' %}selected{% endif %}>🌐 Web</option>
+              <option value="info"       {% if s_data['service']['icon']=='info' %}selected{% endif %}>📊 Infographie</option>
+              <option value="immobilier" {% if s_data['service']['icon']=='immobilier' %}selected{% endif %}>🏠 Immobilier</option>
+              <option value="default"    {% if s_data['service']['icon']=='default' or not s_data['service']['icon'] %}selected{% endif %}>📁 Autre</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin:0;">
+            <label style="font-size:.8rem;margin-bottom:.2rem;">Durée production</label>
+            <div style="display:flex;gap:.35rem;align-items:center;">
+              <input type="number" name="duree_heures" min="0" max="12" value="{{ (s_data['service']['duree_production_minutes'] or 60) // 60 }}" style="width:55px;padding:.4rem;">
+              <span style="font-size:.8rem;">h</span>
+              <input type="number" name="duree_minutes" min="0" max="59" step="5" value="{{ (s_data['service']['duree_production_minutes'] or 60) % 60 }}" style="width:55px;padding:.4rem;">
+              <span style="font-size:.8rem;">min</span>
+            </div>
+          </div>
+          <div class="form-group" style="margin:0;">
+            <label style="font-size:.8rem;margin-bottom:.2rem;">Délai fixe (h)</label>
+            <input type="number" name="delai_fixe_heures" min="0" max="168" value="{{ s_data['service']['delai_fixe_heures'] or 0 }}" style="width:65px;padding:.4rem;">
+          </div>
+          <div class="form-group" style="margin:0;">
+            <label style="font-size:.8rem;margin-bottom:.2rem;">Prix ($CA, sans taxes)</label>
+            <div style="display:flex;gap:.35rem;align-items:center;">
+              <input type="number" name="prix" min="0" step="0.01" value="{{ s_data['service']['prix'] or 0 }}" style="width:100px;padding:.4rem;">
+              <span style="font-size:.8rem;">$CA</span>
+            </div>
+          </div>
+          <div class="form-group" style="margin:0;display:flex;align-items:center;gap:.4rem;padding-top:1.4rem;">
+            <input type="checkbox" name="exonere_taxes" value="1" {% if s_data['service']['exonere_taxes'] %}checked{% endif %} id="exonere_{{ sid }}">
+            <label for="exonere_{{ sid }}" style="font-size:.8rem;margin:0;">Sans taxes</label>
+          </div>
+          <button type="submit" style="min-width:auto;padding:.5rem 1rem;font-size:.9rem;">Sauvegarder</button>
+        </div>
+      </form>
+    </div>
 
     <div class="service-meta">
       {% if s_data['service']['documents_requis'] %}
