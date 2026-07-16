@@ -1535,6 +1535,25 @@ def init_db():
             )''')
         except Exception:
             pass
+        # Migration: 5e silo de tâches identifié lors de l'audit du module Tâches
+        # (2026-07-16) — les todos des phases de la roadmap produit CocktailOS
+        # (page /admin/roadmaps, onglet CocktailOS) vivaient uniquement en
+        # localStorage côté navigateur (clé cocktailos_todos_phase_<id>) : perdus au
+        # vidage du cache, invisibles d'un autre appareil ou pour un autre admin.
+        # Convergence Phase 5 : stockage serveur, pas d'injection dans todos_perso/PWA
+        # Tâches — ce sont des items de planification produit interne sans
+        # assigné·e ni échéance, pas des tâches d'équipe individuelles.
+        try:
+            conn.execute('''CREATE TABLE IF NOT EXISTS cocktailos_vision_todos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                phase_id INTEGER NOT NULL,
+                texte TEXT NOT NULL,
+                est_coche INTEGER NOT NULL DEFAULT 0,
+                position INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )''')
+        except Exception:
+            pass
         # Backfill unique : copie assigne_admin_id existant vers les tables de jonction
         # (idempotent — INSERT OR IGNORE sur la PK composite)
         try:
@@ -11653,6 +11672,62 @@ def api_roadmap_delete_todo(todo_id):
     conn.commit()
     conn.close()
     return jsonify({'ok': True})
+
+# ── Todos de la roadmap produit CocktailOS (onglet Vision, page /admin/roadmaps) ──
+# Convergence Phase 5 du module Tâches : remplace le localStorage isolé
+# (cocktailos_todos_phase_<id>) par un stockage serveur partagé entre appareils/admins.
+
+@app.route('/api/v1/admin/roadmaps/vision-todos', methods=['GET'])
+@admin_required
+def api_vision_todos_list():
+    conn = get_db_connection()
+    rows = conn.execute(
+        "SELECT id, phase_id, texte, est_coche FROM cocktailos_vision_todos ORDER BY phase_id ASC, position ASC, id ASC"
+    ).fetchall()
+    conn.close()
+    return jsonify([{'id': r['id'], 'phase_id': r['phase_id'], 'texte': r['texte'], 'done': bool(r['est_coche'])} for r in rows])
+
+@app.route('/api/v1/admin/roadmaps/vision-todos', methods=['POST'])
+@admin_required
+def api_vision_todos_create():
+    data = request.get_json() or {}
+    phase_id = data.get('phase_id')
+    texte = (data.get('texte') or '').strip()
+    if phase_id is None or not texte:
+        return jsonify({'error': 'phase_id et texte requis'}), 400
+    conn = get_db_connection()
+    max_pos = conn.execute("SELECT MAX(position) FROM cocktailos_vision_todos WHERE phase_id=?", (phase_id,)).fetchone()[0] or 0
+    cur = conn.execute(
+        "INSERT INTO cocktailos_vision_todos (phase_id, texte, position) VALUES (?, ?, ?)",
+        (phase_id, texte, max_pos + 1)
+    )
+    todo_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return jsonify({'id': todo_id, 'phase_id': phase_id, 'texte': texte, 'done': False}), 201
+
+@app.route('/api/v1/admin/roadmaps/vision-todos/<int:todo_id>/toggle', methods=['POST'])
+@admin_required
+def api_vision_todos_toggle(todo_id):
+    conn = get_db_connection()
+    todo = conn.execute("SELECT est_coche FROM cocktailos_vision_todos WHERE id=?", (todo_id,)).fetchone()
+    if not todo:
+        conn.close()
+        return jsonify({'error': 'Introuvable'}), 404
+    new_val = 0 if todo['est_coche'] else 1
+    conn.execute("UPDATE cocktailos_vision_todos SET est_coche=? WHERE id=?", (new_val, todo_id))
+    conn.commit()
+    conn.close()
+    return jsonify({'done': bool(new_val)})
+
+@app.route('/api/v1/admin/roadmaps/vision-todos/<int:todo_id>', methods=['DELETE'])
+@admin_required
+def api_vision_todos_delete(todo_id):
+    conn = get_db_connection()
+    conn.execute("DELETE FROM cocktailos_vision_todos WHERE id=?", (todo_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
 
 @app.route('/api/v1/admin/roadmaps/phase/<int:phase_id>/note/add', methods=['POST'])
 @admin_required
