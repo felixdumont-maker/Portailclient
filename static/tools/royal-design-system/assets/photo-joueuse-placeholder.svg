@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 800" width="600" height="800">
+  <defs>
+    <linearGradient id="pbg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2a060a"></stop>
+      <stop offset="1" stop-color="#d62127"></stop>
+    </linearGradient>
+  </defs>
+  <rect width="600" height="800" fill="url(#pbg)"></rect>
+  
+  <g fill="#0d0203" opacity="0.92">
+    <ellipse cx="300" cy="280" rx="100" ry="115"></ellipse>
+    <ellipse cx="290" cy="260" rx="60" ry="38" fill="#ffffff" opacity="0.18"></ellipse>
+    <path d="M150 410 Q170 395 220 392 L380 392 Q430 395 450 410 L480 600 Q480 720 460 800 L140 800 Q120 720 120 600 Z"></path>
+    
+    <text x="300" y="600" text-anchor="middle" font-family="Impact, sans-serif" font-size="120" fill="#d62127" font-weight="900">23</text>
+  </g>
+  <text x="300" y="780" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" letter-spacing="3" fill="#ffffff" opacity="0.3">PLACEHOLDER · JOUEUSE</text>
+</svg>

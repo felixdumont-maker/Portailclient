@@ -1,176 +1,255 @@
 {% extends "base.html" %}
-{% block title %}Mon profil{% endblock %}
-
 {% block content %}
 
-<h1>Mon profil</h1>
-
-{# ── Informations personnelles ── #}
-<div class="card">
-  <h2 style="margin-top:0;">Informations personnelles</h2>
-  <form method="post" action="{{ url_for('update_profile') }}" class="form" novalidate>
-
-    <div class="form-row">
-      <div class="form-group">
-        <label for="nom_complet">Nom complet</label>
-        <input type="text" id="nom_complet" name="nom_complet" value="{{ user.nom_complet }}" required>
-      </div>
-      <div class="form-group">
-        <label for="nom_entreprise">Entreprise</label>
-        <input type="text" id="nom_entreprise" name="nom_entreprise" value="{{ user.nom_entreprise or '' }}">
-      </div>
-    </div>
-
-    <div class="form-row">
-      <div class="form-group">
-        <label for="telephone">Téléphone</label>
-        <input type="text" id="telephone" name="telephone" value="{{ user.telephone or '' }}">
-      </div>
-      <div class="form-group">
-        <label for="email">Adresse email</label>
-        {% if user.auth_provider == 'password' %}
-          <input type="email" id="email" name="email" value="{{ user.email }}" required>
-        {% else %}
-          <input type="email" value="{{ user.email }}" disabled>
-          <small class="muted">Géré via Google — non modifiable ici.</small>
-        {% endif %}
-      </div>
-    </div>
-
-    <button type="submit">Mettre à jour</button>
-  </form>
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:var(--space-4);">
+  <h1 style="margin:0;">MON PROFIL</h1>
+  <a href="{{ url_for('dashboard') }}" class="btn btn-secondary" style="min-width:auto;">
+    ← Tableau de bord
+  </a>
 </div>
 
-{# ── Changement de mot de passe ── #}
-{% if user.auth_provider == 'password' %}
-<div class="card">
-  <h2 style="margin-top:0;">Changer mon mot de passe</h2>
-  <form method="post" action="{{ url_for('update_password') }}" class="form" novalidate>
-
-    <div class="form-group">
-      <label for="current_password">Mot de passe actuel</label>
-      <input type="password" id="current_password" name="current_password" required>
-    </div>
-
-    <div class="form-row">
-      <div class="form-group">
-        <label for="new_password">Nouveau mot de passe</label>
-        <input
-          type="password"
-          id="new_password"
-          name="new_password"
-          pattern="(?=.*\d)(?=.*[a-z])(?=.*[A-Z])(?=.*[!@#$%^&*]).{8,}"
-          title="Au moins 8 caractères, une majuscule, une minuscule, un chiffre et un caractère spécial."
-          required
-        >
-      </div>
-      <div class="form-group">
-        <label for="confirm_password">Confirmer le nouveau mot de passe</label>
-        <input type="password" id="confirm_password" name="confirm_password" required>
-      </div>
-    </div>
-
-    <div class="show-password-container">
-      <input type="checkbox" id="toggleAllPw">
-      <label for="toggleAllPw">Afficher les mots de passe</label>
-    </div>
-
-    <button type="submit" style="margin-top:var(--space-2);">Mettre à jour le mot de passe</button>
-  </form>
+{# ── TABS NAV ── #}
+<div class="profile-tabs" id="profileTabs">
+  <button class="profile-tab active" data-tab="projets">
+    Projets
+    {% set total = projets_actifs|length + projets_archives|length %}
+    {% if total > 0 %}<span class="tab-badge">{{ total }}</span>{% endif %}
+  </button>
+  <button class="profile-tab" data-tab="factures">
+    Factures
+    {% if factures %}<span class="tab-badge">{{ factures|length }}</span>{% endif %}
+  </button>
+  <button class="profile-tab" data-tab="infos">Infos personnelles</button>
 </div>
 
-{# ── Résumé des projets ── #}
-<div class="card">
-  <h2 style="margin-top:0;">Mes projets</h2>
-  {% if projets_actifs %}
-    <div style="margin-bottom:var(--space-3);">
-      <div style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:#b0a99f;margin-bottom:var(--space-2);">En cours</div>
-      {% for p in projets_actifs %}
-        <a href="{{ url_for('project_detail', project_id=p['id']) }}" style="display:flex;align-items:center;justify-content:space-between;padding:.6rem .5rem;border-bottom:1px solid var(--couleur-bordure);text-decoration:none;color:inherit;">
-          <span style="font-weight:600;font-size:var(--fs-sm);">{{ p['nom_projet'] }}</span>
-          <span class="badge {{ status_badge_class(p['statut']) }}">{{ normalize_status(p['statut']) }}</span>
+{# ══════════════════════════════
+   TAB 1 — PROJETS
+══════════════════════════════ #}
+<div class="tab-content active" id="tab-projets">
+
+  <div class="card" style="margin-bottom:var(--space-4);">
+    <h2 style="margin-top:0;">Projets en cours</h2>
+    <hr class="divider">
+    {% if projets_actifs %}
+      <div class="grid grid-2" style="gap:var(--space-3);">
+        {% for p in projets_actifs %}
+        <a href="{{ url_for('project_detail', project_id=p.id) }}" class="project-card-link">
+          <div class="card" style="margin:0; border:1px solid var(--couleur-bordure);">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:.5rem;">
+              <p class="strong" style="margin:0; font-size:.95rem;">{{ p.nom_projet }}</p>
+              <span class="statut-badge statut-{{ p.statut | lower | replace(' ', '-') | replace('à', 'a') }}">{{ p.statut }}</span>
+            </div>
+            <p class="muted" style="font-size:.8rem; margin:.5rem 0 0;">{{ p.created_at[:10] }}</p>
+          </div>
         </a>
-      {% endfor %}
-    </div>
-  {% endif %}
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="muted">Aucun projet en cours.</p>
+    {% endif %}
+  </div>
+
   {% if projets_archives %}
-    <div>
-      <div style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:#b0a99f;margin-bottom:var(--space-2);">Terminés</div>
+  <div class="card">
+    <h2 style="margin-top:0;">Projets terminés</h2>
+    <hr class="divider">
+    <div class="grid grid-2" style="gap:var(--space-3);">
       {% for p in projets_archives %}
-        <a href="{{ url_for('project_detail', project_id=p['id']) }}" style="display:flex;align-items:center;justify-content:space-between;padding:.6rem .5rem;border-bottom:1px solid var(--couleur-bordure);text-decoration:none;color:#9a948f;font-size:var(--fs-sm);">
-          <span>{{ p['nom_projet'] }}</span>
-          <span style="font-size:.7rem;background:#ebfbee;color:#2f9e44;border:1px solid #b2f2bb;padding:.2rem .6rem;border-radius:999px;">Terminé</span>
-        </a>
-      {% endfor %}
-    </div>
-  {% endif %}
-  {% if not projets_actifs and not projets_archives %}
-    <p class="muted">Aucun projet pour le moment.</p>
-  {% endif %}
-</div>
-
-{# ── Factures ── #}
-<div class="card">
-  <h2 style="margin-top:0;">Mes factures</h2>
-  {% if factures_db %}
-    <div style="display:grid;gap:.75rem;">
-      {% for f in factures_db %}
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:.85rem var(--space-3);background:var(--couleur-fond);border:1px solid var(--couleur-bordure);border-radius:var(--radius-sm);">
-          <div style="display:flex;align-items:center;gap:.75rem;">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor" style="width:20px;height:20px;color:var(--couleur-principale);flex-shrink:0;"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z"/></svg>
-            <div>
-              <div style="font-weight:700;font-size:var(--fs-sm);">{{ f['numero'] }}</div>
-              <div style="font-size:.75rem;color:#9a948f;">
-                Émise : {{ f['date_emission'] or '—' }}
-                {% if f['date_echeance'] %} · Échéance : {{ f['date_echeance'] }}{% endif %}
-              </div>
-            </div>
+      <a href="{{ url_for('project_detail', project_id=p.id) }}" class="project-card-link">
+        <div class="card" style="margin:0; border:1px solid var(--couleur-bordure); opacity:.75;">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:.5rem;">
+            <p class="strong" style="margin:0; font-size:.95rem;">{{ p.nom_projet }}</p>
+            <span class="statut-badge" style="background:#e0e0e0;color:#555;">Archivé</span>
           </div>
-          <div style="display:flex;align-items:center;gap:.75rem;">
-            <div style="text-align:right;">
-              <div style="font-weight:700;font-size:var(--fs-sm);">{{ "%.2f"|format(f['total']) }} $CA</div>
-              {% if f['statut'] == 'payee' %}
-                <span class="badge badge--success" style="font-size:.7rem;">✓ Payée</span>
-              {% elif f['statut'] == 'envoyee' %}
-                <span class="badge badge--warning" style="font-size:.7rem;">En attente</span>
-              {% endif %}
-            </div>
-            {% if f['stripe_payment_url'] and f['statut'] != 'payee' %}
-              <a href="{{ f['stripe_payment_url'] }}" target="_blank" rel="noopener"
-                 class="btn" style="min-width:auto;padding:.4rem .85rem;font-size:.8rem;">
-                Payer
-              </a>
-            {% elif f['drive_file_id'] %}
-              <a href="https://drive.google.com/file/d/{{ f['drive_file_id'] }}/view" target="_blank" rel="noopener"
-                 class="btn btn-secondary" style="min-width:auto;padding:.4rem .85rem;font-size:.8rem;">
-                Voir PDF
-              </a>
-            {% endif %}
-          </div>
+          <p class="muted" style="font-size:.8rem; margin:.5rem 0 0;">{{ p.created_at[:10] }}</p>
         </div>
+      </a>
       {% endfor %}
     </div>
-  {% else %}
-    <p class="muted">Aucune facture disponible pour le moment.</p>
+  </div>
   {% endif %}
+
 </div>
 
-{% endif %}
+{# ══════════════════════════════
+   TAB 2 — FACTURES
+══════════════════════════════ #}
+<div class="tab-content" id="tab-factures">
+  <div class="card">
+    <h2 style="margin-top:0;">Mes factures</h2>
+    <hr class="divider">
+    {% if factures %}
+      <div style="display:flex; flex-direction:column; gap:.75rem;">
+        {% for f in factures %}
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:.75rem 1rem; background:var(--couleur-fond); border-radius:8px; border:1px solid var(--couleur-bordure);">
+          <div style="display:flex; align-items:center; gap:.75rem;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="color:var(--couleur-principale); flex-shrink:0;">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+            </svg>
+            <span style="font-weight:600; font-size:.95rem;">{{ f.name }}</span>
+          </div>
+          <a href="{{ f.webViewLink }}" target="_blank" class="btn btn-secondary" style="min-width:auto; padding:.4rem .9rem; font-size:.85rem;">Voir</a>
+        </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="muted">Aucune facture disponible pour le moment.</p>
+    {% endif %}
+  </div>
+</div>
 
-{% endblock %}
+{# ══════════════════════════════
+   TAB 3 — INFOS PERSONNELLES
+══════════════════════════════ #}
+<div class="tab-content" id="tab-infos">
+
+  <div class="card" style="margin-bottom:var(--space-4);">
+    <h2 style="margin-top:0;">Informations personnelles</h2>
+    <hr class="divider">
+    <form method="POST" action="{{ url_for('update_profile') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Nom complet</label>
+          <input type="text" name="nom_complet" class="form-input" value="{{ user.nom_complet or '' }}" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Entreprise</label>
+          <input type="text" name="nom_entreprise" class="form-input" value="{{ user.nom_entreprise or '' }}">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Téléphone</label>
+          <input type="tel" name="telephone" class="form-input" value="{{ user.telephone or '' }}" placeholder="514-000-0000">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Adresse email{% if user.auth_provider == 'google' %} <span class="muted">(géré par Google)</span>{% endif %}</label>
+          <input type="email" name="email" class="form-input" value="{{ user.email }}" {% if user.auth_provider == 'google' %}disabled{% endif %}>
+        </div>
+      </div>
+
+      <hr class="divider" style="margin:var(--space-4) 0;">
+      <h3 style="margin-top:0; font-size:1rem; text-transform:uppercase; letter-spacing:.05em;">Adresse de facturation</h3>
+
+      <div class="form-group">
+        <label class="form-label">Adresse</label>
+        <input type="text" name="adresse" class="form-input" value="{{ user.adresse or '' }}" placeholder="123, rue Principale">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Ville</label>
+          <input type="text" name="ville" class="form-input" value="{{ user.ville or '' }}" placeholder="Montréal">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Code postal</label>
+          <input type="text" name="code_postal" class="form-input" value="{{ user.code_postal or '' }}" placeholder="H1A 1A1" style="max-width:200px;">
+        </div>
+      </div>
+      <div class="form-group" style="max-width:300px;">
+        <label class="form-label">Province</label>
+        <select name="province" class="form-input">
+          {% for prov in ['Québec','Ontario','Alberta','Colombie-Britannique','Manitoba','Saskatchewan','Nouvelle-Écosse','Nouveau-Brunswick','Terre-Neuve-et-Labrador','Île-du-Prince-Édouard'] %}
+          <option value="{{ prov }}" {% if (user.province or 'Québec') == prov %}selected{% endif %}>{{ prov }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <button type="submit" class="btn btn-primary" style="width:100%; margin-top:var(--space-3);">METTRE À JOUR</button>
+    </form>
+  </div>
+
+  {% if user.auth_provider == 'password' %}
+  <div class="card">
+    <h2 style="margin-top:0;">Changer le mot de passe</h2>
+    <hr class="divider">
+    <form method="POST" action="{{ url_for('update_password') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-group">
+        <label class="form-label">Mot de passe actuel</label>
+        <input type="password" name="current_password" class="form-input" required>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Nouveau mot de passe</label>
+          <input type="password" name="new_password" class="form-input" required minlength="8">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Confirmer</label>
+          <input type="password" name="confirm_password" class="form-input" required minlength="8">
+        </div>
+      </div>
+      <button type="submit" class="btn btn-secondary" style="width:100%; margin-top:var(--space-3);">CHANGER LE MOT DE PASSE</button>
+    </form>
+  </div>
+  {% endif %}
+
+</div>
+
+<style>
+.profile-tabs {
+  display: flex;
+  gap: .5rem;
+  margin-bottom: var(--space-4);
+  border-bottom: 2px solid var(--couleur-bordure);
+}
+.profile-tab {
+  background: none;
+  border: none;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+  padding: .65rem 1.25rem;
+  font-family: var(--font-body);
+  font-size: .95rem;
+  font-weight: 600;
+  color: var(--couleur-sombre);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  transition: color .15s, border-color .15s;
+}
+.profile-tab:hover { color: var(--couleur-principale); }
+.profile-tab.active {
+  color: var(--couleur-principale);
+  border-bottom-color: var(--couleur-principale);
+}
+.tab-badge {
+  background: var(--couleur-principale);
+  color: #fff;
+  font-size: .7rem;
+  font-weight: 700;
+  padding: .1rem .45rem;
+  border-radius: 999px;
+  line-height: 1.4;
+}
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+.project-card-link { text-decoration: none; color: inherit; display: block; }
+.project-card-link:hover .card { border-color: var(--couleur-principale) !important; }
+</style>
 
 {% block scripts %}
 <script>
-(function () {
-  const toggle = document.getElementById('toggleAllPw');
-  if (!toggle) return;
-  const ids = ['current_password', 'new_password', 'confirm_password'];
-  toggle.addEventListener('change', function () {
-    ids.forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.type = this.checked ? 'text' : 'password';
+(function(){
+  const tabs = document.querySelectorAll('.profile-tab');
+  const contents = document.querySelectorAll('.tab-content');
+  const hash = window.location.hash.replace('#','');
+  if(hash) {
+    tabs.forEach(t => t.classList.toggle('active', t.dataset.tab === hash));
+    contents.forEach(c => c.classList.toggle('active', c.id === 'tab-' + hash));
+  }
+  tabs.forEach(tab => {
+    tab.addEventListener('click', function(){
+      tabs.forEach(t => t.classList.remove('active'));
+      contents.forEach(c => c.classList.remove('active'));
+      this.classList.add('active');
+      document.getElementById('tab-' + this.dataset.tab).classList.add('active');
+      history.replaceState(null, '', '#' + this.dataset.tab);
     });
   });
 })();
 </script>
+{% endblock %}
+
 {% endblock %}

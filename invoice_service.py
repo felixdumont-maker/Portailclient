@@ -33,7 +33,7 @@ INFO_ENTREPRISE = {
     "ville":     "Trois-Rivières, Québec  G8V 1X4",
     "pays":      "Canada",
     "email":     "marie-christine.blanchette@cocktailmedia.ca",
-    "telephone": "450 775-8440",
+    "telephone": "(581) 802-5835",
     "tps":       "725896823 RT0001",
     "tvq":       "4027917505 TQ0001",
 }
@@ -70,14 +70,16 @@ def _abrev_unique(abrev: str, id_client: int, conn: sqlite3.Connection) -> str:
     if not row:
         return abrev  # Libre ou déjà à ce client
 
-    # Conflit — essayer avec une lettre de plus depuis le nom entreprise
+    # Conflit — essayer avec une lettre de plus depuis le nom entreprise (ou nom complet si vide)
     client = conn.execute(
-        "SELECT nom_entreprise FROM clients WHERE id = ?", (id_client,)
+        "SELECT nom_entreprise, nom_complet FROM clients WHERE id = ?", (id_client,)
     ).fetchone()
-    nom = client["nom_entreprise"] if client else ""
+    nom = (client["nom_entreprise"] or client["nom_complet"] or "") if client else ""
     mots = [m for m in re.sub(r"[^\w\s]", "", nom).split()]
     for length in range(len(abrev) + 1, 6):
         candidat = "".join(m[0] for m in mots)[:length].upper()
+        if not candidat:
+            continue
         r2 = conn.execute("""
             SELECT id_client FROM factures
             WHERE numero LIKE ? AND id_client != ?
@@ -92,9 +94,9 @@ def _abrev_unique(abrev: str, id_client: int, conn: sqlite3.Connection) -> str:
 def generer_numero_facture(id_client: int, conn: sqlite3.Connection) -> str:
     """Génère le prochain numéro de facture pour ce client. Ex: MD-003"""
     client = conn.execute(
-        "SELECT nom_entreprise FROM clients WHERE id = ?", (id_client,)
+        "SELECT nom_entreprise, nom_complet FROM clients WHERE id = ?", (id_client,)
     ).fetchone()
-    nom_entreprise = client["nom_entreprise"] if client else ""
+    nom_entreprise = ((client["nom_entreprise"] or client["nom_complet"]) if client else "") or ""
     abrev = _generer_abreviation(nom_entreprise)
     abrev = _abrev_unique(abrev, id_client, conn)
 
@@ -362,40 +364,38 @@ def generer_pdf_facture(facture: dict, lignes: list, client: dict, output_path: 
         s_small
     ))
 
-    # Pied de page
-    story.append(Spacer(1, 20))
-    story.append(HRFlowable(width="100%", thickness=0.5, color=COULEUR_BORDURE))
-    story.append(Spacer(1, 10))
+    # ── Pied de page — dessiné sur CHAQUE page via un callback canvas plutôt
+    # qu'ajouté au flux de contenu (story) : sinon, sur une facture avec plusieurs
+    # lignes, il se retrouve poussé sur une 2e page (ou nulle part si tout tient
+    # sur une page) au lieu d'apparaître systématiquement en bas de chaque page.
+    def _dessiner_pied_de_page(canvas, doc_):
+        canvas.saveState()
+        page_width = doc_.pagesize[0]
+        margin = doc_.leftMargin
+        y_ligne = 0.62 * inch
 
-    footer_logo = None
-    if os.path.exists(LOGO_FOOTER_PATH):
-        try:
-            footer_logo = Image(LOGO_FOOTER_PATH, width=1.2*inch, height=0.45*inch, kind='proportional')
-        except Exception:
-            footer_logo = None
+        canvas.setStrokeColor(COULEUR_BORDURE)
+        canvas.setLineWidth(0.5)
+        canvas.line(margin, y_ligne, page_width - margin, y_ligne)
 
-    footer_text = Paragraph(
-        "1001 Rang Saint-Malo, Trois-Rivieres QC G8V 1X4 · "
-        "450 775-8440 · cocktailmedia.ca",
-        ParagraphStyle("footer", fontSize=7, textColor=colors.HexColor("#AAAAAA"), alignment=TA_CENTER)
-    )
+        if os.path.exists(LOGO_FOOTER_PATH):
+            logo_w, logo_h = 1.2 * inch, 0.45 * inch
+            canvas.drawImage(
+                LOGO_FOOTER_PATH,
+                (page_width - logo_w) / 2, y_ligne + 8,
+                width=logo_w, height=logo_h,
+                preserveAspectRatio=True, mask='auto',
+            )
 
-    if footer_logo:
-        footer_table = Table(
-            [[footer_logo], [footer_text]],
-            colWidths=[7.25*inch]
+        canvas.setFont("Helvetica", 7)
+        canvas.setFillColor(colors.HexColor("#AAAAAA"))
+        canvas.drawCentredString(
+            page_width / 2, y_ligne - 12,
+            "1001 Rang Saint-Malo, Trois-Rivieres QC G8V 1X4 · (581) 802-5835 · cocktailmedia.ca",
         )
-        footer_table.setStyle(TableStyle([
-            ("ALIGN",  (0, 0), (-1, -1), "CENTER"),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-            ("TOPPADDING",    (0, 0), (-1, -1), 2),
-        ]))
-        story.append(footer_table)
-    else:
-        story.append(footer_text)
+        canvas.restoreState()
 
-    doc.build(story)
+    doc.build(story, onFirstPage=_dessiner_pied_de_page, onLaterPages=_dessiner_pied_de_page)
 
 # ── Fonction principale ───────────────────────────────────
 def creer_facture_projet(id_projet: int, conn: sqlite3.Connection) -> dict | None:
@@ -416,6 +416,14 @@ def creer_facture_projet(id_projet: int, conn: sqlite3.Connection) -> dict | Non
     prix = float(projet["prix"] or 0)
     if prix <= 0:
         print(f"[INVOICE] Projet {id_projet} — prix non défini, facture ignorée.")
+        return None
+
+    existing = conn.execute(
+        "SELECT f.id, f.numero FROM factures f JOIN facture_lignes fl ON fl.id_facture = f.id WHERE fl.id_projet = ?",
+        (id_projet,)
+    ).fetchone()
+    if existing:
+        print(f"[INVOICE] Projet {id_projet} — facture {existing['numero']} déjà existante, ignorée.")
         return None
 
     client = conn.execute(
@@ -492,3 +500,257 @@ def creer_facture_projet(id_projet: int, conn: sqlite3.Connection) -> dict | Non
         "date_echeance": ech_str,
         "client": dict(client),
     }
+
+
+# ── Génération PDF facture pigiste ────────────────────────
+def generer_pdf_facture_pigiste(facture: dict, lignes: list, pigiste: dict, output_path: str):
+    """
+    Même mise en page que generer_pdf_facture.
+    EMETTEUR = pigiste (qui facture Cocktail Média)
+    DESTINATAIRE = Cocktail Média
+    """
+    doc = SimpleDocTemplate(
+        output_path,
+        pagesize=letter,
+        leftMargin=0.75 * inch,
+        rightMargin=0.75 * inch,
+        topMargin=0.75 * inch,
+        bottomMargin=1.35 * inch,
+    )
+
+    styles = getSampleStyleSheet()
+    story  = []
+
+    s_normal = ParagraphStyle("normal",  fontSize=9,  leading=13, textColor=COULEUR_SOMBRE)
+    s_small  = ParagraphStyle("small",   fontSize=8,  leading=11, textColor=colors.HexColor("#666666"))
+    s_bold   = ParagraphStyle("bold",    fontSize=9,  leading=13, textColor=COULEUR_SOMBRE, fontName="Helvetica-Bold")
+    s_title  = ParagraphStyle("title",   fontSize=22, leading=26, textColor=COULEUR_SOMBRE, fontName="Helvetica-Bold")
+    s_right  = ParagraphStyle("right",   fontSize=9,  leading=13, textColor=COULEUR_SOMBRE, alignment=TA_RIGHT)
+    s_accent = ParagraphStyle("accent",  fontSize=9,  leading=13, textColor=COULEUR_ACCENT, fontName="Helvetica-Bold")
+
+    # ── EN-TÊTE ──────────────────────────────────────────
+    logo_cell = ""
+    if os.path.exists(LOGO_PATH):
+        try:
+            logo_cell = Image(LOGO_PATH, width=1.8*inch, height=0.7*inch, kind='proportional')
+        except Exception:
+            logo_cell = Paragraph("<b>COCKTAIL MÉDIA</b>", s_bold)
+    else:
+        logo_cell = Paragraph("<b>COCKTAIL MÉDIA</b>", s_bold)
+
+    titre_facture = Paragraph(f"FACTURE N° {facture['numero']}", s_title)
+    meta_facture  = Paragraph(
+        f"Date d'émission : {facture['date_emission']}<br/>"
+        f"Échéance : {facture['date_echeance']}",
+        s_right
+    )
+
+    entete = Table(
+        [[logo_cell, [titre_facture, Spacer(1, 4), meta_facture]]],
+        colWidths=[2.5*inch, 4.75*inch]
+    )
+    entete.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ALIGN",  (1, 0), (1, 0),  "RIGHT"),
+    ]))
+    story.append(entete)
+    story.append(Spacer(1, 20))
+    story.append(HRFlowable(width="100%", thickness=1, color=COULEUR_ACCENT))
+    story.append(Spacer(1, 16))
+
+    # ── ÉMETTEUR (pigiste) | DESTINATAIRE (Cocktail Média) ──
+    pig_nom     = pigiste.get("nom_complet", "")
+    pig_adresse = pigiste.get("adresse", "")
+    pig_ville   = pigiste.get("ville", "")
+    pig_province= pigiste.get("province", "")
+    pig_cp      = pigiste.get("code_postal", "")
+    pig_email   = pigiste.get("email", "")
+    pig_tel     = pigiste.get("telephone", "")
+    pig_tps     = pigiste.get("numero_tps", "")
+    pig_tvq     = pigiste.get("numero_tvq", "")
+
+    ville_cp_pig = " ".join(filter(None, [pig_ville, pig_province, pig_cp]))
+
+    emetteur_lines = [
+        Paragraph(f"<b>{pig_nom}</b>", s_bold),
+    ]
+    if pig_adresse:
+        emetteur_lines.append(Paragraph(pig_adresse, s_normal))
+    if ville_cp_pig:
+        emetteur_lines.append(Paragraph(ville_cp_pig, s_normal))
+    emetteur_lines.append(Paragraph("Canada", s_normal))
+    if pig_email:
+        emetteur_lines.append(Paragraph(pig_email, s_normal))
+    if pig_tel:
+        emetteur_lines.append(Paragraph(f"Téléphone : {pig_tel}", s_normal))
+    if pig_tps:
+        emetteur_lines.append(Spacer(1, 4))
+        emetteur_lines.append(Paragraph(f"TPS/TVH : {pig_tps}", s_small))
+    if pig_tvq:
+        emetteur_lines.append(Paragraph(f"TVQ : {pig_tvq}", s_small))
+
+    destinataire_lines = [
+        Paragraph("<b>Facturer à :</b>", s_bold),
+        Paragraph(f"<b>{INFO_ENTREPRISE['nom']}</b>", s_bold),
+        Paragraph(INFO_ENTREPRISE["adresse"], s_normal),
+        Paragraph(INFO_ENTREPRISE["ville"],   s_normal),
+        Paragraph(INFO_ENTREPRISE["pays"],    s_normal),
+        Paragraph(INFO_ENTREPRISE["email"],   s_normal),
+        Paragraph(f"Téléphone : {INFO_ENTREPRISE['telephone']}", s_normal),
+        Spacer(1, 4),
+        Paragraph(f"TPS/TVH : {INFO_ENTREPRISE['tps']}", s_small),
+        Paragraph(f"TVQ : {INFO_ENTREPRISE['tvq']}",     s_small),
+    ]
+
+    bloc_adresses = Table(
+        [[emetteur_lines, destinataire_lines, []]],
+        colWidths=[2.4*inch, 2.4*inch, 2.45*inch]
+    )
+    bloc_adresses.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING",  (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+    ]))
+    story.append(bloc_adresses)
+    story.append(Spacer(1, 20))
+
+    # ── TABLEAU DES LIGNES ────────────────────────────────
+    table_data = [[
+        Paragraph("<b>Article ou service</b>", s_bold),
+        Paragraph("<b>Qté</b>", s_bold),
+        Paragraph("<b>Taux</b>", s_bold),
+        Paragraph("<b>Total</b>", s_bold),
+    ]]
+
+    sous_total = 0.0
+    for ligne in lignes:
+        desc        = ligne.get("description", "")
+        qte         = float(ligne.get("quantite", 1))
+        taux        = float(ligne.get("taux", 0))
+        montant     = float(ligne.get("montant", round(qte * taux, 2)))
+        sous_total += montant
+
+        # Sous-lignes contextuelles : mandat, projet/client, dates
+        desc_parts = [f"<b>{desc}</b>"]
+        mandat_titre = ligne.get("mandat_titre", "")
+        nom_projet   = ligne.get("nom_projet", "")
+        nom_client   = ligne.get("nom_client", "")
+        date_mandat  = ligne.get("date_mandat", "")
+
+        if mandat_titre and mandat_titre != desc:
+            desc_parts.append(f"Mandat : {mandat_titre}")
+        if nom_projet:
+            ctx = nom_projet
+            if nom_client:
+                ctx += f" — {nom_client}"
+            desc_parts.append(ctx)
+        if date_mandat:
+            desc_parts.append(date_mandat)
+
+        desc_para = Paragraph("<br/>".join(desc_parts), s_normal)
+
+        table_data.append([
+            desc_para,
+            Paragraph(str(int(qte)) if qte == int(qte) else str(qte), s_normal),
+            Paragraph(f"{taux:,.2f} $CA", s_right),
+            Paragraph(f"{montant:,.2f} $CA", s_right),
+        ])
+
+    col_widths = [3.8*inch, 0.5*inch, 1.4*inch, 1.55*inch]
+    tableau = Table(table_data, colWidths=col_widths, repeatRows=1)
+    tableau.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, 0), COULEUR_GRIS),
+        ("TEXTCOLOR",     (0, 0), (-1, 0), COULEUR_SOMBRE),
+        ("FONTNAME",      (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE",      (0, 0), (-1, 0), 9),
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
+        ("TOPPADDING",    (0, 0), (-1, 0), 8),
+        ("FONTSIZE",      (0, 1), (-1, -1), 9),
+        ("TOPPADDING",    (0, 1), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 1), (-1, -1), 8),
+        ("ALIGN",         (1, 0), (-1, -1), "RIGHT"),
+        ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+        ("LINEBELOW",     (0, 0), (-1, -1), 0.5, COULEUR_BORDURE),
+        ("LINEBELOW",     (0, 0), (-1, 0),  1,   COULEUR_ACCENT),
+    ]))
+    story.append(tableau)
+    story.append(Spacer(1, 16))
+
+    # ── TOTAUX ────────────────────────────────────────────
+    tps  = float(facture.get("tps",  0))
+    tvq  = float(facture.get("tvq",  0))
+    total = float(facture.get("montant_total", sous_total + tps + tvq))
+
+    totaux_data = [["", "Sous-total", f"{sous_total:,.2f} $CA"]]
+    if tps > 0:
+        totaux_data.append(["", f"TPS (5,0%)",          f"{tps:,.2f} $CA"])
+    if tvq > 0:
+        totaux_data.append(["", f"TVQ (9,975%)",         f"{tvq:,.2f} $CA"])
+    if tps > 0 or tvq > 0:
+        totaux_data.append(["", "Total des taxes",       f"{tps+tvq:,.2f} $CA"])
+    totaux_data += [
+        ["", "TOTAL DE LA FACTURE", f"{total:,.2f} $CA"],
+        ["", "Montant payé",        "0,00 $CA"],
+        ["", "RESTE À PAYER",       f"{total:,.2f} $CA"],
+    ]
+
+    total_row_idx = len(totaux_data) - 1
+
+    totaux = Table(totaux_data, colWidths=[3.8*inch, 2.0*inch, 1.45*inch])
+    totaux.setStyle(TableStyle([
+        ("ALIGN",         (1, 0), (-1, -1), "RIGHT"),
+        ("FONTSIZE",      (0, 0), (-1, -1), 9),
+        ("TOPPADDING",    (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LINEABOVE",     (1, total_row_idx), (-1, total_row_idx), 1, COULEUR_ACCENT),
+        ("FONTNAME",      (1, total_row_idx), (-1, total_row_idx), "Helvetica-Bold"),
+        ("TEXTCOLOR",     (1, total_row_idx), (-1, total_row_idx), COULEUR_ACCENT),
+        ("FONTNAME",      (1, total_row_idx - 2), (-1, total_row_idx - 2), "Helvetica-Bold"),
+    ]))
+    story.append(totaux)
+    story.append(Spacer(1, 24))
+
+    # ── PAIEMENT ──────────────────────────────────────────
+    story.append(HRFlowable(width="100%", thickness=0.5, color=COULEUR_BORDURE))
+    story.append(Spacer(1, 12))
+    story.append(Paragraph("<b>MODE DE PAIEMENT</b>", s_accent))
+    story.append(Spacer(1, 6))
+    if pig_email:
+        story.append(Paragraph(f"Virement Interac : {pig_email}", s_normal))
+    story.append(Spacer(1, 8))
+    story.append(Paragraph(
+        f"Merci pour votre collaboration. Pour toute question, contactez "
+        f"marie-christine.blanchette@cocktailmedia.ca",
+        s_small
+    ))
+
+    # Pied de page — voir le commentaire équivalent dans generer_pdf_facture : dessiné
+    # sur chaque page via un callback canvas, pas ajouté au flux (sinon poussé sur une 2e page).
+    def _dessiner_pied_de_page(canvas, doc_):
+        canvas.saveState()
+        page_width = doc_.pagesize[0]
+        margin = doc_.leftMargin
+        y_ligne = 0.62 * inch
+
+        canvas.setStrokeColor(COULEUR_BORDURE)
+        canvas.setLineWidth(0.5)
+        canvas.line(margin, y_ligne, page_width - margin, y_ligne)
+
+        if os.path.exists(LOGO_FOOTER_PATH):
+            logo_w, logo_h = 1.2 * inch, 0.45 * inch
+            canvas.drawImage(
+                LOGO_FOOTER_PATH,
+                (page_width - logo_w) / 2, y_ligne + 8,
+                width=logo_w, height=logo_h,
+                preserveAspectRatio=True, mask='auto',
+            )
+
+        canvas.setFont("Helvetica", 7)
+        canvas.setFillColor(colors.HexColor("#AAAAAA"))
+        canvas.drawCentredString(
+            page_width / 2, y_ligne - 12,
+            "1001 Rang Saint-Malo, Trois-Rivieres QC G8V 1X4 · (581) 802-5835 · cocktailmedia.ca",
+        )
+        canvas.restoreState()
+
+    doc.build(story, onFirstPage=_dessiner_pied_de_page, onLaterPages=_dessiner_pied_de_page)

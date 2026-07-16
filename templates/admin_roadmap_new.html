@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Nouvelle roadmap{% endblock %}
+{% block content %}
+<div style="max-width:600px;margin:0 auto;">
+
+  <div style="margin-bottom:1.5rem;">
+    <a href="{{ url_for('admin_roadmaps') }}" style="font-size:13px;color:#888;">← Retour aux roadmaps</a>
+  </div>
+
+  <h1 style="margin-bottom:1.5rem;">Nouvelle roadmap</h1>
+
+  <div class="card">
+    <form method="POST">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-group">
+        <label>Nom du projet</label>
+        <input type="text" name="titre" placeholder="ex: Campagne marketing printemps 2026" required>
+      </div>
+      <div class="form-group">
+        <label>Description courte <span style="font-weight:400;color:#aaa;">(optionnel)</span></label>
+        <textarea name="description" placeholder="Contexte, objectif, notes..." style="min-height:80px;"></textarea>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:1rem;">
+        <a href="{{ url_for('admin_roadmaps') }}" class="btn btn-secondary">Annuler</a>
+        <button type="submit" class="btn">Créer la roadmap →</button>
+      </div>
+    </form>
+  </div>
+
+</div>
+{% endblock %}

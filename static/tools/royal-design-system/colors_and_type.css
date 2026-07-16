@@ -1,0 +1,265 @@
+/* =========================================================================
+   ROYAL DE SHAWINIGAN — Design Tokens
+   Le Royal de Shawinigan · LNHBF (Ligue Nationale Hockey Balle Féminin)
+   Templates produced by Cocktail Média · cocktailmedia.ca
+   ========================================================================= */
+
+/* ---- Fonts (Google Fonts CDN) -------------------------------------------- */
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
+:root {
+  /* === BRAND CORE ============================================ */
+  /* Crimson — the team red. Used as full-bleed background on every social post. */
+  --royal-red:        #d62127;
+  --royal-red-deep:   #c0191a;   /* Used in photo-overlay gradient endpoints */
+  --royal-red-darker: #9e1216;   /* For darker corner / hover states */
+
+  /* Pure neutrals on red */
+  --white:            #ffffff;
+  --black:            #000000;
+
+  /* === SEMANTIC FOREGROUND (on red bg) ======================== */
+  --fg-primary:       #ffffff;             /* hero text, scores, titles */
+  --fg-secondary:     rgba(255,255,255,0.55);  /* subtitles, dates */
+  --fg-tertiary:      rgba(255,255,255,0.45);  /* league labels, captions */
+  --fg-muted:         rgba(255,255,255,0.30);  /* footers, credits */
+  --fg-faint:         rgba(255,255,255,0.20);  /* dividers, separators glyphs */
+  --fg-loss:          rgba(255,255,255,0.20);  /* defeated team score */
+
+  /* === SURFACES (translucent layers on red bg) ================ */
+  --surface-light:    rgba(255,255,255,0.18);  /* featured / win cards */
+  --surface-mid:      rgba(255,255,255,0.12);  /* logo boxes, neutral cards */
+  --surface-low:      rgba(255,255,255,0.10);  /* secondary chips */
+  --surface-dark:     rgba(0,0,0,0.22);        /* "home" alt cards, score strip */
+  --surface-darker:   rgba(0,0,0,0.30);        /* glassmorphism strip on R01 */
+
+  /* === BORDERS ================================================ */
+  --border-strong:    rgba(255,255,255,0.30);  /* dashed, around logo boxes */
+  --border-soft:      rgba(255,255,255,0.15);  /* card outlines */
+  --border-faint:     rgba(255,255,255,0.08);  /* subtle inner separators */
+
+  /* === ACCENT BARS / PILLS ==================================== */
+  --pill-bg:          #ffffff;                 /* "SOIR DE MATCH" */
+  --pill-fg:          var(--royal-red);
+  --badge-win-bg:     #ffffff;
+  --badge-win-fg:     var(--royal-red);
+  --badge-loss-bg:    rgba(255,255,255,0.10);
+  --badge-loss-fg:    rgba(255,255,255,0.50);
+
+  /* === STATUS / DATA ========================================== */
+  --result-win:       #ffffff;
+  --result-loss:      rgba(255,255,255,0.25);
+
+  /* === ALIASES used by ui_kits/social JSX ===================== */
+  --win-bg:        var(--badge-win-bg);
+  --win-fg:        var(--badge-win-fg);
+  --loss-bg:       var(--badge-loss-bg);
+  --loss-fg:       var(--badge-loss-fg);
+  --bg-cream:      #f5f1e8;
+  --ink:           #1a0708;
+  --surface-glass: var(--surface-darker);
+  --surface-deep:  var(--surface-dark);
+  --r-md:          12px;
+
+  /* === TYPE FAMILIES ========================================== */
+  --font-display:     'Bebas Neue', Impact, 'Arial Narrow Bold', sans-serif;
+  --font-body:        'Plus Jakarta Sans', system-ui, -apple-system, Segoe UI, sans-serif;
+
+  /* === TYPE WEIGHTS =========================================== */
+  --w-regular: 400;
+  --w-medium:  500;
+  --w-semi:    600;
+  --w-bold:    700;
+  --w-black:   800;
+
+  /* === DISPLAY (Bebas Neue, condensed condensed condensed) ==== */
+  --type-hero:        52px;   /* "HORAIRE DE LA SEMAINE" */
+  --type-score:       100px;  /* match scores */
+  --type-section:     38px;   /* team sigle on hero */
+  --type-stat:        32px;
+  --type-time:        30px;   /* game time */
+  --type-day:         28px;   /* day of week */
+  --type-display-md:  26px;
+  --type-display-sm:  22px;
+  --type-pill:        19px;   /* pill labels */
+  --type-display-xs:  14px;
+
+  /* === BODY (Plus Jakarta Sans) =============================== */
+  --type-body-md:     14px;
+  --type-body:        13px;
+  --type-body-sm:     12px;
+  --type-meta:        11px;   /* footer / city */
+  --type-micro:       10px;   /* tags, small labels */
+  --type-eyebrow:     9px;    /* uppercase eyebrows ("LNHBF · …") */
+  --type-eyebrow-xs:  8px;    /* home/away tags */
+
+  /* === LETTERSPACING (KEY to the brand) ======================= */
+  --ls-tight:    -0.02em;     /* big scores */
+  --ls-display:  0.06em;      /* Bebas Neue at large sizes */
+  --ls-eyebrow:  0.42em;      /* uppercase league labels (~5px @ 9px font) */
+  --ls-pill:     0.21em;      /* uppercase pills (~4px @ 19px font) */
+  --ls-meta:     0.18em;      /* uppercase metadata (~2px @ 11px font) */
+
+  /* === LINE HEIGHT ============================================ */
+  --lh-display:  0.9;
+  --lh-tight:    1;
+  --lh-body:     1.5;
+
+  /* === SPACING SCALE ========================================== */
+  /* Sized for the 1080×1080 social canvas — generous gutters. */
+  --sp-1:   4px;
+  --sp-2:   8px;
+  --sp-3:   12px;
+  --sp-4:   16px;
+  --sp-5:   22px;
+  --sp-6:   32px;
+  --sp-7:   44px;   /* outer page padding */
+  --sp-8:   56px;   /* outer page gutter (most common) */
+
+  /* === RADII ================================================== */
+  --r-card-lg:  20px;   /* match cards */
+  --r-card:     16px;   /* game cards */
+  --r-logo:     14px;   /* team logo boxes */
+  --r-tile:     11px;   /* small logo tiles */
+  --r-pill:     100px;  /* pills, tags */
+
+  /* === SHADOWS / TEXT-SHADOWS ================================= */
+  --shadow-press:    2px 2px 0 rgba(0,0,0,0.20);   /* hard offset on hero text */
+  --shadow-press-sm: 2px 2px 0 rgba(0,0,0,0.15);
+  --shadow-lift:     0 4px 16px rgba(0,0,0,0.30);  /* on winning score */
+
+  /* === TEXTURES (CSS-generated, no images required) =========== */
+  /* The signature -55° diagonal hatch printed across every red surface. */
+  --tex-diagonal: repeating-linear-gradient(
+    -55deg,
+    transparent 0,
+    transparent 60px,
+    rgba(0,0,0,0.04) 60px,
+    rgba(0,0,0,0.04) 120px
+  );
+
+  /* Dark-vignette corner used on R01 game-day card */
+  --vignette-corner: radial-gradient(
+    ellipse at bottom right,
+    rgba(0,0,0,0.45) 0%,
+    transparent 70%
+  );
+
+  /* Photo-to-red top fade, used over photos so text reads */
+  --fade-photo-bottom: linear-gradient(
+    to top,
+    var(--royal-red) 0%,
+    transparent 100%
+  );
+  --overlay-photo-banner: linear-gradient(
+    to bottom,
+    rgba(192,25,26,0.20) 0%,
+    var(--royal-red) 100%
+  );
+}
+
+/* =========================================================================
+   SEMANTIC TYPE CLASSES — drop these on tags directly
+   ========================================================================= */
+
+.t-hero {
+  font-family: var(--font-display);
+  font-size: var(--type-hero);
+  letter-spacing: var(--ls-display);
+  line-height: var(--lh-display);
+  color: var(--fg-primary);
+  text-shadow: var(--shadow-press);
+  text-transform: uppercase;
+}
+
+.t-score {
+  font-family: var(--font-display);
+  font-size: var(--type-score);
+  line-height: 0.88;
+  letter-spacing: var(--ls-tight);
+}
+.t-score.win  { color: var(--result-win);  text-shadow: var(--shadow-lift); }
+.t-score.loss { color: var(--result-loss); }
+
+.t-display {
+  font-family: var(--font-display);
+  letter-spacing: var(--ls-display);
+  line-height: var(--lh-tight);
+  color: var(--fg-primary);
+  text-transform: uppercase;
+}
+
+.t-pill {
+  font-family: var(--font-display);
+  font-size: var(--type-pill);
+  letter-spacing: var(--ls-pill);
+  background: var(--pill-bg);
+  color: var(--pill-fg);
+  padding: 9px 26px;
+  border-radius: var(--r-pill);
+  display: inline-block;
+}
+
+.t-eyebrow {
+  font-family: var(--font-body);
+  font-size: var(--type-eyebrow);
+  font-weight: var(--w-bold);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+  color: var(--fg-tertiary);
+}
+
+.t-meta {
+  font-family: var(--font-body);
+  font-size: var(--type-meta);
+  font-weight: var(--w-bold);
+  letter-spacing: var(--ls-meta);
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.t-body {
+  font-family: var(--font-body);
+  font-size: var(--type-body);
+  font-weight: var(--w-medium);
+  line-height: var(--lh-body);
+  color: var(--fg-secondary);
+}
+
+.t-credit {
+  font-family: var(--font-body);
+  font-size: var(--type-meta);
+  color: var(--fg-muted);
+  letter-spacing: 0.05em;
+}
+
+/* =========================================================================
+   SURFACE / CARD UTILITIES
+   ========================================================================= */
+
+.s-page {
+  background: var(--royal-red);
+  position: relative;
+}
+.s-page::before {
+  content: '';
+  position: absolute; inset: 0;
+  background: var(--tex-diagonal);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.s-card-glass {
+  background: var(--surface-darker);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-card-lg);
+}
+
+.s-card-result {
+  border-radius: var(--r-card-lg);
+  border: 1.5px solid var(--surface-mid);
+  background: var(--surface-dark);
+  position: relative;
+  overflow: hidden;
+}

@@ -1,0 +1,906 @@
+{% extends "base.html" %}
+{% block title %}Roadmap CocktailOS{% endblock %}
+{% block content %}
+<div style="max-width:900px;margin:0 auto;padding:2rem 1rem;">
+
+<h1 style="font-family:'Bebas Neue',sans-serif;font-size:2.2rem;color:#2b2b2b;margin-bottom:0.25rem;">Roadmap CocktailOS</h1>
+<p style="color:#888;font-size:0.9rem;margin-bottom:2rem;">Vision produit — Avril 2026</p>
+
+<div style="background:#fff4e9;border-radius:12px;padding:1.25rem 1.5rem;margin-bottom:1.5rem;">
+  <p style="font-size:1rem;font-weight:500;color:#2b2b2b;line-height:1.7;margin:0 0 0.75rem;">Un seul outil pour gérer toute ton activité. Pas un logiciel d'entreprise mal adapté. Conçu pour Nathalie — et pour tous ceux qui lui ressemblent.</p>
+  <div style="display:flex;flex-wrap:wrap;gap:6px;">
+    <span style="font-size:11px;background:white;border:1px solid #e0d9d3;border-radius:4px;padding:3px 9px;color:#666;">Travailleurs autonomes</span>
+    <span style="font-size:11px;background:white;border:1px solid #e0d9d3;border-radius:4px;padding:3px 9px;color:#666;">Petites businesses sans employés</span>
+    <span style="font-size:11px;background:white;border:1px solid #e0d9d3;border-radius:4px;padding:3px 9px;color:#666;">Québec / Canada</span>
+    <span style="font-size:11px;background:white;border:1px solid #e0d9d3;border-radius:4px;padding:3px 9px;color:#666;">100% brandable</span>
+    <span style="font-size:11px;background:#fdecea;border-radius:4px;padding:3px 9px;color:#c0321a;">Pas de paie</span>
+    <span style="font-size:11px;background:#fdecea;border-radius:4px;padding:3px 9px;color:#c0321a;">Pas de DAS</span>
+    <span style="font-size:11px;background:#fdecea;border-radius:4px;padding:3px 9px;color:#c0321a;">Pas de comptabilité complexe</span>
+  </div>
+</div>
+
+<div style="background:white;border:1px solid #e0d9d3;border-radius:12px;padding:1rem 1.25rem;margin-bottom:1.5rem;display:flex;gap:12px;align-items:center;">
+  <div style="width:42px;height:42px;border-radius:50%;background:#e8ecff;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;">N</div>
+  <div>
+    <div style="font-size:13px;font-weight:500;color:#2b2b2b;">Nathalie Cartier — Persona de référence</div>
+    <div style="font-size:11px;color:#888;margin-top:2px;">58 ans · Travailleuse autonome · Si elle comprend pas en 10 secondes, c'est trop complexe. QuickBooks existe pour le reste.</div>
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:1.5rem;">
+  <div style="background:#fff4e9;border-radius:8px;padding:12px;text-align:center;"><div style="font-size:22px;font-weight:500;color:#2b2b2b;">3</div><div style="font-size:10px;color:#888;margin-top:3px;">Forfaits distincts</div></div>
+  <div style="background:#fff4e9;border-radius:8px;padding:12px;text-align:center;"><div style="font-size:22px;font-weight:500;color:#2b2b2b;">40$</div><div style="font-size:10px;color:#888;margin-top:3px;">Entree / mois</div></div>
+  <div style="background:#fff4e9;border-radius:8px;padding:12px;text-align:center;"><div style="font-size:22px;font-weight:500;color:#2b2b2b;">100$</div><div style="font-size:10px;color:#888;margin-top:3px;">Maximum / mois</div></div>
+  <div style="background:#fff4e9;border-radius:8px;padding:12px;text-align:center;"><div style="font-size:22px;font-weight:500;color:#2b2b2b;">Dec 26</div><div style="font-size:10px;color:#888;margin-top:3px;">Premieres ventes</div></div>
+</div>
+
+<p style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#aaa;margin-bottom:10px;">Structure des forfaits — 1 client = 1 forfait</p>
+<div style="display:flex;flex-direction:column;gap:4px;margin-bottom:1.5rem;">
+  <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:white;border:1px solid #e0d9d3;border-left:3px solid #2ecc71;border-radius:8px;">
+    <span style="font-size:18px;">🧾</span>
+    <div style="flex:1;"><div style="font-size:13px;font-weight:500;color:#2b2b2b;">Base — 40$/mois</div><div style="font-size:11px;color:#888;margin-top:2px;">CRM · Facturation · Projets · Mailing · Tables custom · Rappels auto</div></div>
+    <div style="font-size:18px;font-weight:500;color:#2b2b2b;">40$</div>
+  </div>
+  <div style="text-align:center;font-size:11px;color:#aaa;padding:2px 0;">emboite le Base</div>
+  <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:white;border:1px solid #e0d9d3;border-left:3px solid #3498db;border-radius:8px;">
+    <span style="font-size:18px;">📦</span>
+    <div style="flex:1;"><div style="font-size:13px;font-weight:500;color:#2b2b2b;">Base+ — 75$/mois</div><div style="font-size:11px;color:#888;margin-top:2px;">Tout le Base + Inventaire (produits finis, matieres premieres, recettes, fournisseurs)</div></div>
+    <div style="font-size:18px;font-weight:500;color:#2b2b2b;">75$</div>
+  </div>
+  <div style="text-align:center;font-size:11px;color:#aaa;padding:2px 0;">emboite le Base (direction immobilier)</div>
+  <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:white;border:1px solid #e0d9d3;border-left:3px solid #e67e22;border-radius:8px;">
+    <span style="font-size:18px;">🏡</span>
+    <div style="flex:1;"><div style="font-size:13px;font-weight:500;color:#2b2b2b;">Premium — 100$/mois</div><div style="font-size:11px;color:#888;margin-top:2px;">Tout le Base oriente immobilier + mandats, prospects, commission, workflow notaire</div></div>
+    <div style="font-size:18px;font-weight:500;color:#2b2b2b;">100$</div>
+  </div>
+</div>
+
+
+<p style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#aaa;margin:1.5rem 0 10px;">Detail des forfaits</p>
+
+<!-- BOUTONS ONGLETS -->
+<div style="display:flex;gap:8px;margin-bottom:1rem;">
+  <button onclick="showForfait('base')" id="btn-base" style="flex:1;padding:10px;border-radius:8px;border:2px solid #2ecc71;background:#d4edda;color:#155724;font-weight:500;font-size:13px;cursor:pointer;">🧾 Base — 40$/mois</button>
+  <button onclick="showForfait('baseplus')" id="btn-baseplus" style="flex:1;padding:10px;border-radius:8px;border:1px solid #e0d9d3;background:white;color:#2b2b2b;font-weight:500;font-size:13px;cursor:pointer;">📦 Base+ — 75$/mois</button>
+  <button onclick="showForfait('premium')" id="btn-premium" style="flex:1;padding:10px;border-radius:8px;border:1px solid #e0d9d3;background:white;color:#2b2b2b;font-weight:500;font-size:13px;cursor:pointer;">🏡 Premium — 100$/mois</button>
+</div>
+
+<!-- FORFAIT BASE -->
+<div id="forfait-base" style="display:block;">
+  <div style="background:#d4edda;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:12px;color:#155724;"><strong>Forfait de base — tout metier, tout travailleur autonome.</strong> CRM + Facturation + Projets + Communication.</div>
+  <div style="display:flex;flex-direction:column;gap:8px;">
+
+    <div style="background:white;border:1px solid #e0d9d3;border-radius:10px;overflow:hidden;">
+      <div onclick="toggleBloc('b1')" style="padding:12px 14px;display:flex;align-items:center;gap:10px;cursor:pointer;">
+        <span style="width:22px;height:22px;border-radius:50%;background:#fff4e9;border:1px solid #e0d9d3;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:500;color:#888;flex-shrink:0;">1</span>
+        <span style="font-size:13px;font-weight:500;color:#2b2b2b;flex:1;">CRM — Gestion clients</span>
+        <span style="font-size:10px;background:#d4edda;color:#155724;padding:2px 8px;border-radius:4px;">Base</span>
+        <span id="arr-b1" style="font-size:11px;color:#aaa;transition:transform 0.2s;">▶</span>
+      </div>
+      <div id="b1" style="display:none;padding:0 14px 13px;border-top:1px solid #f0ebe5;">
+        <p style="font-size:12px;color:#666;margin:10px 0 8px;line-height:1.6;">Fiche client complete pour chaque contact. Historique de tous les projets, factures et interactions au meme endroit.</p>
+        <div style="font-size:12px;color:#666;line-height:1.9;">
+          <div>· Fiche client — nom, email, telephone, entreprise</div>
+          <div>· Tags libres pour segmenter ta clientele</div>
+          <div>· Historique complet projets + factures par client</div>
+          <div>· Notes libres par client</div>
+          <div>· Dossier Google Drive auto-cree par client</div>
+          <div>· Espace client securise (login + portail)</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="background:white;border:1px solid #e0d9d3;border-radius:10px;overflow:hidden;">
+      <div onclick="toggleBloc('b2')" style="padding:12px 14px;display:flex;align-items:center;gap:10px;cursor:pointer;">
+        <span style="width:22px;height:22px;border-radius:50%;background:#fff4e9;border:1px solid #e0d9d3;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:500;color:#888;flex-shrink:0;">2</span>
+        <span style="font-size:13px;font-weight:500;color:#2b2b2b;flex:1;">Notes et tables personnalisees par metier</span>
+        <span style="font-size:10px;background:#cce5ff;color:#004085;padding:2px 8px;border-radius:4px;">Nouveau</span>
+        <span id="arr-b2" style="font-size:11px;color:#aaa;">▶</span>
+      </div>
+      <div id="b2" style="display:none;padding:0 14px 13px;border-top:1px solid #f0ebe5;">
+        <p style="font-size:12px;color:#666;margin:10px 0 8px;line-height:1.6;">Chaque utilisateur cree ses propres sections sur la fiche client — adaptees a son metier. Un salon d'esthetique ajoute Soins effectues, un coach ajoute Seances, un mecanicien ajoute Vehicules.</p>
+        <div style="font-size:12px;color:#666;line-height:1.9;">
+          <div>· Creation de tables custom par metier (nom libre)</div>
+          <div>· Colonnes configurables — texte, date, liste, nombre</div>
+          <div>· Ajout de rangees au fil du temps</div>
+          <div>· Visible sur la fiche client en tout temps</div>
+          <div>· Notes libres en complement des tables</div>
+        </div>
+        <div style="background:#fff4e9;border-radius:6px;padding:8px 12px;margin-top:10px;font-size:11px;color:#888;">
+          <strong style="color:#2b2b2b;">Exemples par metier :</strong> Salon → Soins effectues · Coach → Seances · Mecanicien → Vehicules · Photographe → Sessions · Tatoueur → Pieces
+        </div>
+      </div>
+    </div>
+
+    <div style="background:white;border:1px solid #e0d9d3;border-radius:10px;overflow:hidden;">
+      <div onclick="toggleBloc('b3')" style="padding:12px 14px;display:flex;align-items:center;gap:10px;cursor:pointer;">
+        <span style="width:22px;height:22px;border-radius:50%;background:#fff4e9;border:1px solid #e0d9d3;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:500;color:#888;flex-shrink:0;">3</span>
+        <span style="font-size:13px;font-weight:500;color:#2b2b2b;flex:1;">Rappels automatiques</span>
+        <span style="font-size:10px;background:#cce5ff;color:#004085;padding:2px 8px;border-radius:4px;">Nouveau</span>
+        <span id="arr-b3" style="font-size:11px;color:#aaa;">▶</span>
+      </div>
+      <div id="b3" style="display:none;padding:0 14px 13px;border-top:1px solid #f0ebe5;">
+        <p style="font-size:12px;color:#666;margin:10px 0 8px;line-height:1.6;">Emails automatiques envoyes au bon moment — factures impayes, suivi de soins, renouvellement. Configurables, envoyes depuis la plateforme sans app externe.</p>
+        <div style="font-size:12px;color:#666;line-height:1.9;">
+          <div>· Rappels factures impayes — J+7, J+14, J+30 (configurable)</div>
+          <div>· Rappels soins / suivi client (delai configurable)</div>
+          <div>· Message personnalisable par type de rappel</div>
+          <div>· Historique des rappels envoyes par client</div>
+          <div>· Envoi via Flask-Mail — tout dans la plateforme</div>
+        </div>
+        <div style="background:#fff4e9;border-radius:6px;padding:8px 12px;margin-top:10px;font-size:11px;color:#888;">
+          <strong style="color:#2b2b2b;">Exemple salon :</strong> Soin enregistre le 1er mars → Delai 6 semaines → Email auto "Il est temps de revenir!"
+        </div>
+      </div>
+    </div>
+
+    <div style="background:white;border:1px solid #e0d9d3;border-radius:10px;overflow:hidden;">
+      <div onclick="toggleBloc('b4')" style="padding:12px 14px;display:flex;align-items:center;gap:10px;cursor:pointer;">
+        <span style="width:22px;height:22px;border-radius:50%;background:#fff4e9;border:1px solid #e0d9d3;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:500;color:#888;flex-shrink:0;">4</span>
+        <span style="font-size:13px;font-weight:500;color:#2b2b2b;flex:1;">Mailing promotionnel</span>
+        <span style="font-size:10px;background:#cce5ff;color:#004085;padding:2px 8px;border-radius:4px;">Nouveau</span>
+        <span id="arr-b4" style="font-size:11px;color:#aaa;">▶</span>
+      </div>
+      <div id="b4" style="display:none;padding:0 14px 13px;border-top:1px solid #f0ebe5;">
+        <p style="font-size:12px;color:#666;margin:10px 0 8px;line-height:1.6;">Envoyer des campagnes email a ta base de clients directement depuis le portail. Aucune app externe, aucun compte Mailchimp. Tu appuies sur envoyer — c'est parti.</p>
+        <div style="font-size:12px;color:#666;line-height:1.9;">
+          <div>· Creation de campagnes email depuis le portail</div>
+          <div>· Templates reutilisables — promotion, info, saisonnier</div>
+          <div>· Segmentation par tag client</div>
+          <div>· Envoi a toute la base ou a un segment</div>
+          <div>· Lien de desabonnement automatique — conformite CASL</div>
+          <div>· Historique des campagnes envoyees</div>
+          <div>· Envoi en batch via Flask-Mail — tout dans la plateforme</div>
+        </div>
+        <div style="background:#fff4e9;border-radius:6px;padding:8px 12px;margin-top:10px;font-size:11px;color:#888;">
+          <strong style="color:#2b2b2b;">Decision :</strong> Pas de stats d'ouverture en phase 1 — evite tout service externe. Simplicite avant tout.
+        </div>
+      </div>
+    </div>
+
+    <div style="background:white;border:1px solid #e0d9d3;border-radius:10px;overflow:hidden;">
+      <div onclick="toggleBloc('b5')" style="padding:12px 14px;display:flex;align-items:center;gap:10px;cursor:pointer;">
+        <span style="width:22px;height:22px;border-radius:50%;background:#fff4e9;border:1px solid #e0d9d3;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:500;color:#888;flex-shrink:0;">5</span>
+        <span style="font-size:13px;font-weight:500;color:#2b2b2b;flex:1;">Projets et suivi de statuts</span>
+        <span style="font-size:10px;background:#d4edda;color:#155724;padding:2px 8px;border-radius:4px;">Base</span>
+        <span id="arr-b5" style="font-size:11px;color:#aaa;">▶</span>
+      </div>
+      <div id="b5" style="display:none;padding:0 14px 13px;border-top:1px solid #f0ebe5;">
+        <div style="font-size:12px;color:#666;line-height:1.9;margin-top:10px;">
+          <div>· Creation de projets par client</div>
+          <div>· Checklists de documents par projet</div>
+          <div>· Statuts automatiques selon progression</div>
+          <div>· Emails automatiques a chaque etape</div>
+          <div>· Blocs Google Calendar par projet</div>
+          <div>· Archivage des projets termines</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="background:white;border:1px solid #e0d9d3;border-radius:10px;overflow:hidden;">
+      <div onclick="toggleBloc('b6')" style="padding:12px 14px;display:flex;align-items:center;gap:10px;cursor:pointer;">
+        <span style="width:22px;height:22px;border-radius:50%;background:#fff4e9;border:1px solid #e0d9d3;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:500;color:#888;flex-shrink:0;">6</span>
+        <span style="font-size:13px;font-weight:500;color:#2b2b2b;flex:1;">Facturation</span>
+        <span style="font-size:10px;background:#d4edda;color:#155724;padding:2px 8px;border-radius:4px;">Base</span>
+        <span id="arr-b6" style="font-size:11px;color:#aaa;">▶</span>
+      </div>
+      <div id="b6" style="display:none;padding:0 14px 13px;border-top:1px solid #f0ebe5;">
+        <div style="font-size:12px;color:#666;line-height:1.9;margin-top:10px;">
+          <div>· Creation de factures PDF</div>
+          <div>· Envoi par email depuis la plateforme</div>
+          <div>· Statuts : Brouillon → Envoyee → Payee → En retard</div>
+          <div>· Rappels automatiques impayes — J+7, J+14, J+30</div>
+          <div>· Archivage Drive par client</div>
+          <div>· Dashboard financier mensuel</div>
+          <div>· Export annuel pour comptable (CSV / PDF)</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- FORFAIT BASE+ -->
+<div id="forfait-baseplus" style="display:none;">
+  <div style="background:#cce5ff;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:12px;color:#004085;"><strong>Tout le forfait Base 40$ est inclus</strong> + module inventaire complet pour artisans, commerces et createurs qui gerent du stock.</div>
+  <div style="display:flex;flex-direction:column;gap:8px;">
+
+    <div style="background:white;border:1px solid #e0d9d3;border-radius:10px;overflow:hidden;">
+      <div onclick="toggleBloc('i1')" style="padding:12px 14px;display:flex;align-items:center;gap:10px;cursor:pointer;">
+        <span style="width:22px;height:22px;border-radius:50%;background:#fff4e9;border:1px solid #e0d9d3;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:500;color:#888;flex-shrink:0;">1</span>
+        <span style="font-size:13px;font-weight:500;color:#2b2b2b;flex:1;">Inventaire produits finis</span>
+        <span style="font-size:10px;background:#d4edda;color:#155724;padding:2px 8px;border-radius:4px;">Base</span>
+        <span id="arr-i1" style="font-size:11px;color:#aaa;">▶</span>
+      </div>
+      <div id="i1" style="display:none;padding:0 14px 13px;border-top:1px solid #f0ebe5;">
+        <p style="font-size:12px;color:#666;margin:10px 0 8px;line-height:1.6;">Ce que tu vends ou livres au client final. Chaque article a un SKU, un nom, une quantite en stock et un seuil d'alerte.</p>
+        <div style="font-size:12px;color:#666;line-height:1.9;">
+          <div>· Catalogue produits finis avec SKU</div>
+          <div>· Quantite en stock en temps reel</div>
+          <div>· Seuil d'alerte configurable par produit</div>
+          <div>· Email automatique quand stock sous le seuil</div>
+          <div>· Historique des mouvements (entrees / sorties)</div>
+          <div>· Dashboard : ruptures, surplus, tendances</div>
+          <div>· Export CSV + rapport mensuel Drive</div>
+        </div>
+        <div style="background:#fff4e9;border-radius:6px;padding:8px 12px;margin-top:10px;font-size:11px;color:#888;">
+          <strong style="color:#2b2b2b;">Exemple :</strong> Bougie lavande 200ml · Stock 48 unites · Seuil 10 → Alerte a 9 unites
+        </div>
+      </div>
+    </div>
+
+    <div style="background:white;border:1px solid #e0d9d3;border-radius:10px;overflow:hidden;">
+      <div onclick="toggleBloc('i2')" style="padding:12px 14px;display:flex;align-items:center;gap:10px;cursor:pointer;">
+        <span style="width:22px;height:22px;border-radius:50%;background:#fff4e9;border:1px solid #e0d9d3;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:500;color:#888;flex-shrink:0;">2</span>
+        <span style="font-size:13px;font-weight:500;color:#2b2b2b;flex:1;">Inventaire matieres premieres</span>
+        <span style="font-size:10px;background:#d4edda;color:#155724;padding:2px 8px;border-radius:4px;">Base</span>
+        <span id="arr-i2" style="font-size:11px;color:#aaa;">▶</span>
+      </div>
+      <div id="i2" style="display:none;padding:0 14px 13px;border-top:1px solid #f0ebe5;">
+        <p style="font-size:12px;color:#666;margin:10px 0 8px;line-height:1.6;">Les composantes qui servent a fabriquer tes produits. Meme logique que les produits finis — SKU, stock, seuil, alertes — dans une categorie separee.</p>
+        <div style="font-size:12px;color:#666;line-height:1.9;">
+          <div>· Catalogue matieres premieres avec SKU</div>
+          <div>· Unites de mesure flexibles (g, ml, unite, m, etc.)</div>
+          <div>· Quantite en stock en temps reel</div>
+          <div>· Seuil d'alerte configurable par matiere</div>
+          <div>· Historique des consommations</div>
+        </div>
+        <div style="background:#fff4e9;border-radius:6px;padding:8px 12px;margin-top:10px;font-size:11px;color:#888;">
+          <strong style="color:#2b2b2b;">Exemple :</strong> Cire de soja · Meches coton · Huile essentielle lavande — chacune suivie separement
+        </div>
+      </div>
+    </div>
+
+    <div style="background:white;border:1px solid #e0d9d3;border-radius:10px;overflow:hidden;">
+      <div onclick="toggleBloc('i3')" style="padding:12px 14px;display:flex;align-items:center;gap:10px;cursor:pointer;">
+        <span style="width:22px;height:22px;border-radius:50%;background:#fff4e9;border:1px solid #e0d9d3;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:500;color:#888;flex-shrink:0;">3</span>
+        <span style="font-size:13px;font-weight:500;color:#2b2b2b;flex:1;">Recettes et assemblage</span>
+        <span style="font-size:10px;background:#d4edda;color:#155724;padding:2px 8px;border-radius:4px;">Base</span>
+        <span id="arr-i3" style="font-size:11px;color:#aaa;">▶</span>
+      </div>
+      <div id="i3" style="display:none;padding:0 14px 13px;border-top:1px solid #f0ebe5;">
+        <p style="font-size:12px;color:#666;margin:10px 0 8px;line-height:1.6;">Tu definis une recette une seule fois. Quand tu enregistres une production, les matieres sont deduites automatiquement et les produits finis entrent en stock.</p>
+        <div style="font-size:12px;color:#666;line-height:1.9;">
+          <div>· Creation de recettes par produit fini</div>
+          <div>· Association matieres premieres + quantites</div>
+          <div>· Enregistrement d'une production en X unites</div>
+          <div>· Deduction automatique des matieres consommees</div>
+          <div>· Ajout automatique au stock produit fini</div>
+          <div>· Alerte si matieres insuffisantes avant de produire</div>
+        </div>
+        <div style="background:#fff4e9;border-radius:6px;padding:8px 12px;margin-top:10px;font-size:11px;color:#888;">
+          <strong style="color:#2b2b2b;">Exemple :</strong> 180g cire + 1 meche + 20ml huile lavande → 1 bougie en stock
+        </div>
+      </div>
+    </div>
+
+    <div style="background:white;border:1px solid #e0d9d3;border-radius:10px;overflow:hidden;">
+      <div onclick="toggleBloc('i4')" style="padding:12px 14px;display:flex;align-items:center;gap:10px;cursor:pointer;">
+        <span style="width:22px;height:22px;border-radius:50%;background:#fff4e9;border:1px solid #e0d9d3;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:500;color:#888;flex-shrink:0;">4</span>
+        <span style="font-size:13px;font-weight:500;color:#2b2b2b;flex:1;">Reception fournisseur</span>
+        <span style="font-size:10px;background:#d4edda;color:#155724;padding:2px 8px;border-radius:4px;">Base</span>
+        <span id="arr-i4" style="font-size:11px;color:#aaa;">▶</span>
+      </div>
+      <div id="i4" style="display:none;padding:0 14px 13px;border-top:1px solid #f0ebe5;">
+        <p style="font-size:12px;color:#666;margin:10px 0 8px;line-height:1.6;">Quand tu recois une livraison, tu enregistres la reception en quelques secondes. Le stock se met a jour automatiquement. Simple — pas de bons de commande complexes.</p>
+        <div style="font-size:12px;color:#666;line-height:1.9;">
+          <div>· Enregistrement rapide d'une reception (matiere + quantite)</div>
+          <div>· Mise a jour automatique du stock</div>
+          <div>· Fiche fournisseur simple (nom, contact)</div>
+          <div>· Historique des receptions par matiere</div>
+        </div>
+        <div style="background:#fff4e9;border-radius:6px;padding:8px 12px;margin-top:10px;font-size:11px;color:#888;">
+          <strong style="color:#2b2b2b;">Exemple :</strong> Recu 5kg cire de soja — Fournisseur Nature Wax Co. → Stock +5000g
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- FORFAIT PREMIUM -->
+<div id="forfait-premium" style="display:none;">
+  <div style="background:#fff3cd;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:12px;color:#856404;"><strong>Tout le forfait Base 40$ est inclus</strong> — oriente specifiquement vers le courtage immobilier. Mandats, workflow notaire, CRM prospects acheteurs.</div>
+  <div style="display:flex;flex-direction:column;gap:8px;">
+
+    <div style="background:white;border:1px solid #e0d9d3;border-radius:10px;overflow:hidden;">
+      <div onclick="toggleBloc('p1')" style="padding:12px 14px;display:flex;align-items:center;gap:10px;cursor:pointer;">
+        <span style="width:22px;height:22px;border-radius:50%;background:#fff4e9;border:1px solid #e0d9d3;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:500;color:#888;flex-shrink:0;">1</span>
+        <span style="font-size:13px;font-weight:500;color:#2b2b2b;flex:1;">Gestion des mandats</span>
+        <span style="font-size:10px;background:#d4edda;color:#155724;padding:2px 8px;border-radius:4px;">Base construite</span>
+        <span id="arr-p1" style="font-size:11px;color:#aaa;">▶</span>
+      </div>
+      <div id="p1" style="display:none;padding:0 14px 13px;border-top:1px solid #f0ebe5;">
+        <div style="font-size:12px;color:#666;line-height:1.9;margin-top:10px;">
+          <div>· Creation d'un mandat par propriete</div>
+          <div>· Adresse complete de la propriete</div>
+          <div>· Type de mandat — vente ou achat</div>
+          <div>· Prix demande / prix offert</div>
+          <div>· Client assigne au mandat</div>
+          <div>· Dossier Drive auto par propriete + sous-dossiers</div>
+          <div>· Archivage du mandat a la fermeture</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="background:white;border:1px solid #e0d9d3;border-radius:10px;overflow:hidden;">
+      <div onclick="toggleBloc('p2')" style="padding:12px 14px;display:flex;align-items:center;gap:10px;cursor:pointer;">
+        <span style="width:22px;height:22px;border-radius:50%;background:#fff4e9;border:1px solid #e0d9d3;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:500;color:#888;flex-shrink:0;">2</span>
+        <span style="font-size:13px;font-weight:500;color:#2b2b2b;flex:1;">Workflow de progression du mandat</span>
+        <span style="font-size:10px;background:#d4edda;color:#155724;padding:2px 8px;border-radius:4px;">Base construite</span>
+        <span id="arr-p2" style="font-size:11px;color:#aaa;">▶</span>
+      </div>
+      <div id="p2" style="display:none;padding:0 14px 13px;border-top:1px solid #f0ebe5;">
+        <div style="font-size:12px;color:#666;line-height:1.9;margin-top:10px;">
+          <div>· Documents a fournir → email auto au client</div>
+          <div>· Documents recus → statut automatique</div>
+          <div>· Propriete mise en marche → Calendar auto</div>
+          <div>· Offre recue / en negociation → email client</div>
+          <div>· Offre acceptee — chez le notaire → checklist notaire</div>
+          <div>· Vendu — dossier ferme → archivage + facture auto</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="background:white;border:1px solid #e0d9d3;border-radius:10px;overflow:hidden;">
+      <div onclick="toggleBloc('p3')" style="padding:12px 14px;display:flex;align-items:center;gap:10px;cursor:pointer;">
+        <span style="width:22px;height:22px;border-radius:50%;background:#fff4e9;border:1px solid #e0d9d3;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:500;color:#888;flex-shrink:0;">3</span>
+        <span style="font-size:13px;font-weight:500;color:#2b2b2b;flex:1;">Checklist documents courtier et client</span>
+        <span style="font-size:10px;background:#d4edda;color:#155724;padding:2px 8px;border-radius:4px;">Base construite</span>
+        <span id="arr-p3" style="font-size:11px;color:#aaa;">▶</span>
+      </div>
+      <div id="p3" style="display:none;padding:0 14px 13px;border-top:1px solid #f0ebe5;">
+        <div style="font-size:12px;color:#666;line-height:1.9;margin-top:10px;">
+          <div>· Modele de checklist immobilier pre-rempli</div>
+          <div>· Chaque item indique : courtier ou client</div>
+          <div>· Client uploade ses documents dans son espace</div>
+          <div>· Courtier uploade les siens depuis son tableau de bord</div>
+          <div>· Fichiers vont automatiquement dans le bon sous-dossier Drive</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="background:white;border:1px solid #e0d9d3;border-radius:10px;overflow:hidden;">
+      <div onclick="toggleBloc('p4')" style="padding:12px 14px;display:flex;align-items:center;gap:10px;cursor:pointer;">
+        <span style="width:22px;height:22px;border-radius:50%;background:#fff4e9;border:1px solid #e0d9d3;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:500;color:#888;flex-shrink:0;">4</span>
+        <span style="font-size:13px;font-weight:500;color:#2b2b2b;flex:1;">Blocs Calendar automatiques</span>
+        <span style="font-size:10px;background:#d4edda;color:#155724;padding:2px 8px;border-radius:4px;">Base construite</span>
+        <span id="arr-p4" style="font-size:11px;color:#aaa;">▶</span>
+      </div>
+      <div id="p4" style="display:none;padding:0 14px 13px;border-top:1px solid #f0ebe5;">
+        <div style="font-size:12px;color:#666;line-height:1.9;margin-top:10px;">
+          <div>· Seance photo — bloc Calendar mardi ou jeudi</div>
+          <div>· Visite de la propriete — bloc selon disponibilite</div>
+          <div>· Inspection — bloc avec delai 48h</div>
+          <div>· Date de livraison estimee calculee automatiquement</div>
+          <div>· Email au client avec la date estimee</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="background:white;border:1px solid #e0d9d3;border-radius:10px;overflow:hidden;">
+      <div onclick="toggleBloc('p5')" style="padding:12px 14px;display:flex;align-items:center;gap:10px;cursor:pointer;">
+        <span style="width:22px;height:22px;border-radius:50%;background:#fff4e9;border:1px solid #e0d9d3;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:500;color:#888;flex-shrink:0;">5</span>
+        <span style="font-size:13px;font-weight:500;color:#2b2b2b;flex:1;">CRM acheteurs prospects</span>
+        <span style="font-size:10px;background:#cce5ff;color:#004085;padding:2px 8px;border-radius:4px;">A construire</span>
+        <span id="arr-p5" style="font-size:11px;color:#aaa;">▶</span>
+      </div>
+      <div id="p5" style="display:none;padding:0 14px 13px;border-top:1px solid #f0ebe5;">
+        <div style="font-size:12px;color:#666;line-height:1.9;margin-top:10px;">
+          <div>· Fiche prospect — nom, contact, budget, secteur</div>
+          <div>· Temperature : Chaud / Tiede / Froid</div>
+          <div>· Notes libres + tables custom</div>
+          <div>· Rappel automatique de suivi configurable</div>
+          <div>· Conversion prospect → client quand mandat cree</div>
+          <div>· Mailing cible aux prospects</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="background:white;border:1px solid #e0d9d3;border-radius:10px;overflow:hidden;">
+      <div onclick="toggleBloc('p6')" style="padding:12px 14px;display:flex;align-items:center;gap:10px;cursor:pointer;">
+        <span style="width:22px;height:22px;border-radius:50%;background:#fff4e9;border:1px solid #e0d9d3;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:500;color:#888;flex-shrink:0;">6</span>
+        <span style="font-size:13px;font-weight:500;color:#2b2b2b;flex:1;">Facturation de commission</span>
+        <span style="font-size:10px;background:#cce5ff;color:#004085;padding:2px 8px;border-radius:4px;">A adapter</span>
+        <span id="arr-p6" style="font-size:11px;color:#aaa;">▶</span>
+      </div>
+      <div id="p6" style="display:none;padding:0 14px 13px;border-top:1px solid #f0ebe5;">
+        <div style="font-size:12px;color:#666;line-height:1.9;margin-top:10px;">
+          <div>· Facture de commission generee a la fermeture</div>
+          <div>· Prix de vente + % commission = montant calcule auto</div>
+          <div>· PDF au nom du courtier, envoye par email</div>
+          <div>· Archive dans le dossier Drive du mandat</div>
+          <div>· Historique des commissions — dashboard annuel</div>
+        </div>
+        <div style="background:#fff4e9;border-radius:6px;padding:8px 12px;margin-top:10px;font-size:11px;color:#888;">
+          <strong style="color:#2b2b2b;">Exemple :</strong> Vendu 385 000$ x 5% = 19 250$ → Facture PDF generee
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- PRINCIPES DE CONCEPTION -->
+<p style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#aaa;margin:2rem 0 10px;">Principes de conception</p>
+<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:1.5rem;">
+
+  <div style="background:white;border:1px solid #e0d9d3;border-radius:10px;padding:13px 14px;">
+    <div style="font-size:13px;font-weight:500;color:#2b2b2b;margin-bottom:6px;">1 — Zero jargon technique</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+      <div style="background:#fdecea;border-radius:6px;padding:8px 10px;"><div style="font-size:10px;color:#c0321a;font-weight:500;margin-bottom:3px;">JAMAIS</div><div style="font-size:11px;color:#2b2b2b;">Segment · CRM · Template ID · Webhook · SMTP · Entite</div></div>
+      <div style="background:#d4edda;border-radius:6px;padding:8px 10px;"><div style="font-size:10px;color:#155724;font-weight:500;margin-bottom:3px;">TOUJOURS</div><div style="font-size:11px;color:#2b2b2b;">Mes clientes · Ma facture · Envoyer un email · Mon rendez-vous</div></div>
+    </div>
+  </div>
+
+  <div style="background:white;border:1px solid #e0d9d3;border-radius:10px;padding:13px 14px;">
+    <div style="font-size:13px;font-weight:500;color:#2b2b2b;margin-bottom:6px;">2 — Un bouton = une action</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+      <div style="background:#fdecea;border-radius:6px;padding:8px 10px;"><div style="font-size:10px;color:#c0321a;font-weight:500;margin-bottom:3px;">JAMAIS</div><div style="font-size:11px;color:#2b2b2b;">Parametres → Campagnes → Nouveau → Configurer → Apercu → Confirmer</div></div>
+      <div style="background:#d4edda;border-radius:6px;padding:8px 10px;"><div style="font-size:10px;color:#155724;font-weight:500;margin-bottom:3px;">TOUJOURS</div><div style="font-size:11px;color:#2b2b2b;">Bouton "Envoyer une promo" → 2 champs → Envoyer</div></div>
+    </div>
+  </div>
+
+  <div style="background:white;border:1px solid #e0d9d3;border-radius:10px;padding:13px 14px;">
+    <div style="font-size:13px;font-weight:500;color:#2b2b2b;margin-bottom:6px;">3 — Les erreurs s'expliquent en francais simple</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+      <div style="background:#fdecea;border-radius:6px;padding:8px 10px;"><div style="font-size:10px;color:#c0321a;font-weight:500;margin-bottom:3px;">JAMAIS</div><div style="font-size:11px;color:#2b2b2b;">Error 500 · SMTP connection refused · Invalid token</div></div>
+      <div style="background:#d4edda;border-radius:6px;padding:8px 10px;"><div style="font-size:10px;color:#155724;font-weight:500;margin-bottom:3px;">TOUJOURS</div><div style="font-size:11px;color:#2b2b2b;">L'email n'a pas pu etre envoye. Verifiez votre connexion et reessayez.</div></div>
+    </div>
+  </div>
+
+  <div style="background:white;border:1px solid #e0d9d3;border-radius:10px;padding:13px 14px;">
+    <div style="font-size:13px;font-weight:500;color:#2b2b2b;margin-bottom:6px;">4 — Defaults intelligents — elle ne configure rien</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+      <div style="background:#fdecea;border-radius:6px;padding:8px 10px;"><div style="font-size:10px;color:#c0321a;font-weight:500;margin-bottom:3px;">JAMAIS</div><div style="font-size:11px;color:#2b2b2b;">Configurer les delais de rappel avant de commencer</div></div>
+      <div style="background:#d4edda;border-radius:6px;padding:8px 10px;"><div style="font-size:10px;color:#155724;font-weight:500;margin-bottom:3px;">TOUJOURS</div><div style="font-size:11px;color:#2b2b2b;">Rappel a J+7 par defaut — elle peut changer si elle veut</div></div>
+    </div>
+  </div>
+
+  <div style="background:white;border:1px solid #e0d9d3;border-radius:10px;padding:13px 14px;">
+    <div style="font-size:13px;font-weight:500;color:#2b2b2b;margin-bottom:6px;">5 — Mobile d'abord</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+      <div style="background:#fdecea;border-radius:6px;padding:8px 10px;"><div style="font-size:10px;color:#c0321a;font-weight:500;margin-bottom:3px;">JAMAIS</div><div style="font-size:11px;color:#2b2b2b;">Interface desktop adaptee au mobile en dernier</div></div>
+      <div style="background:#d4edda;border-radius:6px;padding:8px 10px;"><div style="font-size:10px;color:#155724;font-weight:500;margin-bottom:3px;">TOUJOURS</div><div style="font-size:11px;color:#2b2b2b;">Concu mobile → adapte desktop. Gros boutons, texte lisible</div></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+function showForfait(id) {
+  document.getElementById("forfait-base").style.display = "none";
+  document.getElementById("forfait-baseplus").style.display = "none";
+  document.getElementById("forfait-premium").style.display = "none";
+  document.getElementById("forfait-" + id).style.display = "block";
+  var btns = ["btn-base", "btn-baseplus", "btn-premium"];
+  var map = {"base": "btn-base", "baseplus": "btn-baseplus", "premium": "btn-premium"};
+  var colors = {"base": "#2ecc71", "baseplus": "#3498db", "premium": "#e67e22"};
+  var bgs = {"base": "#d4edda", "baseplus": "#cce5ff", "premium": "#fff3cd"};
+  var texts = {"base": "#155724", "baseplus": "#004085", "premium": "#856404"};
+  btns.forEach(function(b) {
+    var el = document.getElementById(b);
+    el.style.border = "1px solid #e0d9d3";
+    el.style.background = "white";
+    el.style.color = "#2b2b2b";
+  });
+  var active = document.getElementById(map[id]);
+  active.style.border = "2px solid " + colors[id];
+  active.style.background = bgs[id];
+  active.style.color = texts[id];
+}
+function toggleBloc(id) {
+  var el = document.getElementById(id);
+  var arr = document.getElementById("arr-" + id);
+  if (el.style.display === "none") {
+    el.style.display = "block";
+    arr.style.transform = "rotate(90deg)";
+  } else {
+    el.style.display = "none";
+    arr.style.transform = "rotate(0deg)";
+  }
+}
+</script>
+
+<p style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#aaa;margin:2rem 0 10px;">Phases de production</p>
+
+<div id="phases-tracker">
+
+<!-- PHASE 0 -->
+<div class="phase-bloc" id="phase-0">
+  <div onclick="togglePhase(0)" style="display:flex;align-items:center;gap:12px;padding:14px 16px;background:white;border:1px solid #e0d9d3;border-radius:12px;cursor:pointer;margin-bottom:4px;" id="phase-0-header">
+    <div id="phase-0-dot" style="width:12px;height:12px;border-radius:50%;background:#2ecc71;flex-shrink:0;"></div>
+    <div style="flex:1;">
+      <div style="font-size:13px;font-weight:500;color:#2b2b2b;">Phase 0 — Fondation</div>
+      <div style="font-size:11px;color:#888;margin-top:2px;">Octobre 2025 → Fin mars 2026</div>
+    </div>
+    <div id="phase-0-badge" style="font-size:11px;padding:3px 10px;border-radius:20px;background:#d4edda;color:#155724;font-weight:500;">Completee</div>
+    <div id="phase-0-progress" style="font-size:11px;color:#aaa;min-width:40px;text-align:right;"></div>
+    <span id="arr-phase-0" style="font-size:11px;color:#aaa;">▶</span>
+  </div>
+  <div id="phase-0-body" style="display:none;background:white;border:1px solid #e0d9d3;border-top:none;border-radius:0 0 12px 12px;padding:12px 16px;margin-bottom:8px;">
+    <div id="todos-0" style="display:flex;flex-direction:column;gap:6px;">
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:7px 10px;border-radius:8px;background:#f9f6f2;">
+        <input type="checkbox" data-phase="0" onchange="saveTodos(0)" style="margin-top:2px;flex-shrink:0;" checked>
+        <span style="font-size:12px;color:#2b2b2b;line-height:1.5;">Infrastructure CocktailOS — Docker, Gunicorn, Nginx, SSL Let's Encrypt</span>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:7px 10px;border-radius:8px;background:#f9f6f2;">
+        <input type="checkbox" data-phase="0" onchange="saveTodos(0)" style="margin-top:2px;flex-shrink:0;" checked>
+        <span style="font-size:12px;color:#2b2b2b;line-height:1.5;">Base de donnees SQLite — schema complet, WAL mode</span>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:7px 10px;border-radius:8px;background:#f9f6f2;">
+        <input type="checkbox" data-phase="0" onchange="saveTodos(0)" style="margin-top:2px;flex-shrink:0;" checked>
+        <span style="font-size:12px;color:#2b2b2b;line-height:1.5;">Authentification — login email/password + Google OAuth</span>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:7px 10px;border-radius:8px;background:#f9f6f2;">
+        <input type="checkbox" data-phase="0" onchange="saveTodos(0)" style="margin-top:2px;flex-shrink:0;" checked>
+        <span style="font-size:12px;color:#2b2b2b;line-height:1.5;">Confirmation email + reset mot de passe</span>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:7px 10px;border-radius:8px;background:#f9f6f2;">
+        <input type="checkbox" data-phase="0" onchange="saveTodos(0)" style="margin-top:2px;flex-shrink:0;" checked>
+        <span style="font-size:12px;color:#2b2b2b;line-height:1.5;">Gestion clients — inscription, profil, fuzzy match entreprise (rapidfuzz 85%)</span>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:7px 10px;border-radius:8px;background:#f9f6f2;">
+        <input type="checkbox" data-phase="0" onchange="saveTodos(0)" style="margin-top:2px;flex-shrink:0;" checked>
+        <span style="font-size:12px;color:#2b2b2b;line-height:1.5;">Gestion projets — creation, statuts automatiques, archivage</span>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:7px 10px;border-radius:8px;background:#f9f6f2;">
+        <input type="checkbox" data-phase="0" onchange="saveTodos(0)" style="margin-top:2px;flex-shrink:0;" checked>
+        <span style="font-size:12px;color:#2b2b2b;line-height:1.5;">Checklists — modeles par service, items, upload fichiers clients</span>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:7px 10px;border-radius:8px;background:#f9f6f2;">
+        <input type="checkbox" data-phase="0" onchange="saveTodos(0)" style="margin-top:2px;flex-shrink:0;" checked>
+        <span style="font-size:12px;color:#2b2b2b;line-height:1.5;">Google Drive — Service Account, Shared Drive, dossiers auto par client/projet</span>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:7px 10px;border-radius:8px;background:#f9f6f2;">
+        <input type="checkbox" data-phase="0" onchange="saveTodos(0)" style="margin-top:2px;flex-shrink:0;" checked>
+        <span style="font-size:12px;color:#2b2b2b;line-height:1.5;">Google Calendar — blocs de production automatiques par service</span>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:7px 10px;border-radius:8px;background:#f9f6f2;">
+        <input type="checkbox" data-phase="0" onchange="saveTodos(0)" style="margin-top:2px;flex-shrink:0;" checked>
+        <span style="font-size:12px;color:#2b2b2b;line-height:1.5;">Emails automatiques — 11 templates HTML branches Cocktail Media</span>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:7px 10px;border-radius:8px;background:#f9f6f2;">
+        <input type="checkbox" data-phase="0" onchange="saveTodos(0)" style="margin-top:2px;flex-shrink:0;" checked>
+        <span style="font-size:12px;color:#2b2b2b;line-height:1.5;">Dashboard admin complet — gestion clients, projets, services, checklists</span>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:7px 10px;border-radius:8px;background:#f9f6f2;">
+        <input type="checkbox" data-phase="0" onchange="saveTodos(0)" style="margin-top:2px;flex-shrink:0;" checked>
+        <span style="font-size:12px;color:#2b2b2b;line-height:1.5;">Dashboard client — liste projets, statuts, progress bar checklist</span>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:7px 10px;border-radius:8px;background:#f9f6f2;">
+        <input type="checkbox" data-phase="0" onchange="saveTodos(0)" style="margin-top:2px;flex-shrink:0;" checked>
+        <span style="font-size:12px;color:#2b2b2b;line-height:1.5;">Deploiement production — portail.cocktailmedia.ca</span>
+      </label>
+    </div>
+  </div>
+</div>
+
+<!-- PHASE 1 -->
+<div class="phase-bloc" id="phase-1">
+  <div onclick="togglePhase(1)" style="display:flex;align-items:center;gap:12px;padding:14px 16px;background:white;border:1px solid #e0d9d3;border-radius:12px;cursor:pointer;margin-bottom:4px;" id="phase-1-header">
+    <div id="phase-1-dot" style="width:12px;height:12px;border-radius:50%;background:#f39c12;flex-shrink:0;"></div>
+    <div style="flex:1;">
+      <div style="font-size:13px;font-weight:500;color:#2b2b2b;">Phase 1 — Tests et lancement</div>
+      <div style="font-size:11px;color:#888;margin-top:2px;">Fin mars → Debut avril 2026</div>
+    </div>
+    <div id="phase-1-badge" style="font-size:11px;padding:3px 10px;border-radius:20px;background:#fff3cd;color:#856404;font-weight:500;">En cours</div>
+    <div id="phase-1-progress" style="font-size:11px;color:#aaa;min-width:40px;text-align:right;"></div>
+    <span id="arr-phase-1" style="font-size:11px;color:#aaa;">▶</span>
+  </div>
+  <div id="phase-1-body" style="display:none;background:white;border:1px solid #e0d9d3;border-top:none;border-radius:0 0 12px 12px;padding:12px 16px;margin-bottom:8px;">
+    <div id="todos-1" style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;"></div>
+    <div style="display:flex;gap:8px;">
+      <input id="new-todo-1" type="text" placeholder="Ajouter une tache..." style="flex:1;padding:8px 12px;border:1px solid #e0d9d3;border-radius:8px;font-size:12px;color:#2b2b2b;background:white;outline:none;" onkeydown="if(event.key==='Enter')addTodo(1)">
+      <button onclick="addTodo(1)" style="padding:8px 14px;background:#2b2b2b;color:white;border:none;border-radius:8px;font-size:12px;cursor:pointer;">+ Ajouter</button>
+    </div>
+  </div>
+</div>
+
+<!-- PHASE 2 -->
+<div class="phase-bloc" id="phase-2">
+  <div onclick="togglePhase(2)" style="display:flex;align-items:center;gap:12px;padding:14px 16px;background:white;border:1px solid #e0d9d3;border-radius:12px;cursor:pointer;margin-bottom:4px;" id="phase-2-header">
+    <div id="phase-2-dot" style="width:12px;height:12px;border-radius:50%;background:#f39c12;flex-shrink:0;"></div>
+    <div style="flex:1;">
+      <div style="font-size:13px;font-weight:500;color:#2b2b2b;">Phase 2 — UX Polish</div>
+      <div style="font-size:11px;color:#888;margin-top:2px;">Reste avril → Premiere de mai 2026</div>
+    </div>
+    <div id="phase-2-badge" style="font-size:11px;padding:3px 10px;border-radius:20px;background:#fff3cd;color:#856404;font-weight:500;">En cours</div>
+    <div id="phase-2-progress" style="font-size:11px;color:#aaa;min-width:40px;text-align:right;"></div>
+    <span id="arr-phase-2" style="font-size:11px;color:#aaa;">▶</span>
+  </div>
+  <div id="phase-2-body" style="display:none;background:white;border:1px solid #e0d9d3;border-top:none;border-radius:0 0 12px 12px;padding:12px 16px;margin-bottom:8px;">
+    <div id="todos-2" style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;"></div>
+    <div style="display:flex;gap:8px;">
+      <input id="new-todo-2" type="text" placeholder="Ajouter une tache..." style="flex:1;padding:8px 12px;border:1px solid #e0d9d3;border-radius:8px;font-size:12px;color:#2b2b2b;background:white;outline:none;" onkeydown="if(event.key==='Enter')addTodo(2)">
+      <button onclick="addTodo(2)" style="padding:8px 14px;background:#2b2b2b;color:white;border:none;border-radius:8px;font-size:12px;cursor:pointer;">+ Ajouter</button>
+    </div>
+  </div>
+</div>
+
+<!-- PHASE 3 -->
+<div class="phase-bloc" id="phase-3">
+  <div onclick="togglePhase(3)" style="display:flex;align-items:center;gap:12px;padding:14px 16px;background:white;border:1px solid #e0d9d3;border-radius:12px;cursor:pointer;margin-bottom:4px;" id="phase-3-header">
+    <div id="phase-3-dot" style="width:12px;height:12px;border-radius:50%;background:#3498db;flex-shrink:0;"></div>
+    <div style="flex:1;">
+      <div style="font-size:13px;font-weight:500;color:#2b2b2b;">Phase 3 — Base 40$ + Premium 100$</div>
+      <div style="font-size:11px;color:#888;margin-top:2px;">Mi-mai → Juin 2026</div>
+    </div>
+    <div id="phase-3-badge" style="font-size:11px;padding:3px 10px;border-radius:20px;background:#cce5ff;color:#004085;font-weight:500;">Planifiee</div>
+    <div id="phase-3-progress" style="font-size:11px;color:#aaa;min-width:40px;text-align:right;"></div>
+    <span id="arr-phase-3" style="font-size:11px;color:#aaa;">▶</span>
+  </div>
+  <div id="phase-3-body" style="display:none;background:white;border:1px solid #e0d9d3;border-top:none;border-radius:0 0 12px 12px;padding:12px 16px;margin-bottom:8px;">
+    <div id="todos-3" style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;"></div>
+    <div style="display:flex;gap:8px;">
+      <input id="new-todo-3" type="text" placeholder="Ajouter une tache..." style="flex:1;padding:8px 12px;border:1px solid #e0d9d3;border-radius:8px;font-size:12px;color:#2b2b2b;background:white;outline:none;" onkeydown="if(event.key==='Enter')addTodo(3)">
+      <button onclick="addTodo(3)" style="padding:8px 14px;background:#2b2b2b;color:white;border:none;border-radius:8px;font-size:12px;cursor:pointer;">+ Ajouter</button>
+    </div>
+  </div>
+</div>
+
+<!-- PHASE 4 -->
+<div class="phase-bloc" id="phase-4">
+  <div onclick="togglePhase(4)" style="display:flex;align-items:center;gap:12px;padding:14px 16px;background:white;border:1px solid #e0d9d3;border-radius:12px;cursor:pointer;margin-bottom:4px;" id="phase-4-header">
+    <div id="phase-4-dot" style="width:12px;height:12px;border-radius:50%;background:#3498db;flex-shrink:0;"></div>
+    <div style="flex:1;">
+      <div style="font-size:13px;font-weight:500;color:#2b2b2b;">Phase 4 — Base+ 75$/mois</div>
+      <div style="font-size:11px;color:#888;margin-top:2px;">Juillet → Aout 2026</div>
+    </div>
+    <div id="phase-4-badge" style="font-size:11px;padding:3px 10px;border-radius:20px;background:#cce5ff;color:#004085;font-weight:500;">Planifiee</div>
+    <div id="phase-4-progress" style="font-size:11px;color:#aaa;min-width:40px;text-align:right;"></div>
+    <span id="arr-phase-4" style="font-size:11px;color:#aaa;">▶</span>
+  </div>
+  <div id="phase-4-body" style="display:none;background:white;border:1px solid #e0d9d3;border-top:none;border-radius:0 0 12px 12px;padding:12px 16px;margin-bottom:8px;">
+    <div id="todos-4" style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;"></div>
+    <div style="display:flex;gap:8px;">
+      <input id="new-todo-4" type="text" placeholder="Ajouter une tache..." style="flex:1;padding:8px 12px;border:1px solid #e0d9d3;border-radius:8px;font-size:12px;color:#2b2b2b;background:white;outline:none;" onkeydown="if(event.key==='Enter')addTodo(4)">
+      <button onclick="addTodo(4)" style="padding:8px 14px;background:#2b2b2b;color:white;border:none;border-radius:8px;font-size:12px;cursor:pointer;">+ Ajouter</button>
+    </div>
+  </div>
+</div>
+
+<!-- PHASE 5 -->
+<div class="phase-bloc" id="phase-5">
+  <div onclick="togglePhase(5)" style="display:flex;align-items:center;gap:12px;padding:14px 16px;background:white;border:1px solid #e0d9d3;border-radius:12px;cursor:pointer;margin-bottom:4px;" id="phase-5-header">
+    <div id="phase-5-dot" style="width:12px;height:12px;border-radius:50%;background:#c0321a;flex-shrink:0;"></div>
+    <div style="flex:1;">
+      <div style="font-size:13px;font-weight:500;color:#2b2b2b;">Phase 5 — Beta et Lancement</div>
+      <div style="font-size:11px;color:#888;margin-top:2px;">Septembre → Decembre 2026</div>
+    </div>
+    <div id="phase-5-badge" style="font-size:11px;padding:3px 10px;border-radius:20px;background:#fdecea;color:#c0321a;font-weight:500;">Objectif $</div>
+    <div id="phase-5-progress" style="font-size:11px;color:#aaa;min-width:40px;text-align:right;"></div>
+    <span id="arr-phase-5" style="font-size:11px;color:#aaa;">▶</span>
+  </div>
+  <div id="phase-5-body" style="display:none;background:white;border:1px solid #e0d9d3;border-top:none;border-radius:0 0 12px 12px;padding:12px 16px;margin-bottom:8px;">
+    <div id="todos-5" style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;"></div>
+    <div style="display:flex;gap:8px;">
+      <input id="new-todo-5" type="text" placeholder="Ajouter une tache..." style="flex:1;padding:8px 12px;border:1px solid #e0d9d3;border-radius:8px;font-size:12px;color:#2b2b2b;background:white;outline:none;" onkeydown="if(event.key==='Enter')addTodo(5)">
+      <button onclick="addTodo(5)" style="padding:8px 14px;background:#2b2b2b;color:white;border:none;border-radius:8px;font-size:12px;cursor:pointer;">+ Ajouter</button>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<script>
+var PHASE_COUNT = 6;
+
+function getKey(phase) { return "cocktailos_todos_phase_" + phase; }
+
+function loadTodos(phase) {
+  var raw = localStorage.getItem(getKey(phase));
+  return raw ? JSON.parse(raw) : [];
+}
+
+function saveTodosData(phase, todos) {
+  localStorage.setItem(getKey(phase), JSON.stringify(todos));
+  updatePhaseStatus(phase);
+}
+
+function renderTodos(phase) {
+  if (phase === 0) { updatePhaseStatus(0); return; }
+  var todos = loadTodos(phase);
+  var container = document.getElementById("todos-" + phase);
+  if (!container) return;
+  container.innerHTML = "";
+  if (todos.length === 0) {
+    container.innerHTML = "<div style=\"font-size:12px;color:#aaa;padding:8px 10px;font-style:italic;\">Aucune tache pour le moment — ajoutez-en ci-dessous.</div>";
+  } else {
+    todos.forEach(function(todo, idx) {
+      var row = document.createElement("label");
+      row.style.cssText = "display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:7px 10px;border-radius:8px;background:" + (todo.done ? "#f0faf4" : "#f9f6f2") + ";";
+      row.innerHTML = "<input type=\"checkbox\" style=\"margin-top:2px;flex-shrink:0;\" " + (todo.done ? "checked" : "") + " onchange=\"toggleTodo(" + phase + "," + idx + ")\"><span style=\"font-size:12px;color:#2b2b2b;line-height:1.5;flex:1;" + (todo.done ? "text-decoration:line-through;color:#aaa;" : "") + "\">" + todo.text + "</span><span onclick=\"event.preventDefault();deleteTodo(" + phase + "," + idx + ")\" style=\"font-size:11px;color:#ccc;cursor:pointer;padding:0 4px;flex-shrink:0;\" title=\"Supprimer\">✕</span>";
+      container.appendChild(row);
+    });
+  }
+  updatePhaseStatus(phase);
+}
+
+function addTodo(phase) {
+  var input = document.getElementById("new-todo-" + phase);
+  var text = input.value.trim();
+  if (!text) return;
+  var todos = loadTodos(phase);
+  todos.push({ text: text, done: false });
+  saveTodosData(phase, todos);
+  input.value = "";
+  renderTodos(phase);
+}
+
+function toggleTodo(phase, idx) {
+  var todos = loadTodos(phase);
+  todos[idx].done = !todos[idx].done;
+  saveTodosData(phase, todos);
+  renderTodos(phase);
+}
+
+function deleteTodo(phase, idx) {
+  var todos = loadTodos(phase);
+  todos.splice(idx, 1);
+  saveTodosData(phase, todos);
+  renderTodos(phase);
+}
+
+function saveTodos(phase) {
+  if (phase !== 0) return;
+  updatePhaseStatus(0);
+}
+
+function updatePhaseStatus(phase) {
+  var total, done;
+  if (phase === 0) {
+    var boxes = document.querySelectorAll("#todos-0 input[type=checkbox]");
+    total = boxes.length;
+    done = 0;
+    boxes.forEach(function(b) { if (b.checked) done++; });
+  } else {
+    var todos = loadTodos(phase);
+    total = todos.length;
+    done = todos.filter(function(t) { return t.done; }).length;
+  }
+  var badge = document.getElementById("phase-" + phase + "-badge");
+  var dot = document.getElementById("phase-" + phase + "-dot");
+  var progress = document.getElementById("phase-" + phase + "-progress");
+  if (progress) progress.textContent = total > 0 ? done + "/" + total : "";
+  if (total === 0) return;
+  if (done === total) {
+    if (badge) { badge.style.background = "#d4edda"; badge.style.color = "#155724"; badge.textContent = "Completee"; }
+    if (dot) dot.style.background = "#2ecc71";
+  } else if (done > 0) {
+    if (badge) { badge.style.background = "#fff3cd"; badge.style.color = "#856404"; badge.textContent = "En cours"; }
+    if (dot) dot.style.background = "#f39c12";
+  }
+}
+
+function togglePhase(phase) {
+  var body = document.getElementById("phase-" + phase + "-body");
+  var arr = document.getElementById("arr-phase-" + phase);
+  if (body.style.display === "none") {
+    body.style.display = "block";
+    if (arr) arr.style.transform = "rotate(90deg)";
+    if (phase !== 0) renderTodos(phase);
+  } else {
+    body.style.display = "none";
+    if (arr) arr.style.transform = "rotate(0deg)";
+  }
+}
+
+// Init
+for (var i = 1; i < PHASE_COUNT; i++) { updatePhaseStatus(i); }
+updatePhaseStatus(0);
+</script>
+<p style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#aaa;margin-bottom:10px;">Roadmap 2026</p>
+<div style="display:flex;flex-direction:column;">
+
+  <div style="display:flex;align-items:stretch;">
+    <div style="width:110px;flex-shrink:0;padding:14px 10px 14px 0;text-align:right;"><div style="font-size:12px;font-weight:500;color:#2b2b2b;">Avril</div><div style="font-size:10px;color:#aaa;">2026</div></div>
+    <div style="display:flex;flex-direction:column;align-items:center;width:24px;flex-shrink:0;"><div style="width:10px;height:10px;border-radius:50%;background:#2ecc71;margin-top:18px;flex-shrink:0;"></div><div style="width:1px;background:#e0d9d3;flex:1;"></div></div>
+    <div style="flex:1;background:white;border:1px solid #e0d9d3;border-radius:12px;padding:11px 14px;margin:8px 0 8px 10px;">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px;"><span style="font-size:11px;padding:2px 9px;border-radius:20px;font-weight:500;background:#d4edda;color:#155724;">En production</span><span style="font-size:13px;font-weight:500;color:#2b2b2b;">Portail Client Cocktail Media</span></div>
+      <div style="font-size:12px;color:#666;line-height:1.55;margin-bottom:7px;">Modules de base fonctionnels. UX polish et corrections mineures en cours.</div>
+      <div style="display:flex;flex-wrap:wrap;gap:5px;"><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">Projets</span><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">Drive</span><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">Calendar</span><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">Facturation</span><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">CRM</span><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">UX polish en cours</span></div>
+    </div>
+  </div>
+
+  <div style="display:flex;align-items:stretch;">
+    <div style="width:110px;flex-shrink:0;padding:14px 10px 14px 0;text-align:right;"><div style="font-size:12px;font-weight:500;color:#2b2b2b;">Mi-mai — Juin</div><div style="font-size:10px;color:#aaa;">2026</div></div>
+    <div style="display:flex;flex-direction:column;align-items:center;width:24px;flex-shrink:0;"><div style="width:10px;height:10px;border-radius:50%;background:#f39c12;margin-top:18px;flex-shrink:0;"></div><div style="width:1px;background:#e0d9d3;flex:1;"></div></div>
+    <div style="flex:1;background:white;border:2px solid #f39c12;border-radius:12px;padding:11px 14px;margin:8px 0 8px 10px;">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px;"><span style="font-size:11px;padding:2px 9px;border-radius:20px;font-weight:500;background:#fff3cd;color:#856404;">Prochain</span><span style="font-size:13px;font-weight:500;color:#2b2b2b;">Forfait Base 40$ + Premium 100$</span></div>
+      <div style="font-size:12px;color:#666;line-height:1.55;margin-bottom:7px;">Finalisation UX. Modules manquants du Base. Adaptation immobilier Premium. Multi-tenancy + Stripe.</div>
+      <div style="display:flex;flex-wrap:wrap;gap:5px;"><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">Tables custom</span><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">Mailing</span><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">Rappels auto</span><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">@cocktailos.ca</span><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">Mandats</span><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">Stripe</span><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">Multi-tenant</span></div>
+    </div>
+  </div>
+
+  <div style="display:flex;align-items:stretch;">
+    <div style="width:110px;flex-shrink:0;padding:14px 10px 14px 0;text-align:right;"><div style="font-size:12px;font-weight:500;color:#2b2b2b;">Juil — Aout</div><div style="font-size:10px;color:#aaa;">2026</div></div>
+    <div style="display:flex;flex-direction:column;align-items:center;width:24px;flex-shrink:0;"><div style="width:10px;height:10px;border-radius:50%;background:#3498db;margin-top:18px;flex-shrink:0;"></div><div style="width:1px;background:#e0d9d3;flex:1;"></div></div>
+    <div style="flex:1;background:white;border:1px solid #e0d9d3;border-radius:12px;padding:11px 14px;margin:8px 0 8px 10px;">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px;"><span style="font-size:11px;padding:2px 9px;border-radius:20px;font-weight:500;background:#cce5ff;color:#004085;">Planifie</span><span style="font-size:13px;font-weight:500;color:#2b2b2b;">Forfait Base+ 75$/mois</span></div>
+      <div style="font-size:12px;color:#666;line-height:1.55;margin-bottom:7px;">Module inventaire complet — produits finis, matieres premieres, recettes et assemblage, reception fournisseur.</div>
+      <div style="display:flex;flex-wrap:wrap;gap:5px;"><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">SKU / Catalogue</span><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">Recettes MP-fini</span><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">Alertes stock</span><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">Export CSV</span></div>
+    </div>
+  </div>
+
+  <div style="display:flex;align-items:stretch;">
+    <div style="width:110px;flex-shrink:0;padding:14px 10px 14px 0;text-align:right;"><div style="font-size:12px;font-weight:500;color:#2b2b2b;">Sept — Oct</div><div style="font-size:10px;color:#aaa;">2026</div></div>
+    <div style="display:flex;flex-direction:column;align-items:center;width:24px;flex-shrink:0;"><div style="width:10px;height:10px;border-radius:50%;background:#3498db;margin-top:18px;flex-shrink:0;"></div><div style="width:1px;background:#e0d9d3;flex:1;"></div></div>
+    <div style="flex:1;background:white;border:1px solid #e0d9d3;border-radius:12px;padding:11px 14px;margin:8px 0 8px 10px;">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px;"><span style="font-size:11px;padding:2px 9px;border-radius:20px;font-weight:500;background:#cce5ff;color:#004085;">Planifie</span><span style="font-size:13px;font-weight:500;color:#2b2b2b;">Beta fermee — Tests clients</span></div>
+      <div style="font-size:12px;color:#666;line-height:1.55;margin-bottom:7px;">5 a 10 clients dont Nathalie Cartier. Feedback UX, stabilisation, ajustements.</div>
+      <div style="display:flex;flex-wrap:wrap;gap:5px;"><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">Beta fermee</span><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">Nathalie Cartier</span><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">Feedback UX</span></div>
+    </div>
+  </div>
+
+  <div style="display:flex;align-items:stretch;">
+    <div style="width:110px;flex-shrink:0;padding:14px 10px 14px 0;text-align:right;"><div style="font-size:12px;font-weight:500;color:#2b2b2b;">Nov — Dec</div><div style="font-size:10px;color:#aaa;">2026</div></div>
+    <div style="display:flex;flex-direction:column;align-items:center;width:24px;flex-shrink:0;"><div style="width:10px;height:10px;border-radius:50%;background:#c0321a;margin-top:18px;flex-shrink:0;"></div></div>
+    <div style="flex:1;background:white;border:2px solid #c0321a;border-radius:12px;padding:11px 14px;margin:8px 0 8px 10px;">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px;"><span style="font-size:11px;padding:2px 9px;border-radius:20px;font-weight:500;background:#fdecea;color:#c0321a;">Objectif $</span><span style="font-size:13px;font-weight:500;color:#2b2b2b;">Premieres ventes + Recherche de financement</span></div>
+      <div style="font-size:12px;color:#666;line-height:1.55;margin-bottom:7px;">Premiers abonnements Stripe. Croissance organique. En parallele : approcher accelerateurs et investisseurs avec un MRR demontrable.</div>
+      <div style="display:flex;flex-wrap:wrap;gap:5px;"><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">Premiers abonnes</span><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">MRR demontrable</span><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">Accelerateurs QC</span><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">BDC / CDPQ</span><span style="font-size:10px;background:#fff4e9;color:#888;padding:2px 7px;border-radius:4px;">Angels</span></div>
+    </div>
+  </div>
+
+</div>
+
+<p style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#aaa;margin:1.5rem 0 10px;">Decisions techniques arretees</p>
+<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:1.5rem;">
+  <div style="background:white;border:1px solid #e0d9d3;border-radius:8px;padding:10px 14px;display:flex;gap:10px;"><span style="flex-shrink:0;">✉️</span><div><div style="font-size:12px;font-weight:500;color:#2b2b2b;margin-bottom:2px;">Mailing — Flask-Mail, tout dans la plateforme</div><div style="font-size:11px;color:#888;">Pas de Mailchimp. Envoi en batch. Pas de stats ouverture phase 1.</div></div></div>
+  <div style="background:white;border:1px solid #e0d9d3;border-radius:8px;padding:10px 14px;display:flex;gap:10px;"><span style="flex-shrink:0;">📮</span><div><div style="font-size:12px;font-weight:500;color:#2b2b2b;margin-bottom:2px;">Adresse brandee @cocktailos.ca + Reply-To client</div><div style="font-size:11px;color:#888;">Alias From personnalise. Reply-To vers vrai email du client. Zero configuration pour Nathalie.</div></div></div>
+  <div style="background:white;border:1px solid #e0d9d3;border-radius:8px;padding:10px 14px;display:flex;gap:10px;"><span style="flex-shrink:0;">🎨</span><div><div style="font-size:12px;font-weight:500;color:#2b2b2b;margin-bottom:2px;">100% brandable — fichier theme JSON</div><div style="font-size:11px;color:#888;">Couleurs, logo, nom, signature — tout change depuis un seul fichier.</div></div></div>
+  <div style="background:white;border:1px solid #e0d9d3;border-radius:8px;padding:10px 14px;display:flex;gap:10px;"><span style="flex-shrink:0;">👩</span><div><div style="font-size:12px;font-weight:500;color:#2b2b2b;margin-bottom:2px;">Simplicite absolue — test Nathalie</div><div style="font-size:11px;color:#888;">Zero jargon. Un bouton = une action. Si Nathalie comprend pas en 10 secondes, on simplifie.</div></div></div>
+  <div style="background:white;border:1px solid #e0d9d3;border-radius:8px;padding:10px 14px;display:flex;gap:10px;"><span style="flex-shrink:0;">🔒</span><div><div style="font-size:12px;font-weight:500;color:#2b2b2b;margin-bottom:2px;">Hors scope permanent — paie, DAS, comptabilite complexe</div><div style="font-size:11px;color:#888;">CocktailOS ne remplacera jamais QuickBooks. Ce n'est pas le marche vise.</div></div></div>
+</div>
+
+<p style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#aaa;margin-bottom:10px;">Comparaison des 3 forfaits</p>
+<div style="overflow-x:auto;">
+<table style="width:100%;border-collapse:collapse;font-size:12px;">
+  <thead>
+    <tr>
+      <th style="text-align:left;padding:10px;border-bottom:1px solid #e0d9d3;width:40%;"></th>
+      <th style="text-align:center;padding:10px;border-bottom:1px solid #e0d9d3;"><div>🧾 Base</div><div style="font-size:15px;font-weight:500;margin-top:3px;">40$/mois</div></th>
+      <th style="text-align:center;padding:10px;border-bottom:1px solid #e0d9d3;"><div>📦 Base+</div><div style="font-size:15px;font-weight:500;margin-top:3px;">75$/mois</div></th>
+      <th style="text-align:center;padding:10px;border-bottom:1px solid #e0d9d3;"><div>🏡 Premium</div><div style="font-size:15px;font-weight:500;margin-top:3px;">100$/mois</div></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td colspan="4" style="font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#aaa;background:#fff4e9;padding:5px 10px;">CRM et Clients</td></tr>
+    <tr><td style="padding:7px 10px;border-bottom:1px solid #f0ebe5;color:#666;">Fiche client + historique</td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td></tr>
+    <tr><td style="padding:7px 10px;border-bottom:1px solid #f0ebe5;color:#666;">Tags + segmentation</td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td></tr>
+    <tr><td style="padding:7px 10px;border-bottom:1px solid #f0ebe5;color:#666;">Notes et tables custom par metier</td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td></tr>
+    <tr><td style="padding:7px 10px;border-bottom:1px solid #f0ebe5;color:#666;">CRM prospects acheteurs</td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#ccc;">—</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#ccc;">—</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td></tr>
+    <tr><td colspan="4" style="font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#aaa;background:#fff4e9;padding:5px 10px;">Communication</td></tr>
+    <tr><td style="padding:7px 10px;border-bottom:1px solid #f0ebe5;color:#666;">Rappels automatiques configurables</td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td></tr>
+    <tr><td style="padding:7px 10px;border-bottom:1px solid #f0ebe5;color:#666;">Mailing promo base clients</td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td></tr>
+    <tr><td style="padding:7px 10px;border-bottom:1px solid #f0ebe5;color:#666;">Adresse @cocktailos.ca brandee</td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td></tr>
+    <tr><td style="padding:7px 10px;border-bottom:1px solid #f0ebe5;color:#666;">Emails auto par etape de projet</td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td></tr>
+    <tr><td colspan="4" style="font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#aaa;background:#fff4e9;padding:5px 10px;">Facturation</td></tr>
+    <tr><td style="padding:7px 10px;border-bottom:1px solid #f0ebe5;color:#666;">Factures PDF + envoi email</td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td></tr>
+    <tr><td style="padding:7px 10px;border-bottom:1px solid #f0ebe5;color:#666;">Rappels impayes automatiques</td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td></tr>
+    <tr><td style="padding:7px 10px;border-bottom:1px solid #f0ebe5;color:#666;">Export annuel pour comptable</td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td></tr>
+    <tr><td style="padding:7px 10px;border-bottom:1px solid #f0ebe5;color:#666;">Facturation de commission immo</td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#ccc;">—</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#ccc;">—</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td></tr>
+    <tr><td colspan="4" style="font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#aaa;background:#fff4e9;padding:5px 10px;">Projets et Automatisations</td></tr>
+    <tr><td style="padding:7px 10px;border-bottom:1px solid #f0ebe5;color:#666;">Projets + checklists + statuts auto</td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td></tr>
+    <tr><td style="padding:7px 10px;border-bottom:1px solid #f0ebe5;color:#666;">Drive auto par client</td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td></tr>
+    <tr><td style="padding:7px 10px;border-bottom:1px solid #f0ebe5;color:#666;">Google Calendar auto</td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td></tr>
+    <tr><td colspan="4" style="font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#aaa;background:#fff4e9;padding:5px 10px;">Module Inventaire — Base+ seulement</td></tr>
+    <tr><td style="padding:7px 10px;border-bottom:1px solid #f0ebe5;color:#666;">Produits finis (SKU, stock, alertes)</td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#ccc;">—</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#ccc;">—</span></td></tr>
+    <tr><td style="padding:7px 10px;border-bottom:1px solid #f0ebe5;color:#666;">Matieres premieres</td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#ccc;">—</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#ccc;">—</span></td></tr>
+    <tr><td style="padding:7px 10px;border-bottom:1px solid #f0ebe5;color:#666;">Recettes et assemblage MP vers fini</td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#ccc;">—</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#ccc;">—</span></td></tr>
+    <tr><td style="padding:7px 10px;border-bottom:1px solid #f0ebe5;color:#666;">Reception fournisseur simple</td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#ccc;">—</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#ccc;">—</span></td></tr>
+    <tr><td colspan="4" style="font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#aaa;background:#fff4e9;padding:5px 10px;">Module Immobilier — Premium seulement</td></tr>
+    <tr><td style="padding:7px 10px;border-bottom:1px solid #f0ebe5;color:#666;">Gestion mandats vente et achat</td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#ccc;">—</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#ccc;">—</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td></tr>
+    <tr><td style="padding:7px 10px;border-bottom:1px solid #f0ebe5;color:#666;">Workflow mandat complet</td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#ccc;">—</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#ccc;">—</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td></tr>
+    <tr><td style="padding:7px 10px;border-bottom:1px solid #f0ebe5;color:#666;">Checklist courtier et client</td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#ccc;">—</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#ccc;">—</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td></tr>
+    <tr><td style="padding:7px 10px;border-bottom:1px solid #f0ebe5;color:#666;">CRM prospects acheteurs</td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#ccc;">—</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#ccc;">—</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#2ecc71;font-size:15px;">✓</span></td></tr>
+    <tr><td colspan="4" style="font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:#aaa;background:#fff4e9;padding:5px 10px;">Hors scope — tous les forfaits</td></tr>
+    <tr><td style="padding:7px 10px;border-bottom:1px solid #f0ebe5;color:#666;">Gestion de la paie / DAS</td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#ccc;">—</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#ccc;">—</span></td><td style="text-align:center;border-bottom:1px solid #f0ebe5;"><span style="color:#ccc;">—</span></td></tr>
+    <tr><td style="padding:7px 10px;color:#666;">Comptabilite complexe / taxes</td><td style="text-align:center;"><span style="color:#ccc;">—</span></td><td style="text-align:center;"><span style="color:#ccc;">—</span></td><td style="text-align:center;"><span style="color:#ccc;">—</span></td></tr>
+  </tbody>
+</table>
+</div>
+
+</div>
+{% endblock %}

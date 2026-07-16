@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}Facture {{ facture['numero'] }}{% endblock %}
+{% block content %}
+
+<nav class="breadcrumbs">
+  <a href="{{ url_for('admin_dashboard') }}">Admin</a>
+  <span class="sep">›</span>
+  <span>Facture {{ facture['numero'] }}</span>
+</nav>
+
+<h1>Facture {{ facture['numero'] }}</h1>
+
+<div class="card">
+  <div class="card-header">
+    <div>
+      <span class="card-title">{{ client['nom_complet'] }}</span>
+      <span class="muted" style="font-size:.85rem;margin-left:.5rem;">{{ client['nom_entreprise'] or '' }}</span>
+    </div>
+    <div style="display:flex;gap:.5rem;align-items:center;">
+      {% if facture['statut'] == 'ouverte' %}
+        <span class="badge" style="background:#fff4e5;color:#b26a00;">Ouverte — {{ facture['periode_mois'] }}</span>
+      {% elif facture['statut'] == 'envoyee' %}
+        <span class="badge badge--warning">Envoyée</span>
+      {% elif facture['statut'] == 'payee' %}
+        <span class="badge badge--success">Payée</span>
+      {% endif %}
+    </div>
+  </div>
+
+  {# ── Lignes existantes ── #}
+  <table style="margin-bottom:var(--space-3);">
+    <thead>
+      <tr>
+        <th>Description</th>
+        <th>Date</th>
+        <th>Localisation</th>
+        <th>Qté</th>
+        <th>Prix unitaire</th>
+        <th>Total</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for ligne in lignes %}
+      <tr>
+        <td>
+          <form action="{{ url_for('modifier_ligne_facture', ligne_id=ligne['id']) }}" method="post" style="display:flex;gap:.35rem;align-items:center;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="text" name="description" value="{{ ligne['description'] }}" style="width:180px;padding:.3rem .5rem;font-size:.85rem;">
+            <input type="number" name="prix_unitaire" value="{{ ligne['prix_unitaire'] }}" step="0.01" min="0" style="width:80px;padding:.3rem .5rem;font-size:.85rem;">
+            <input type="number" name="quantite" value="{{ ligne['quantite'] }}" min="1" style="width:50px;padding:.3rem .5rem;font-size:.85rem;">
+            <button type="submit" class="btn btn-secondary" style="min-width:auto;padding:.3rem .6rem;font-size:.8rem;">✓</button>
+          </form>
+        </td>
+        <td style="font-size:.85rem;">{{ ligne['date_service'] or '—' }}</td>
+        <td style="font-size:.85rem;">{{ ligne['localisation'] or '—' }}</td>
+        <td style="font-size:.85rem;">{{ ligne['quantite'] }}</td>
+        <td style="font-size:.85rem;">{{ "%.2f"|format(ligne['prix_unitaire']) }} $</td>
+        <td style="font-size:.85rem;font-weight:700;">{{ "%.2f"|format(ligne['total_ligne']) }} $</td>
+        <td>
+          <form action="{{ url_for('supprimer_ligne_facture', ligne_id=ligne['id']) }}" method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn" style="min-width:auto;padding:.3rem .6rem;font-size:.8rem;background:#c62828;"
+              onclick="return confirm('Supprimer cette ligne ?');">✕</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {# ── Totaux ── #}
+  <div style="text-align:right;padding:.5rem 0;border-top:1px solid var(--couleur-bordure);margin-bottom:var(--space-3);">
+    <span style="font-size:.9rem;color:#666;">Sous-total : <strong>{{ "%.2f"|format(facture['sous_total']) }} $CA</strong></span><br>
+    <span style="font-size:.9rem;color:#666;">TPS + TVQ : <strong>{{ "%.2f"|format((facture['tps'] or 0) + (facture['tvq'] or 0)) }} $CA</strong></span><br>
+    <span style="font-size:1.1rem;">Total TTC : <strong style="color:var(--couleur-principale);">{{ "%.2f"|format(facture['total']) }} $CA</strong></span>
+  </div>
+
+  {# ── Ajouter une ligne ── #}
+  <div style="border-top:2px solid var(--couleur-principale);padding-top:var(--space-3);">
+    <h3 style="font-size:1rem;margin-bottom:var(--space-2);">Ajouter une ligne</h3>
+    <form action="{{ url_for('ajouter_ligne_facture_admin', facture_id=facture['id']) }}" method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Description</label>
+          <input type="text" name="description" placeholder="Ex: Photo immobilière" required>
+        </div>
+        <div class="form-group">
+          <label>Date service</label>
+          <input type="date" name="date_service" value="{{ today }}">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Localisation (optionnel)</label>
+          <input type="text" name="localisation" placeholder="Adresse ou ville">
+        </div>
+        <div class="form-group">
+          <label>Prix unitaire ($CA)</label>
+          <input type="number" name="prix_unitaire" step="0.01" min="0" value="0" required>
+        </div>
+        <div class="form-group">
+          <label>Quantité</label>
+          <input type="number" name="quantite" min="1" value="1" required>
+        </div>
+      </div>
+      <button type="submit">Ajouter la ligne</button>
+    </form>
+  </div>
+
+  {# ── Actions ── #}
+  <div style="display:flex;gap:.75rem;margin-top:var(--space-4);border-top:1px solid var(--couleur-bordure);padding-top:var(--space-3);">
+    {% if facture['statut'] == 'ouverte' %}
+    <form action="{{ url_for('fermer_facture', facture_id=facture['id']) }}" method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn" onclick="return confirm('Fermer et envoyer cette facture ?');">Fermer et envoyer</button>
+    </form>
+    {% endif %}
+    {% if facture['statut'] != 'payee' %}
+    <form action="{{ url_for('marquer_facture_payee', facture_id=facture['id']) }}" method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-secondary">✓ Marquer payée</button>
+    </form>
+    {% endif %}
+    <form action="{{ url_for('supprimer_facture', facture_id=facture['id']) }}" method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn" style="background:#c62828;" onclick="return confirm('Supprimer définitivement ?');">Supprimer</button>
+    </form>
+    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-secondary">Retour</a>
+  </div>
+</div>
+
+{% endblock %}

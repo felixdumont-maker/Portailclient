@@ -156,6 +156,35 @@
     from { opacity: 0; transform: translateY(14px); }
     to   { opacity: 1; transform: translateY(0); }
   }
+
+  /* ── Notifications ── */
+  .notif-banner {
+    display: flex; align-items: center; gap: .75rem;
+    background: #fff8f0; border: 1px solid #ffd8a8;
+    border-radius: 12px; padding: .85rem 1.1rem;
+    margin-bottom: var(--space-4);
+    text-decoration: none; color: inherit;
+    cursor: pointer;
+    animation: slideUp .4s ease .02s both;
+  }
+  .notif-banner:hover { background: #fff3e0; border-color: #ffa94d; }
+  .notif-icon { font-size: 1.3rem; flex-shrink: 0; }
+  .notif-text { flex: 1; font-size: .9rem; color: #2b2b2b; font-weight: 500; }
+  .notif-close {
+    flex-shrink: 0; background: none; border: none; cursor: pointer;
+    font-size: 1.1rem; color: #aaa; padding: 0 .25rem; line-height: 1;
+  }
+  .notif-close:hover { color: #666; }
+  .notif-badge {
+    position: absolute; top: -5px; right: -5px;
+    background: #c0321a; color: #fff;
+    font-size: .6rem; font-weight: 700;
+    width: 16px; height: 16px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    border: 2px solid #fff;
+    pointer-events: none;
+  }
+  .card-icon-wrap { position: relative; flex-shrink: 0; }
 </style>
 {% endblock %}
 
@@ -164,8 +193,36 @@
 
   <div class="dash-header">
     <div class="dash-greeting">Bonjour, <em>{{ session['user_name'].split()[0] }}</em></div>
-    <div class="dash-sub">Voici l'état de vos projets en cours.</div>
+    <div class="dash-sub">
+      Voici l'état de vos projets en cours.
+      {% if client and client['drive_folder_id'] %}
+      <a href="https://drive.google.com/drive/folders/{{ client['drive_folder_id'] }}"
+         target="_blank" rel="noopener"
+         style="display:inline-flex;align-items:center;gap:.35rem;margin-left:.75rem;font-size:.78rem;color:#9a948f;text-decoration:none;vertical-align:middle;"
+         title="Votre dossier Google Drive">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 87.3 78" style="width:14px;height:12px;flex-shrink:0;" aria-hidden="true">
+          <path d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8H0c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/>
+          <path d="M43.65 25 29.9 1.2C28.55 2 27.4 3.1 26.6 4.5L1.2 48.4c-.8 1.4-1.2 2.95-1.2 4.5h27.5z" fill="#00ac47"/>
+          <path d="M73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5H59.8l5.85 11.5z" fill="#ea4335"/>
+          <path d="M43.65 25 57.4 1.2C56.05.4 54.5 0 52.9 0H34.4c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d"/>
+          <path d="M59.8 53H27.5L13.75 76.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z" fill="#2684fc"/>
+          <path d="M73.4 26.5l-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3L43.65 25 59.8 53h27.45c0-1.55-.4-3.1-1.2-4.5z" fill="#ffba00"/>
+        </svg>
+        Mon dossier Drive
+      </a>
+      {% endif %}
+    </div>
   </div>
+
+  {% if notifications %}
+  {% set last_notif = notifications[0] %}
+  <div class="notif-banner" id="notif-banner-{{ last_notif.id }}"
+       onclick="markReadAndGo({{ last_notif.id }}, {{ last_notif.id_projet }}, event)">
+    <span class="notif-icon">🔔</span>
+    <span class="notif-text">{{ last_notif.message }}</span>
+    <button class="notif-close" onclick="markRead({{ last_notif.id }}, event)" title="Marquer comme lu">×</button>
+  </div>
+  {% endif %}
 
   <div class="section-label">Vos projets</div>
 
@@ -225,10 +282,15 @@
 
         <li>
           <a href="{{ url_for('project_detail', project_id=row.projet['id']) }}" class="project-card">
-            <div class="svc-icon {{ ic }}">{{ icon_path }}</div>
+            <div class="card-icon-wrap">
+              <div class="svc-icon {{ ic }}">{{ icon_path }}</div>
+              {% if notif_par_projet.get(row.projet['id']) %}
+              <span class="notif-badge">{{ notif_par_projet[row.projet['id']] | length }}</span>
+              {% endif %}
+            </div>
             <div class="card-info">
-              <div class="card-name">{{ row.projet['nom_projet'] }}</div>
-              <div class="card-meta">{{ svc }}{% if row.projet['created_at'] %} · {{ row.projet['created_at'][:10] }}{% endif %}</div>
+              <div class="card-name">{{ row.projet['titre_affiche'] or row.projet['nom_projet'] }}</div>
+              <div class="card-meta">{{ row.projet['service_nom'] or svc }}{% if row.projet['created_at'] %} · {{ row.projet['created_at'][:10] }}{% endif %}</div>
             </div>
 
             <div class="card-right">
@@ -273,11 +335,27 @@
 {% block scripts %}
 <script>
 (function(){
-  // Animate progress bars on load
   document.querySelectorAll('.prog-fill').forEach(function(el){
     var pct = parseFloat(el.dataset.pct || 0);
     setTimeout(function(){ el.style.transform = 'scaleX(' + pct + ')'; }, 250);
   });
 })();
+
+function markRead(notifId, event) {
+    if (event) event.stopPropagation();
+    fetch('/notifications/' + notifId + '/read', {method: 'POST'})
+        .then(function() {
+            var el = document.getElementById('notif-banner-' + notifId);
+            if (el) el.remove();
+        });
+}
+
+function markReadAndGo(notifId, projetId, event) {
+    if (event && event.target.classList.contains('notif-close')) return;
+    fetch('/notifications/' + notifId + '/read', {method: 'POST'})
+        .then(function() {
+            window.location.href = '/projet/' + projetId;
+        });
+}
 </script>
 {% endblock %}

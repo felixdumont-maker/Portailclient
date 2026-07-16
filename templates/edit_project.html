@@ -13,12 +13,20 @@
 
 <div class="card">
   <form method="post" action="" class="form" novalidate>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
     <div class="form-row">
       <div class="form-group">
         <label for="nom_projet">Nom du projet</label>
         <input type="text" id="nom_projet" name="nom_projet" value="{{ projet['nom_projet'] }}" required>
       </div>
+      <div class="form-group">
+        <label for="titre_affiche">Titre affiché au client</label>
+        <input type="text" id="titre_affiche" name="titre_affiche" value="{{ projet['titre_affiche'] or '' }}" placeholder="Laisser vide pour utiliser le nom du projet">
+      </div>
+    </div>
+
+    <div class="form-row">
       <div class="form-group">
         <label for="id_client">Client associé</label>
         <select id="id_client" name="id_client" required>

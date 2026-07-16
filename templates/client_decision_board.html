@@ -73,13 +73,12 @@
 </div>
 
 {% if already_submitted %}
-<div class="card" style="text-align:center;padding:3rem;">
-  <p style="font-size:2rem;margin-bottom:1rem;">✅</p>
-  <h2 style="border:none;margin:0 0 .5rem;">Vos choix ont été soumis</h2>
-  <p class="muted">Merci ! Nous avons bien reçu vos préférences et nous travaillons à votre projet.</p>
-  <a href="{{ url_for('project_detail', project_id=projet.id) }}" class="btn" style="margin-top:1.5rem;display:inline-flex;">Retour au projet</a>
+<div style="background:#f0faf0;border:1px solid #2e7d32;border-radius:8px;padding:.75rem 1.25rem;margin-bottom:1.5rem;display:flex;align-items:center;gap:.75rem;">
+  <span>✅</span>
+  <span style="font-size:.9rem;color:#2e7d32;font-weight:600;">Vos choix ont été soumis — vous pouvez les modifier ci-dessous.</span>
 </div>
-{% else %}
+{% endif %}
+{% if True %}
 
 <div style="text-align:center;padding:2rem 0 2.5rem;">
   <p style="font-size:.7rem;letter-spacing:3px;text-transform:uppercase;color:#aaa;margin-bottom:.75rem;">{{ projet.nom_projet }}</p>
@@ -88,6 +87,7 @@
 </div>
 
 <form method="POST" action="{{ url_for('submit_decision_board', project_id=projet.id) }}" id="dbForm">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <input type="hidden" name="choix_directions" id="hid_directions">
   <input type="hidden" name="choix_noms" id="hid_noms">
   <input type="hidden" name="choix_icones" id="hid_icones">
@@ -129,7 +129,9 @@ const LOGOS = [
   {% for i in range(1,5) %}
   {% set url = board['logo' ~ i ~ '_url'] if board and board['logo' ~ i ~ '_url'] else None %}
   {% set name = board['logo' ~ i ~ '_name'] if board and board['logo' ~ i ~ '_name'] else None %}
-  {% if url %}{ url: {{ url | tojson }}, name: {{ name | tojson }} },{% endif %}
+  {% set flat = board['logo' ~ i ~ '_flat_url'] if board and board['logo' ~ i ~ '_flat_url'] else None %}
+  {% set url2 = board['logo' ~ i ~ '_url2'] if board and board['logo' ~ i ~ '_url2'] else None %}
+  {% if url %}{ url: {{ url | tojson }}, name: {{ name | tojson }}, flat: {{ flat | tojson }}, url2: {{ url2 | tojson }} },{% endif %}
   {% endfor %}
 ];
 
@@ -211,8 +213,8 @@ function buildAll() {
     let cards = RAW_CONFIG.typos.map(t =>
       `<div class="db-card" data-section="typos" data-val="${t.title}">
         <div class="db-typo-label">${t.title}</div>
-        <div class="db-typo-preview-title" style="font-family:${t.titleFont};font-weight:${t.titleWeight};">${CLIENT_NAME}</div>
-        <div class="db-typo-preview-body" style="font-family:${t.bodyFont};font-weight:${t.bodyWeight};">Soins personnalisés · Bien-être naturel</div>
+        <div class="db-typo-preview-title" style="font-family:${t.titleFont};font-weight:${t.titleWeight};">${t.previewTitle || CLIENT_NAME}</div>
+        <div class="db-typo-preview-body" style="font-family:${t.bodyFont};font-weight:${t.bodyWeight};">${t.previewBody || CLIENT_NAME}</div>
         <div class="db-typo-font-names">${t.titleFontName} + ${t.bodyFontName}</div>
       </div>`
     ).join('');
@@ -237,12 +239,26 @@ function buildAll() {
 
   // LOGOS
   if (LOGOS.length) {
-    let cards = LOGOS.map(l =>
-      `<div class="db-card db-logo-card" data-section="logos" data-val="${l.name}">
-        <img src="${l.url}" alt="${l.name}" loading="lazy">
+    let cards = LOGOS.map((l, idx) => {
+      const carouselId = `logo-carousel-${idx}`;
+      const hasTwo = l.url2 ? true : false;
+      const carousel = hasTwo ? `
+        <div id="${carouselId}" onclick="event.stopPropagation()" style="position:relative;">
+          <img class="carousel-img" src="${l.url}" alt="${l.name}" loading="lazy" style="width:100%;display:block;">
+          <img class="carousel-img" src="${l.url2}" alt="${l.name} 2" loading="lazy" style="width:100%;display:none;">
+          <button onclick="event.stopPropagation();event.preventDefault();carouselPrev('${carouselId}')" style="position:absolute;left:6px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.45);border:none;border-radius:50%;width:28px;height:28px;cursor:pointer;color:white;font-size:1rem;display:flex;align-items:center;justify-content:center;">&#8249;</button>
+          <button onclick="event.stopPropagation();event.preventDefault();carouselNext('${carouselId}')" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.45);border:none;border-radius:50%;width:28px;height:28px;cursor:pointer;color:white;font-size:1rem;display:flex;align-items:center;justify-content:center;">&#8250;</button>
+          <div style="position:absolute;bottom:6px;left:50%;transform:translateX(-50%);display:flex;gap:4px;">
+            <span class="carousel-dot active" style="width:6px;height:6px;border-radius:50%;background:white;opacity:.9;display:block;"></span>
+            <span class="carousel-dot" style="width:6px;height:6px;border-radius:50%;background:white;opacity:.4;display:block;"></span>
+          </div>
+        </div>` : `<img src="${l.url}" alt="${l.name}" loading="lazy">`;
+      return `<div class="db-card db-logo-card" data-section="logos" data-val="${l.name}">
+        ${carousel}
+        ${l.flat ? `<div onclick="event.stopPropagation()" style="padding:.5rem;border-top:1px dashed #e0e0e0;text-align:center;position:relative;"><p style="font-size:.65rem;color:#999;margin-bottom:.35rem;letter-spacing:.05em;">FORME BRUTE</p><div style="position:relative;display:inline-block;"><img src="${l.flat}" alt="Forme brute" loading="lazy" style="height:120px;width:120px;object-fit:contain;filter:grayscale(100%);margin:0 auto;display:block;"><button onclick="event.stopPropagation();event.preventDefault();openFlatPreview('${l.flat}','${l.name}')" style="position:absolute;bottom:2px;right:2px;background:rgba(0,0,0,.55);border:none;border-radius:4px;cursor:pointer;padding:3px 5px;line-height:1;" title="Agrandir"><svg xmlns='http://www.w3.org/2000/svg' width='13' height='13' fill='none' viewBox='0 0 24 24' stroke='white' stroke-width='2'><circle cx='11' cy='11' r='8'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg></button></div></div>` : ''}
         <div class="db-logo-label">${l.name}</div>
-      </div>`
-    ).join('');
+      </div>`;
+    }).join('');
     html += makeSection(num++, 'FORME DU LOGO', 'Cliquez sur vos compositions favorites', `<div class="db-grid db-grid-2">${cards}</div>`);
   }
 
@@ -273,5 +289,53 @@ function prepareSubmit() {
 }
 
 document.addEventListener('DOMContentLoaded', buildAll);
+
+function carouselNext(id) {
+  const el = document.getElementById(id);
+  const imgs = el.querySelectorAll('.carousel-img');
+  const dots = el.querySelectorAll('.carousel-dot');
+  let cur = [...imgs].findIndex(i => i.style.display !== 'none');
+  imgs[cur].style.display = 'none';
+  dots[cur].style.opacity = '.4';
+  let next = (cur + 1) % imgs.length;
+  imgs[next].style.display = 'block';
+  dots[next].style.opacity = '.9';
+}
+
+function carouselPrev(id) {
+  const el = document.getElementById(id);
+  const imgs = el.querySelectorAll('.carousel-img');
+  const dots = el.querySelectorAll('.carousel-dot');
+  let cur = [...imgs].findIndex(i => i.style.display !== 'none');
+  imgs[cur].style.display = 'none';
+  dots[cur].style.opacity = '.4';
+  let prev = (cur - 1 + imgs.length) % imgs.length;
+  imgs[prev].style.display = 'block';
+  dots[prev].style.opacity = '.9';
+}
+
+function openFlatPreview(url, name) {
+  let modal = document.getElementById('flat-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'flat-modal';
+    modal.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:9999;align-items:center;justify-content:center;cursor:pointer;';
+    modal.innerHTML = '<div style="background:#fff;border-radius:12px;padding:2rem;max-width:90vw;max-height:90vh;text-align:center;position:relative;cursor:default;" onclick="event.stopPropagation()"><button onclick="closeFlatPreview()" style="position:absolute;top:.75rem;right:.75rem;background:none;border:none;font-size:1.5rem;cursor:pointer;color:#666;">✕</button><p id="flat-modal-name" style="font-size:.7rem;letter-spacing:.1em;color:#999;margin-bottom:1rem;"></p><img id="flat-modal-img" src="" style="max-width:75vw;max-height:70vh;object-fit:contain;filter:grayscale(100%);"></div>';
+    modal.addEventListener('click', closeFlatPreview);
+    document.body.appendChild(modal);
+  }
+  document.getElementById('flat-modal-img').src = url;
+  document.getElementById('flat-modal-name').textContent = name.toUpperCase();
+  modal.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+}
+
+function closeFlatPreview() {
+  const modal = document.getElementById('flat-modal');
+  if (modal) modal.style.display = 'none';
+  document.body.style.overflow = '';
+}
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeFlatPreview(); });
 </script>
 {% endblock %}

@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Créer votre accès{% endblock %}
+{% block content %}
+<div style="max-width:560px;margin:var(--space-6) auto;">
+  <div class="card">
+    <img src="{{ url_for('static', filename='cocktailos-logo-noir.png') }}" class="login-logo" alt="Cocktail Média" style="height:60px;display:block;margin:0 auto var(--space-4);">
+    <h1 style="text-align:center;font-size:1.8rem;margin-bottom:.5rem;">Bienvenue, {{ nom }} !</h1>
+    <p style="text-align:center;color:#7a7773;margin-bottom:var(--space-4);">Complétez votre profil et créez votre mot de passe pour accéder à votre portail client.</p>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="flash flash-{{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+
+    <form method="post" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <h2 style="font-size:1rem;margin-top:0;margin-bottom:var(--space-3);border-color:var(--couleur-bordure);">Votre entreprise</h2>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Nom de l'entreprise</label>
+          <input type="text" name="nom_entreprise" placeholder="Acme inc. (ou votre nom si autonome)">
+        </div>
+        <div class="form-group">
+          <label>Téléphone</label>
+          <input type="tel" name="telephone" placeholder="819 000-0000">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Adresse de facturation</label>
+        <input type="text" name="adresse_facturation" placeholder="123 rue Exemple">
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Ville</label>
+          <input type="text" name="ville_facturation" placeholder="Trois-Rivières">
+        </div>
+        <div class="form-group">
+          <label>Province</label>
+          <input type="text" name="province_facturation" value="Québec">
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Code postal</label>
+          <input type="text" name="code_postal_facturation" placeholder="G8V 1X4">
+        </div>
+        <div class="form-group">
+          <label>Email</label>
+          <input type="email" value="{{ email }}" disabled style="background:#f2ede8;color:#7a7773;">
+        </div>
+      </div>
+
+      <h2 style="font-size:1rem;margin-bottom:var(--space-3);border-color:var(--couleur-bordure);">Votre mot de passe</h2>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="password">Mot de passe</label>
+          <input type="password" id="password" name="password" required placeholder="Min. 8 car., majuscule, chiffre, symbole">
+        </div>
+        <div class="form-group">
+          <label for="confirm_password">Confirmer</label>
+          <input type="password" id="confirm_password" name="confirm_password" required>
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-block" style="margin-top:var(--space-3);">ACTIVER MON COMPTE</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Gabarits Médias{% endblock %}
+
+{% block head %}
+<style>
+  .galerie-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: var(--space-4);
+    margin-top: var(--space-4);
+  }
+  .gabarit-card {
+    background: var(--couleur-blanc);
+    border: 1px solid var(--couleur-bordure);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+    text-decoration: none;
+    display: block;
+    transition: transform var(--t-base), box-shadow var(--t-base);
+  }
+  .gabarit-card:hover {
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-md);
+    text-decoration: none;
+  }
+  .gabarit-card__img {
+    width: 100%; aspect-ratio: 16/10;
+    object-fit: cover;
+    background: var(--couleur-fond);
+    display: block;
+  }
+  .gabarit-card__placeholder {
+    width: 100%; aspect-ratio: 16/10;
+    background: var(--couleur-fond);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 3rem; color: #ccc;
+  }
+  .gabarit-card__body {
+    padding: var(--space-3);
+  }
+  .gabarit-card__nom {
+    font-weight: 700; font-size: var(--fs-sm);
+    color: var(--couleur-sombre-strong);
+  }
+  .gabarit-card__desc {
+    font-size: .8rem; color: #7a7773; margin-top: .3rem;
+  }
+  .gabarit-card__cta {
+    display: inline-block; margin-top: .6rem;
+    font-size: .8rem; font-weight: 700;
+    color: var(--couleur-principale);
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<nav class="navbar">
+  <div class="nav-container">
+    {% if session.get('is_admin') %}
+      <a href="{{ url_for('admin_dashboard') }}" class="nav-brand">← Admin</a>
+    {% else %}
+      <a href="{{ url_for('dashboard') }}" class="nav-brand">← Mon espace</a>
+    {% endif %}
+    <span class="nav-brand-center">Gabarits Médias</span>
+    {% if session.get('is_admin') %}
+      <a href="{{ url_for('mediatech_admin') }}" class="nav-link" style="background:#e83b14;">Gérer</a>
+    {% else %}
+      <a href="{{ url_for('logout') }}" class="nav-link">Déconnexion</a>
+    {% endif %}
+  </div>
+</nav>
+
+<div class="container">
+  <h1>Gabarits Médias</h1>
+
+  {% if gabarits %}
+    <div class="galerie-grid">
+      {% for g in gabarits %}
+        <a href="{{ url_for('mediatech_dossier', gabarit_id=g['id']) }}" class="gabarit-card">
+          {% if g['preview_drive_id'] %}
+            <img src="{{ url_for('api_tools_serve_file', file_id=g['preview_drive_id']) }}"
+                 alt="{{ g['nom'] }}" class="gabarit-card__img">
+          {% else %}
+            <div class="gabarit-card__placeholder">🖼</div>
+          {% endif %}
+          <div class="gabarit-card__body">
+            <div class="gabarit-card__nom">{{ g['nom'] }}</div>
+            {% if g['description'] %}
+              <div class="gabarit-card__desc">{{ g['description'] }}</div>
+            {% endif %}
+            <span class="gabarit-card__cta">Voir les fichiers →</span>
+          </div>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty">
+      <h3>Aucun gabarit disponible</h3>
+      <p>Les gabarits seront ajoutés par l'équipe Cocktail Média.</p>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

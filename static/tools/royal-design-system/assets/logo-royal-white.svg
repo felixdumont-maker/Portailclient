@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <path d="M100 18 L168 42 L168 110 Q168 158 100 184 Q32 158 32 110 L32 42 Z" fill="none" stroke="#ffffff" stroke-width="4"></path>
+  <path d="M62 60 L78 36 L92 60 L100 30 L108 60 L122 36 L138 60 L138 78 L62 78 Z" fill="#ffffff"></path>
+  <text x="100" y="118" text-anchor="middle" font-family="Impact, &#39;Arial Narrow Bold&#39;, sans-serif" font-size="34" letter-spacing="2" fill="#ffffff" font-weight="900">ROYAL</text>
+  <text x="100" y="146" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" letter-spacing="3" fill="#ffffff" font-weight="700">SHAWINIGAN</text>
+  <text x="100" y="166" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" letter-spacing="2" fill="#ffffff" opacity="0.7" font-weight="600">— LNHBF —</text>
+</svg>

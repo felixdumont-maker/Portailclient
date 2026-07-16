@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 120" width="240" height="120">
+  <defs>
+    <pattern id="hatch" patternUnits="userSpaceOnUse" width="30" height="30" patternTransform="rotate(-55)">
+      <rect width="30" height="30" fill="#d62127"></rect>
+      <rect width="15" height="30" fill="rgba(0,0,0,0.04)"></rect>
+    </pattern>
+  </defs>
+  <rect width="240" height="120" fill="url(#hatch)"></rect>
+</svg>

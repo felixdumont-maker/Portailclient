@@ -30,8 +30,13 @@
           {% if session.get('is_admin') %}
             <a href="{{ url_for('admin_dashboard') }}" class="nav-link">Admin</a>
             <a href="{{ url_for('admin_services') }}" class="nav-link">Services</a>
+            <a href="{{ url_for('admin_roadmaps') }}" class="nav-link">Roadmaps</a>
+<a href="{{ url_for('admin_roadmap') }}" class="nav-link" style="font-size:.8rem;color:#aaa;">CocktailOS</a>
+            <a href="{{ url_for('marketing_calendrier') }}" class="nav-link">Marketing</a>
+            <a href="{{ url_for('mediatech_admin') }}" class="nav-link">Médiathèque</a>
           {% else %}
             <a href="{{ url_for('dashboard') }}" class="nav-link">Tableau de bord</a>
+            <a href="{{ url_for('mediatech_galerie') }}" class="nav-link">Médiathèque</a>
           {% endif %}
           <a href="{{ url_for('profile') }}" class="nav-link">Mon profil</a>
           <a href="{{ url_for('logout') }}" class="btn btn-secondary" style="min-width:auto;padding:.5rem 1rem;font-size:.95rem;">Déconnexion</a>

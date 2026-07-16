@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ projet['nom_projet'] }}{% endblock %}
+{% block title %}{{ projet['titre_affiche'] or projet['nom_projet'] }}{% endblock %}
 
 {% block head %}
 
@@ -77,6 +77,15 @@
   .upload-form input[type="file"] { font-size: var(--fs-sm); padding: .4rem .6rem; flex: 1; min-width: 200px; background: var(--couleur-fond); border: 1px solid var(--couleur-bordure); border-radius: var(--radius-sm); cursor: pointer; }
   .upload-form button { min-width: auto; padding: .5rem 1rem; font-size: .9rem; }
 
+  /* Retour de révision (commentaire + image) */
+  .revision-feedback { margin-top: var(--space-2); padding-top: var(--space-2); border-top: 1px dashed var(--couleur-bordure); }
+  .revision-feedback label { display: block; font-size: var(--fs-sm); font-weight: 600; color: var(--couleur-sombre); margin-bottom: .3rem; }
+  .revision-commentaire-input { width: 100%; box-sizing: border-box; font: inherit; font-size: var(--fs-sm); padding: .5rem .6rem; border: 1px solid var(--couleur-bordure); border-radius: var(--radius-sm); resize: vertical; margin-bottom: var(--space-2); }
+  .revision-feedback-actions { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); }
+  .btn-save-commentaire { min-width: auto; padding: .4rem .9rem; font-size: .85rem; background: #856404; color: #fff; }
+  .btn-save-commentaire:hover { background: #6b5003; }
+  .revision-save-status { font-size: var(--fs-sm); color: var(--couleur-success); font-weight: 600; }
+
   /* Vidéo */
   .video-embed { margin-top: var(--space-2); }
   .video-link { display: inline-flex; align-items: center; gap: .4rem; font-size: var(--fs-sm); font-weight: 600; color: #7c3aed; text-decoration: none; }
@@ -124,6 +133,103 @@
   50%       { box-shadow: 0 0 0 8px rgba(232,59,20,0); }
 }
 
+/* Dossiers Drive */
+  .drive-folders-section { margin-bottom: var(--space-5); }
+  .drive-folders-header {
+    display: flex; align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--space-3);
+  }
+  .drive-folders-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: var(--space-3);
+  }
+  .drive-folder-card {
+    background: var(--couleur-blanc);
+    border: 1px solid var(--couleur-bordure);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    display: flex; flex-direction: column;
+    align-items: center; gap: var(--space-2);
+    transition: all var(--t-fast);
+  }
+  .drive-folder-card:hover {
+    border-color: var(--couleur-principale);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+    text-decoration: none;
+  }
+  .drive-folder-icon { font-size: 2rem; line-height: 1; }
+  .drive-folder-name {
+    font-size: .85rem; font-weight: 600;
+    color: var(--couleur-sombre); text-align: center;
+    word-break: break-word;
+  }
+  .drive-folder-dl {
+    font-size: .75rem; color: var(--couleur-principale);
+    font-family: var(--font-display); letter-spacing: .5px;
+    margin-top: auto;
+  }
+  .btn-dl-all {
+    display: inline-flex; align-items: center; gap: .4rem;
+    padding: .5rem 1rem; background: var(--couleur-sombre);
+    color: #fff !important; border-radius: var(--radius-sm);
+    font-family: var(--font-display); font-size: .95rem;
+    letter-spacing: .5px; text-decoration: none !important;
+    transition: background var(--t-fast);
+  }
+  .btn-dl-all:hover { background: var(--couleur-principale); }
+
+  /* Card design-progress */
+  .design-progress {
+    display: block; width: 100%;
+    margin-bottom: var(--space-4);
+    text-decoration: none;
+    background: var(--couleur-blanc);
+    border: 1px solid var(--couleur-bordure);
+    border-left-width: 4px;
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm);
+    padding: var(--space-3) var(--space-4);
+    display: flex; align-items: center; gap: var(--space-3);
+    transition: box-shadow var(--t-fast), transform var(--t-fast);
+  }
+  .design-progress:hover {
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
+    text-decoration: none;
+  }
+  .design-progress-icon {
+    width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1rem; font-weight: 800;
+  }
+  .design-progress-text {
+    flex: 1;
+  }
+  .design-progress-text strong {
+    display: block; font-size: var(--fs-sm); font-weight: 700;
+  }
+  .design-progress-text span {
+    font-size: .8rem; opacity: .75;
+  }
+  .design-progress-chevron {
+    font-size: 1.1rem; opacity: .45; flex-shrink: 0;
+  }
+  .design-progress.step-done {
+    border-left-color: var(--couleur-success);
+    background: #f0faf2;
+  }
+  .design-progress.step-done .design-progress-icon { background: #c8ecd1; color: #1b5e20; }
+  .design-progress.step-done .design-progress-text strong { color: #1b5e20; }
+  .design-progress.step-pending {
+    border-left-color: #bbb;
+    background: #f9f9f9;
+  }
+  .design-progress.step-pending .design-progress-icon { background: #e5e5e5; color: #666; }
+  .design-progress.step-pending .design-progress-text strong { color: #444; }
+
 </style>
 {% endblock %}
 
@@ -133,7 +239,7 @@
 <nav class="breadcrumbs" aria-label="Fil d'Ariane">
   <a href="{{ url_for('dashboard') }}">Tableau de bord</a>
   <span class="sep">›</span>
-  <span>{{ projet['nom_projet'] }}</span>
+  <span>{{ projet['titre_affiche'] or projet['nom_projet'] }}</span>
 </nav>
 
 {# Statut #}
@@ -172,7 +278,7 @@
       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor" style="width:24px;height:24px;">{{ icon_svg }}</svg>
     </div>
     <div>
-      <h1 style="margin:0;border:none;padding:0;">{{ projet['nom_projet'] }}</h1>
+      <h1 style="margin:0;border:none;padding:0;">{{ projet['titre_affiche'] or projet['nom_projet'] }}</h1>
 </div>
     <div class="project-meta">
       <span class="statut-pill {{ statut_class }}">{{ statut_icon }} {{ normalize_status(projet['statut']) }}</span>
@@ -181,21 +287,12 @@
       {% endif %}
     </div>
   </div>
-  {% if projet['lien_gdrive'] %}
+  {% if client and client['drive_folder_id'] %}
+      <a href="https://drive.google.com/drive/folders/{{ client['drive_folder_id'] }}" target="_blank" rel="noopener noreferrer" class="gdrive-button">📁 Google Drive</a>
+  {% elif projet['lien_gdrive'] %}
       <a href="{{ projet['lien_gdrive'] }}" target="_blank" rel="noopener noreferrer" class="gdrive-button">📁 Google Drive</a>
   {% endif %}
 
-  {% if ('révision' in projet['statut']|lower or 'revision' in projet['statut']|lower) %}
-    {% if session.get('is_admin') %}
-      <a href="{{ url_for('admin_decision_board', project_id=projet.id) }}" class="btn btn-revision" style="min-width:auto;">⚙️ Configurer le Decision Board</a>
-    {% else %}
-      {% if already_submitted %}
-        <span class="btn" style="background:#2e7d32;cursor:default;min-width:auto;">✅ Choix soumis</span>
-      {% elif board %}
-        <a href="{{ url_for('client_decision_board', project_id=projet.id) }}" class="btn" style="background:var(--couleur-principale);animation:pulse 2s infinite;min-width:auto;">🎨 Voir mes options de design</a>
-      {% endif %}
-    {% endif %}
-  {% endif %}
 </div>
 
 {# Progression #}
@@ -214,114 +311,372 @@
   </div>
 {% endif %}
 
-{# Actions admin #}
+{# ═══ ACTIONS ADMIN ═══ #}
 {% if session.get('is_admin') %}
-  <div class="admin-actions">
+<style>
+  /* Pipeline stepper */
+  .pipeline { display:flex; align-items:flex-start; margin-bottom:var(--space-5); overflow-x:auto; padding-bottom:4px; }
+  .pipeline-step { display:flex; flex-direction:column; align-items:center; gap:.35rem; flex:1; min-width:90px; position:relative; }
+  .pipeline-step:not(:last-child)::after {
+    content:''; position:absolute; top:17px; left:calc(50% + 20px);
+    width:calc(100% - 40px); height:2px; background:#e0e0e0; z-index:0;
+  }
+  .pipeline-step.done:not(:last-child)::after { background:var(--couleur-success); }
+  .pipeline-dot {
+    width:34px; height:34px; border-radius:50%; border:2px solid #ddd;
+    background:#fff; display:flex; align-items:center; justify-content:center;
+    font-size:.8rem; font-weight:700; z-index:1; position:relative; transition:all .2s;
+  }
+  .pipeline-step.done .pipeline-dot { background:var(--couleur-success); border-color:var(--couleur-success); color:#fff; }
+  .pipeline-step.active .pipeline-dot { background:var(--couleur-principale); border-color:var(--couleur-principale); color:#fff; box-shadow:0 0 0 4px rgba(232,59,20,.15); }
+  .pipeline-step.pending .pipeline-dot { background:#f5f5f5; color:#bbb; border-color:#e0e0e0; }
+  .pipeline-label { font-size:.68rem; font-weight:600; text-align:center; color:#aaa; line-height:1.3; max-width:90px; }
+  .pipeline-step.active .pipeline-label { color:var(--couleur-principale); }
+  .pipeline-step.done .pipeline-label { color:var(--couleur-success); }
 
-    {# Sans documents — bouton démarrer travaux #}
-    {% if not documents_requis and ('attente' in statut_lower) %}
-      <form action="{{ url_for('start_work', project_id=projet['id']) }}" method="post">
-        <button type="submit" class="btn btn-start">🟠 Démarrer les travaux</button>
-      </form>
-    {% endif %}
+  /* Toolbars */
+  .admin-toolbar { display:flex; flex-wrap:wrap; gap:var(--space-2); margin-bottom:var(--space-3); align-items:center; }
+  .admin-secondary { display:flex; flex-wrap:wrap; gap:var(--space-2); margin-bottom:var(--space-4); align-items:center; }
 
-    {# Bouton révision — si travaux en cours #}
-    {% if 'travaux' in statut_lower or 'cours' in statut_lower %}
-      <button onclick="document.getElementById('revision-panel').style.display='block'" class="btn btn-revision">
-        🟡 Envoyer en révision
-      </button>
-    {% endif %}
+  /* Section pigiste */
+  .pigiste-section { background:var(--couleur-blanc); border:1px solid var(--couleur-bordure); border-radius:var(--radius-md); padding:var(--space-4); margin-bottom:var(--space-5); }
+  .pigiste-section h3 { margin:0 0 var(--space-3) 0; font-size:var(--fs-md); }
+  .pigiste-form { display:flex; gap:var(--space-2); flex-wrap:wrap; align-items:flex-end; margin-bottom:var(--space-3); }
+  .pigiste-form select, .pigiste-form input[type="text"], .pigiste-form input[type="number"], .pigiste-form input[type="date"] { flex:1; min-width:140px; }
+  .mandat-list { display:grid; gap:var(--space-2); }
+  .mandat-row { display:flex; align-items:center; gap:var(--space-3); padding:var(--space-2) var(--space-3); background:#f9f9f9; border:1px solid var(--couleur-bordure); border-radius:var(--radius-sm); font-size:var(--fs-sm); flex-wrap:wrap; }
+  .mandat-titre { flex:1; font-weight:600; color:var(--couleur-sombre); }
+  .mandat-meta { color:#888; font-size:.8rem; }
+  .mandat-badge { padding:.15rem .55rem; border-radius:999px; font-size:.7rem; font-weight:700; text-transform:capitalize; }
+  .mandat-badge.en_attente { background:#fff4e5; color:#a05700; }
+  .mandat-badge.en_cours   { background:#e3f2fd; color:#1565c0; }
+  .mandat-badge.remis      { background:#e7f5ec; color:#1b5e20; }
+  .mandat-badge.approuve   { background:#e7f5ec; color:#1b5e20; }
+  .mandat-badge.annule     { background:#f5f5f5; color:#888; }
+</style>
 
-    {# Bouton complété — si en révision #}
-    {% if 'révision' in statut_lower or 'revision' in statut_lower %}
-      <form action="{{ url_for('complete_project', project_id=projet['id']) }}" method="post">
-        <button type="submit" class="btn btn-complete">🟢 Marquer complété</button>
-      </form>
-    {% endif %}
+{% set sn = normalize_status(projet['statut']) %}
+{% set steps = [('Documents à donner',1),('Documents reçus',2),('Travaux en cours',3),('En révision',4),('Complété',5)] %}
+{% set step_idx = {'Documents à donner':1,'Documents reçus':2,'Travaux en cours':3,'En révision':4,'Complété':5,'Annulé':0} %}
+{% set cur = step_idx.get(sn, 1) %}
 
-    {# Joker — forcer statut #}
-    <button onclick="document.getElementById('force-panel').style.display='block'" class="btn btn-force">
-      ⚙️ Forcer le statut
-    </button>
-    {% if projet["is_archived"] %}
-      <form action="{{ url_for('unarchive_project', project_id=projet['id']) }}" method="post">
-        <button type="submit" class="btn btn-secondary">↩ Désarchiver</button>
-      </form>
-    {% else %}
-      <form action="{{ url_for('archive_project', project_id=projet['id']) }}" method="post">
-        <button type="submit" class="btn btn-secondary" onclick="return confirm('Archiver ce projet ?');">Archiver</button>
-      </form>
-    {% endif %}
-    <button onclick="document.getElementById('edit-items-panel').style.display='block'" class="btn btn-force">
-      ✏️ Modifier les items
-    </button>
-  </div>
+{# Stepper #}
+<div class="pipeline">
+  {% for label, n in steps %}
+    {% if n < cur %}{% set cls='done' %}
+    {% elif n == cur %}{% set cls='active' %}
+    {% else %}{% set cls='pending' %}{% endif %}
+    <div class="pipeline-step {{ cls }}">
+      <div class="pipeline-dot">{% if n < cur %}✓{% else %}{{ n }}{% endif %}</div>
+      <span class="pipeline-label">{{ label }}</span>
+    </div>
+  {% endfor %}
+</div>
 
-  {# Panel forcer statut #}
-  <div id="force-panel" class="force-panel" style="display:none;">
-    <h3>⚙️ Forcer le statut manuellement</h3>
-    <form action="{{ url_for('force_status', project_id=projet['id']) }}" method="post" style="display:flex;gap:var(--space-3);align-items:center;flex-wrap:wrap;">
-      <select name="statut">
-        <option value="Documents à donner">🔴 Documents à donner</option>
-        <option value="En attente de rendez-vous">⚪ En attente de rendez-vous</option>
-        <option value="Travaux en cours">🟠 Travaux en cours</option>
-        <option value="En révision">🟡 En révision</option>
-        <option value="Complété">🟢 Complété</option>
-        <option value="Annulé">❌ Annulé</option>
-      </select>
-      <button type="submit" class="btn btn-force">Appliquer</button>
-      <button type="button" class="btn btn-secondary" onclick="document.getElementById('force-panel').style.display='none'" style="min-width:auto;">Annuler</button>
+{# Bouton action principale #}
+<div class="admin-toolbar">
+  {% if sn == 'Documents à donner' %}
+    <button class="btn btn-start" onclick="forcerStatut('Documents reçus')">📥 Marquer documents reçus</button>
+  {% elif sn == 'Documents reçus' %}
+    <form action="/api/v1/admin/projet/{{ projet['id'] }}/start" method="post" style="margin:0">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-start">🟠 Démarrer les travaux</button>
     </form>
-  </div>
+  {% elif sn == 'Travaux en cours' %}
+    <button class="btn btn-revision" onclick="document.getElementById('revision-panel').style.display='block'">🟡 Envoyer en révision</button>
+  {% elif sn == 'En révision' %}
+    <form action="/api/v1/admin/projet/{{ projet['id'] }}/complete" method="post" style="margin:0">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-complete">🟢 Marquer complété</button>
+    </form>
+    <form action="{{ url_for('notifier_revision', project_id=projet['id']) }}" method="post" style="margin:0">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-revision">📧 Notifier le client</button>
+    </form>
+  {% elif sn == 'Complété' %}
+    <span style="font-size:var(--fs-sm);color:var(--couleur-success);font-weight:700;">✅ Projet complété</span>
+  {% endif %}
 
+  {# Outils toujours visibles #}
+  <a href="{{ url_for('admin_identite_visuelle', project_id=projet['id']) }}"
+     class="btn" style="background:#2b2b2b;color:#fff;text-decoration:none;display:inline-flex;align-items:center;gap:.4rem;">
+    🎨 Identité visuelle
+  </a>
+  <a href="{{ url_for('admin_decision_board', project_id=projet['id']) }}" class="btn btn-force">
+    📋 Decision Board
+  </a>
+</div>
+
+{# Actions secondaires #}
+<div class="admin-secondary">
+  <button onclick="document.getElementById('edit-items-panel').style.display='block'" class="btn btn-force">✏️ Modifier les items</button>
+  {% if projet["is_archived"] %}
+    <form action="{{ url_for('unarchive_project', project_id=projet['id']) }}" method="post" style="margin:0">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-secondary">↩ Désarchiver</button>
+    </form>
+  {% else %}
+    <form action="{{ url_for('archive_project', project_id=projet['id']) }}" method="post" style="margin:0">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-secondary" onclick="return confirm('Archiver ce projet ?');">📦 Archiver</button>
+    </form>
+  {% endif %}
+  <button onclick="togglePanel('force-panel')" class="btn btn-force">🔧 Forcer le statut</button>
+</div>
+
+{# Panel forcer statut #}
+<div id="force-panel" class="force-panel" style="display:none;">
+  <h3>🔧 Forcer le statut manuellement</h3>
+  <form action="{{ url_for('force_status', project_id=projet['id']) }}" method="post" style="display:flex;gap:var(--space-3);align-items:center;flex-wrap:wrap;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <select name="statut">
+      <option value="Documents à donner">🔴 Documents à donner</option>
+      <option value="En attente de rendez-vous">⚪ En attente de rendez-vous</option>
+      <option value="Documents reçus">🔵 Documents reçus</option>
+      <option value="Travaux en cours">🟠 Travaux en cours</option>
+      <option value="En révision">🟡 En révision</option>
+      <option value="Complété">🟢 Complété</option>
+      <option value="Annulé">❌ Annulé</option>
+    </select>
+    <button type="submit" class="btn btn-force">Appliquer</button>
+    <button type="button" class="btn btn-secondary" onclick="togglePanel('force-panel')" style="min-width:auto;">Annuler</button>
+  </form>
+</div>
+
+{# Section Pigiste #}
+<div class="pigiste-section">
+  <h3>👤 Pigiste assigné</h3>
+  <div class="pigiste-form">
+    <select id="pigiste-select"><option value="">-- Sélectionner un pigiste --</option></select>
+    <input type="text" id="mandat-titre" placeholder="Titre du mandat (ex: Montage vidéo)">
+    <input type="number" id="mandat-montant" placeholder="Montant ($)" min="0" step="0.01" style="max-width:130px;">
+    <input type="date" id="mandat-echeance" style="max-width:155px;">
+    <button class="btn btn-start" onclick="creerMandat({{ projet['id'] }})" style="white-space:nowrap;">+ Assigner</button>
+  </div>
+  <div class="mandat-list" id="mandat-list">
+    <p style="color:#888;font-size:var(--fs-sm);margin:0;">Chargement…</p>
+  </div>
+</div>
+
+{# Panel modifier items #}
 <div id="edit-items-panel" class="edit-items-panel" style="display:none;">
-    <h3>✏️ Modifier les items de la checklist</h3>
-    <form action="{{ url_for('edit_checklist_items', project_id=projet['id']) }}" method="post">
-      {% for item in items %}
-        {% if not item['is_revision'] %}
-          {% set tu = item['file_category'] if item['item_type'] == 'document' else 'video_url' %}
-          <div class="edit-item-row">
-            <input type="hidden" name="item_id[]" value="{{ item['id'] }}">
-            <input type="text" name="nom_{{ item['id'] }}" value="{{ item['nom_item'] }}" required>
-            <select name="type_{{ item['id'] }}">
-              <option value="photo"      {% if item['file_category']=='photo' %}selected{% endif %}>📷 Photo</option>
-              <option value="vecteur"    {% if item['file_category']=='vecteur' %}selected{% endif %}>🎨 Vecteur</option>
-              <option value="video_file" {% if item['file_category']=='video' %}selected{% endif %}>🎬 Vidéo (fichier)</option>
-              <option value="document"   {% if item['file_category']=='document' %}selected{% endif %}>📄 Document</option>
-              <option value="donnees"    {% if item['file_category']=='donnees' %}selected{% endif %}>📊 Données</option>
-              <option value="archive"    {% if item['file_category']=='archive' %}selected{% endif %}>📦 Archive</option>
-              <option value="video_url"  {% if item['item_type']=='video' %}selected{% endif %}>▶ Vidéo (lien)</option>
-              <option value="autre"      {% if item['file_category']=='autre' and item['item_type']!='video' %}selected{% endif %}>📁 Autre</option>
-            </select>
-            <label class="checkbox-inline">
-              <input type="checkbox" name="required_{{ item['id'] }}" value="1" {% if item['is_required'] %}checked{% endif %}> Obligatoire
-            </label>
-          </div>
-        {% endif %}
-      {% endfor %}
-      <div style="display:flex;gap:var(--space-3);margin-top:var(--space-3);">
-        <button type="submit" class="btn btn-force">Sauvegarder</button>
-        <button type="button" class="btn btn-secondary" onclick="document.getElementById('edit-items-panel').style.display='none'">Annuler</button>
+  <h3>✏️ Modifier les items de la checklist</h3>
+  <form action="{{ url_for('edit_checklist_items', project_id=projet['id']) }}" method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% for item in items %}
+      {% if not item['is_revision'] %}
+        <div class="edit-item-row">
+          <input type="hidden" name="item_id[]" value="{{ item['id'] }}">
+          <input type="text" name="nom_{{ item['id'] }}" value="{{ item['nom_item'] }}" required>
+          <select name="type_{{ item['id'] }}">
+            <option value="photo"      {% if item['file_category']=='photo' %}selected{% endif %}>📷 Photo</option>
+            <option value="vecteur"    {% if item['file_category']=='vecteur' %}selected{% endif %}>🎨 Vecteur</option>
+            <option value="video_file" {% if item['file_category']=='video' %}selected{% endif %}>🎬 Vidéo (fichier)</option>
+            <option value="document"   {% if item['file_category']=='document' %}selected{% endif %}>📄 Document</option>
+            <option value="donnees"    {% if item['file_category']=='donnees' %}selected{% endif %}>📊 Données</option>
+            <option value="archive"    {% if item['file_category']=='archive' %}selected{% endif %}>📦 Archive</option>
+            <option value="video_url"  {% if item['item_type']=='video' %}selected{% endif %}>▶ Vidéo (lien)</option>
+            <option value="autre"      {% if item['file_category']=='autre' and item['item_type']!='video' %}selected{% endif %}>📁 Autre</option>
+          </select>
+          <label class="checkbox-inline">
+            <input type="checkbox" name="required_{{ item['id'] }}" value="1" {% if item['is_required'] %}checked{% endif %}> Obligatoire
+          </label>
+        </div>
+      {% endif %}
+    {% endfor %}
+    <div style="display:flex;gap:var(--space-3);margin-top:var(--space-3);">
+      <button type="submit" class="btn btn-force">Sauvegarder</button>
+      <button type="button" class="btn btn-secondary" onclick="document.getElementById('edit-items-panel').style.display='none'">Annuler</button>
+    </div>
+  </form>
+</div>
+
+{# Panel révision #}
+<div id="revision-panel" class="revision-panel" style="display:none;">
+  <h3>🟡 Créer une liste de révisions</h3>
+  <form action="/api/v1/admin/projet/{{ projet['id'] }}/revision" method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="revision-items-list" id="revision-items">
+      <div class="revision-item-row">
+        <input type="text" name="items_revision[]" placeholder="Item de révision...">
       </div>
-    </form>
+    </div>
+    <button type="button" class="btn btn-add-revision" onclick="addRevisionItem()">+ Ajouter un item</button>
+    <div style="display:flex;gap:var(--space-3);margin-top:var(--space-3);">
+      <button type="submit" class="btn btn-revision">Envoyer en révision + notifier client</button>
+      <button type="button" class="btn btn-secondary" onclick="document.getElementById('revision-panel').style.display='none'">Annuler</button>
+    </div>
+  </form>
+</div>
+
+<script>
+function togglePanel(id) {
+  var el = document.getElementById(id);
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+function forcerStatut(statut) {
+  if (!confirm('Passer le projet à "' + statut + '" ?')) return;
+  fetch('/api/v1/admin/projet/{{ projet["id"] }}/force-status', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ statut: statut })
+  }).then(function() { location.reload(); });
+}
+
+function saveRevisionCommentaire(itemId) {
+  var textarea = document.getElementById('revision-commentaire-' + itemId);
+  var status = document.getElementById('revision-save-status-' + itemId);
+  fetch('/api/v1/item/commentaire/' + itemId, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ commentaire: textarea.value })
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.success) {
+        status.textContent = '✓ Enregistré';
+        setTimeout(function() { status.textContent = ''; }, 2500);
+      } else {
+        status.textContent = 'Erreur';
+      }
+    })
+    .catch(function() { status.textContent = 'Erreur'; });
+}
+
+(function init() {
+  fetch('/api/v1/admin/pigistes')
+    .then(function(r){ return r.json(); })
+    .then(function(pigistes) {
+      var sel = document.getElementById('pigiste-select');
+      pigistes.forEach(function(p) {
+        var opt = document.createElement('option');
+        opt.value = p.id;
+        opt.textContent = p.nom_complet + (p.specialite ? ' — ' + p.specialite : '');
+        sel.appendChild(opt);
+      });
+    });
+  chargerMandats();
+})();
+
+function chargerMandats() {
+  fetch('/api/v1/admin/projet/{{ projet["id"] }}/mandats')
+    .then(function(r){ return r.json(); })
+    .then(function(mandats) {
+      var list = document.getElementById('mandat-list');
+      if (!mandats.length) {
+        list.innerHTML = '<p style="color:#888;font-size:.85rem;margin:0;">Aucun mandat assigné à ce projet.</p>';
+        return;
+      }
+      list.innerHTML = mandats.map(function(m) {
+        return '<div class="mandat-row">'
+          + '<span class="mandat-titre">' + (m.titre || '') + '</span>'
+          + '<span class="mandat-meta">' + (m.nom_pigiste || '—') + '</span>'
+          + '<span class="mandat-meta">' + (m.montant_convenu ? parseFloat(m.montant_convenu).toFixed(2) + ' $' : '—') + '</span>'
+          + '<span class="mandat-meta">' + (m.date_echeance || '') + '</span>'
+          + '<span class="mandat-badge ' + (m.statut || '') + '">' + (m.statut || '').replace('_',' ') + '</span>'
+          + '</div>';
+      }).join('');
+    });
+}
+
+function creerMandat(projetId) {
+  var pigiste_id = document.getElementById('pigiste-select').value;
+  var titre = document.getElementById('mandat-titre').value.trim();
+  var montant = parseFloat(document.getElementById('mandat-montant').value) || 0;
+  var echeance = document.getElementById('mandat-echeance').value;
+  if (!pigiste_id) { alert('Sélectionne un pigiste.'); return; }
+  if (!titre) { alert('Entre un titre de mandat.'); return; }
+  fetch('/api/v1/admin/mandats', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ id_pigiste: parseInt(pigiste_id), id_projet: projetId, titre: titre, montant_convenu: montant, date_echeance: echeance || null })
+  })
+  .then(function(r){ return r.json(); })
+  .then(function(data) {
+    if (data.id) {
+      document.getElementById('mandat-titre').value = '';
+      document.getElementById('mandat-montant').value = '';
+      document.getElementById('mandat-echeance').value = '';
+      document.getElementById('pigiste-select').value = '';
+      chargerMandats();
+    } else {
+      alert('Erreur: ' + (data.error || 'inconnue'));
+    }
+  });
+}
+</script>
+{% endif %}
+
+{# Dossiers Drive #}
+{% if drive_folders or projet['lien_gdrive'] %}
+<section class="drive-folders-section">
+  <div class="drive-folders-header">
+    <h2 style="margin:0;border:none;padding:0;">📁 Dossiers du projet</h2>
+    {% if projet['drive_folder_id'] %}
+      <a href="https://drive.google.com/drive/folders/{{ projet['drive_folder_id'] }}"
+         target="_blank" rel="noopener noreferrer"
+         class="btn-dl-all" title="Ouvrir le dossier projet dans Drive">
+         ⬇ Tout télécharger
+      </a>
+    {% endif %}
   </div>
 
-  {# Panel révision #}
-  <div id="revision-panel" class="revision-panel" style="display:none;">
-    <h3>🟡 Créer une liste de révisions</h3>
-    <form action="{{ url_for('start_revision', project_id=projet['id']) }}" method="post">
-      <div class="revision-items-list" id="revision-items">
-        <div class="revision-item-row">
-          <input type="text" name="items_revision[]" placeholder="Item de révision...">
-        </div>
-      </div>
-      <button type="button" class="btn btn-add-revision" onclick="addRevisionItem()">+ Ajouter un item</button>
-      <div style="display:flex;gap:var(--space-3);margin-top:var(--space-3);">
-        <button type="submit" class="btn btn-revision">Envoyer en révision</button>
-        <button type="button" class="btn btn-secondary" onclick="document.getElementById('revision-panel').style.display='none'">Annuler</button>
-      </div>
-    </form>
+  <div class="drive-folders-grid">
+    {% if projet['lien_gdrive'] %}
+      <a href="{{ projet['lien_gdrive'] }}"
+         target="_blank" rel="noopener noreferrer"
+         class="drive-folder-card">
+        <span class="drive-folder-icon">📁</span>
+        <span class="drive-folder-name">Dossier du projet</span>
+        <span class="drive-folder-dl">⬇ Télécharger</span>
+      </a>
+    {% endif %}
+    {% for folder in drive_folders %}
+      <a href="https://drive.google.com/drive/folders/{{ folder['id'] }}"
+         target="_blank" rel="noopener noreferrer"
+         class="drive-folder-card">
+        <span class="drive-folder-icon">📂</span>
+        <span class="drive-folder-name">{{ folder['name'] }}</span>
+        <span class="drive-folder-dl">⬇ Télécharger</span>
+      </a>
+    {% endfor %}
   </div>
+</section>
+{% endif %}
+
+{# Card design — client seulement #}
+{% if not session.get('is_admin') %}
+  {% if has_identite_visuelle %}
+    <a href="{{ url_for('client_identite_visuelle', project_id=projet.id) }}" class="design-progress step-done">
+      <div class="design-progress-icon">✓</div>
+      <div class="design-progress-text">
+        <strong>Identité visuelle prête</strong>
+        <span>Cliquez pour voir et télécharger</span>
+      </div>
+      <div class="design-progress-chevron">›</div>
+    </a>
+  {% elif board and not has_identite_assigned %}
+    {% if already_submitted %}
+      <a href="{{ url_for('client_decision_board', project_id=projet.id) }}" class="design-progress step-done">
+        <div class="design-progress-icon">✓</div>
+        <div class="design-progress-text">
+          <strong>Choix soumis</strong>
+          <span>Cliquez pour modifier</span>
+        </div>
+        <div class="design-progress-chevron">›</div>
+      </a>
+    {% else %}
+      <a href="{{ url_for('client_decision_board', project_id=projet.id) }}" class="design-progress step-pending">
+        <div class="design-progress-icon">○</div>
+        <div class="design-progress-text">
+          <strong>Décision board</strong>
+          <span>Vos choix sont attendus</span>
+        </div>
+        <div class="design-progress-chevron">›</div>
+      </a>
+    {% endif %}
+  {% endif %}
 {% endif %}
 
 {# Checklist principale #}
@@ -392,6 +747,7 @@
               <div class="file-already">✓ Fichier reçu — vous pouvez en envoyer un nouveau</div>
             {% endif %}
             <form action="{{ url_for('upload_item_file', item_id=item['id']) }}" method="post" enctype="multipart/form-data" class="upload-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="file" name="document" required>
               <button type="submit">Envoyer</button>
             </form>
@@ -418,6 +774,22 @@
             <span class="badge" style="background:#fffde7;color:#856404;">Révision</span>
             {% if is_done %}<span class="badge badge--success">✓ Approuvé</span>{% endif %}
           </div>
+        </div>
+        <div class="revision-feedback">
+          <label for="revision-commentaire-{{ item['id'] }}">Ce qui doit changer (optionnel) :</label>
+          <textarea id="revision-commentaire-{{ item['id'] }}" class="revision-commentaire-input" rows="2" placeholder="Décrivez ce qui doit changer...">{{ item['commentaire'] or '' }}</textarea>
+          <div class="revision-feedback-actions">
+            <button type="button" class="btn-save-commentaire" onclick="saveRevisionCommentaire({{ item['id'] }})">Enregistrer le commentaire</button>
+            <span class="revision-save-status" id="revision-save-status-{{ item['id'] }}"></span>
+          </div>
+          {% if item['file_path'] %}
+            <div class="file-already">✓ Image jointe — vous pouvez en envoyer une nouvelle</div>
+          {% endif %}
+          <form action="{{ url_for('upload_item_file', item_id=item['id']) }}" method="post" enctype="multipart/form-data" class="upload-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="file" name="document" accept="image/*,.pdf">
+            <button type="submit">Joindre une image</button>
+          </form>
         </div>
       </li>
     {% endfor %}

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 80" width="200" height="80">
+  <g fill="#ffffff">
+    <text x="100" y="34" text-anchor="middle" font-family="Impact, &#39;Arial Narrow Bold&#39;, sans-serif" font-size="32" letter-spacing="4" font-weight="900">LNHBF</text>
+    <line x1="40" y1="44" x2="160" y2="44" stroke="#ffffff" stroke-width="1.5"></line>
+    <text x="100" y="60" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" letter-spacing="3" font-weight="600" opacity="0.75">LIGUE NATIONALE</text>
+    <text x="100" y="72" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" letter-spacing="3" font-weight="600" opacity="0.75">HOCKEY BALLE FÉMININ</text>
+  </g>
+</svg>

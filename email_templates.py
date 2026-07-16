@@ -4,6 +4,26 @@
 LOGO_URL = "https://static.wixstatic.com/media/603d87_ec59249ae1894c9ca598cf76288b5b2b~mv2.png"
 PORTAIL_URL = "https://portail.cocktailmedia.ca"
 
+
+def _add_to_calendar_html(google_url: str, outlook_url: str, ics_url: str) -> str:
+    """Bloc HTML 'Ajouter à mon agenda' compatible email (3 boutons, aucun JS)."""
+    btn = lambda label, url, icon_char: (
+        f'<a href="{url}" target="_blank" '
+        f'style="display:inline-block;margin:0 6px 8px 0;padding:10px 18px;'
+        f'background:#faf7f3;border:1.5px solid #d8d3cc;border-radius:6px;'
+        f'font-family:Montserrat,sans-serif;font-size:12px;font-weight:700;'
+        f'color:#2b2b2b;text-decoration:none;text-transform:uppercase;letter-spacing:1px;">'
+        f'{icon_char}&nbsp; {label}</a>'
+    )
+    return (
+        '<p style="margin:16px 0 8px 0;font-family:Montserrat,sans-serif;font-size:11px;'
+        'color:#888;text-transform:uppercase;letter-spacing:2px;font-weight:600;">'
+        'Ajouter à mon agenda</p>' +
+        btn('Google Calendar', google_url, '📅') +
+        btn('Outlook', outlook_url, '📆') +
+        btn('Apple / .ics', ics_url, '⬇')
+    )
+
 def _base(titre_hero, sous_titre_hero, sections, cta_texte=None, cta_url=None):
     """Génère un email HTML complet dans le style newsletter Cocktail Média."""
 
@@ -259,10 +279,91 @@ def email_en_revision(nom, nom_projet, lien_projet):
         cta_url=lien_projet
     )
 
-def email_livraison(nom, nom_projet, lien_projet, lien_drive=None):
+def email_revision_site_web(nom, nom_projet, lien_site_test, lien_portail, items=None):
+    """Révision spécifique aux projets Site Web Vitrine : lien du site test + liste des items à vérifier."""
+    items = items or []
+    items_html = ""
+    if items:
+        items_html = '<ul style="margin:0 0 15px 0;padding:0 0 0 20px;font-family:Montserrat,sans-serif;font-size:14px;line-height:24px;color:#555;">'
+        for it in items:
+            items_html += f'<li style="margin:0 0 6px 0;">{it}</li>'
+        items_html += '</ul>'
+
+    site_html = ""
+    if lien_site_test:
+        site_html = (
+            '<p style="margin:0 0 20px 0;text-align:center;">'
+            f'<a href="{lien_site_test}" target="_blank" '
+            'style="display:inline-block;padding:12px 28px;background:#2b2b2b;border-radius:6px;'
+            'font-family:\'Bebas Neue\',Impact,sans-serif;font-size:15px;letter-spacing:1.5px;'
+            'color:#faf7f3;text-decoration:none;text-transform:uppercase;">'
+            'VOIR LE SITE TEST →</a></p>'
+        )
+
+    return _base(
+        titre_hero="Votre site est prêt à être révisé",
+        sous_titre_hero="On a besoin de votre avis avant la mise en ligne.",
+        sections=[
+            {
+                "label": "Révision — Site web",
+                "titre": "À vous de jouer !",
+                "contenu": (
+                    _p(f"Bonjour <strong>{nom}</strong>,") +
+                    _p("Votre site web est maintenant prêt pour révision :") +
+                    _highlight(nom_projet) +
+                    site_html +
+                    _p("Voici ce qu'on vous demande de vérifier sur le site test :") +
+                    items_html +
+                    _p("Pour chaque item, rendez-vous sur votre portail : cochez la case si tout est correct, ou décrivez ce qui doit changer (vous pouvez aussi joindre une image, par exemple pour remplacer une photo).")
+                )
+            }
+        ],
+        cta_texte="OUVRIR LA LISTE DE RÉVISION",
+        cta_url=lien_portail
+    )
+
+def email_livraison(nom, nom_projet, lien_projet, lien_drive=None, ressources=None, lien_site=None, logos=None, note=None):
     drive_section = ""
     if lien_drive:
         drive_section = f'<p style="margin:0 0 15px 0;text-align:center;"><a href="{lien_drive}" style="color:#e83b14;font-size:14px;text-decoration:none;font-weight:700;font-family:Montserrat,sans-serif;">Accéder au dossier Google Drive →</a></p>'
+
+    site_section = ""
+    if lien_site:
+        site_section = (
+            '<p style="margin:0 0 20px 0;text-align:center;">'
+            f'<a href="{lien_site}" target="_blank" '
+            'style="display:inline-block;padding:12px 28px;background:#2b2b2b;border-radius:6px;'
+            'font-family:\'Bebas Neue\',Impact,sans-serif;font-size:15px;letter-spacing:1.5px;'
+            'color:#faf7f3;text-decoration:none;text-transform:uppercase;">'
+            'VOIR LE SITE →</a></p>'
+        )
+
+    logo_section = ""
+    if logos:
+        items_html = ''.join(
+            f'<li style="margin:0 0 8px 0;"><a href="{l["url"]}" target="_blank" style="color:#e83b14;text-decoration:none;font-weight:700;">{l["filename"]}</a></li>'
+            for l in logos if l.get('url')
+        )
+        if items_html:
+            plural = len(logos) > 1
+            logo_section = (
+                _p(f"Votre <strong>logo vectorisé</strong> {'est prêt' if not plural else 'et ses fichiers sont prêts'} à être utilisé{'s' if plural else ''} partout (impression, web, signature courriel) :") +
+                f'<ul style="margin:0 0 15px 0;padding:0 0 0 20px;font-family:Montserrat,sans-serif;font-size:14px;line-height:23px;color:#555;">{items_html}</ul>'
+            )
+
+    ressources_section = ""
+    if ressources:
+        items_html = ''.join(
+            f'<li style="margin:0 0 8px 0;"><a href="{r["url"]}" target="_blank" style="color:#e83b14;text-decoration:none;font-weight:700;">{r["titre"]}</a></li>'
+            for r in ressources if r.get('url')
+        )
+        if items_html:
+            ressources_section = (
+                _p("On vous a aussi préparé quelques ressources utiles pour la suite :") +
+                f'<ul style="margin:0 0 15px 0;padding:0 0 0 20px;font-family:Montserrat,sans-serif;font-size:14px;line-height:23px;color:#555;">{items_html}</ul>' +
+                f'<p style="margin:0 0 15px 0;text-align:center;"><a href="{PORTAIL_URL}/dashboard" style="color:#e83b14;font-size:14px;text-decoration:none;font-weight:700;font-family:Montserrat,sans-serif;">Voir toutes mes ressources sur le portail →</a></p>'
+            )
+
     return _base(
         titre_hero="Votre projet est terminé !",
         sous_titre_hero="Vos livrables sont prêts.",
@@ -272,10 +373,14 @@ def email_livraison(nom, nom_projet, lien_projet, lien_drive=None):
                 "titre": "C'est dans la boîte !",
                 "contenu": (
                     _p(f"Bonjour <strong>{nom}</strong>,") +
+                    (_highlight(note) if note else "") +
                     _p("Votre projet est maintenant <strong>terminé</strong> et vos livrables sont prêts :") +
                     _highlight(nom_projet) +
+                    site_section +
                     _p("Vous pouvez consulter et télécharger vos fichiers via votre portail ou directement depuis votre dossier Google Drive.") +
                     drive_section +
+                    logo_section +
+                    ressources_section +
                     _p("Merci de nous avoir fait confiance. Ce fut un plaisir de travailler avec vous !")
                 )
             }
@@ -304,7 +409,29 @@ def email_archive(nom, nom_projet):
         cta_url=f"{PORTAIL_URL}/profile"
     )
 
-def email_nouvelle_facture(nom):
+def email_nouvelle_facture(nom, numero=None, description=None, montant=None, date_echeance=None):
+    resume_section = ""
+    if numero or montant is not None:
+        def _row(label, valeur, is_last=False):
+            border = "" if is_last else "border-bottom:1px solid #f0ede9;"
+            return (
+                f'<tr><td style="padding:10px 0;{border}font-family:Montserrat,sans-serif;font-size:13px;color:#888;">{label}</td>'
+                f'<td style="padding:10px 0;{border}font-family:Montserrat,sans-serif;font-size:13px;color:#2b2b2b;font-weight:700;text-align:right;">{valeur}</td></tr>'
+            )
+        rows = ""
+        if numero:
+            rows += _row("Numéro", numero)
+        if description:
+            rows += _row("Description", description)
+        if montant is not None:
+            rows += _row("Montant total", f"{montant:.2f} $")
+        if date_echeance:
+            rows += _row("Échéance", date_echeance, is_last=True)
+        resume_section = (
+            f'<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" '
+            f'style="margin:0 0 20px 0;background:#faf7f3;border-radius:8px;padding:4px 18px;">{rows}</table>'
+        )
+
     return _base(
         titre_hero="Nouvelle facture disponible",
         sous_titre_hero="Une nouvelle facture est disponible dans votre portail.",
@@ -314,7 +441,8 @@ def email_nouvelle_facture(nom):
                 "titre": "Votre facture vous attend.",
                 "contenu": (
                     _p(f"Bonjour <strong>{nom}</strong>,") +
-                    _p("Une nouvelle facture est disponible dans votre portail client. Vous pouvez la consulter et la télécharger directement depuis votre profil.")
+                    _p("Une nouvelle facture est disponible — vous la trouverez en pièce jointe (PDF) à ce courriel, ou dans votre portail client.") +
+                    resume_section
                 )
             }
         ],
@@ -418,6 +546,352 @@ def email_annulation(nom, nom_projet):
                     _p("Nous vous informons que le projet suivant a été annulé :") +
                     _highlight(nom_projet) +
                     _p("Si vous avez des questions, n'hésitez pas à nous contacter directement.")
+                )
+            }
+        ],
+        cta_texte="ACCÉDER AU PORTAIL",
+        cta_url=PORTAIL_URL
+    )
+
+def _invitation_client(nom: str, lien: str) -> str:
+    return _base(
+        titre_hero="Bienvenue chez Cocktail Média !",
+        sous_titre_hero="Votre espace client a été créé. Plus qu'une étape !",
+        sections=[
+            {
+                "label": "Activation de votre compte",
+                "titre": f"Bonjour {nom}, créez votre accès !",
+                "contenu": (
+                    _p("Votre accès au <strong>Portail Client Cocktail Média</strong> a été créé par notre équipe.") +
+                    _p("Cliquez sur le bouton ci-dessous pour choisir votre mot de passe et accéder à vos projets, documents et factures.") +
+                    _p("<strong>Ce lien est valide 7 jours.</strong> Si vous n'attendiez pas cet email, vous pouvez l'ignorer.")
+                )
+            }
+        ],
+        cta_texte="CRÉER MON MOT DE PASSE",
+        cta_url=lien
+    )
+def email_nouveau_post_marketing(titre, date_publication, plateformes, description):
+    plateformes_str = ', '.join(plateformes) if isinstance(plateformes, list) else plateformes
+    return _base(
+        titre_hero="Nouveau post planifié",
+        sous_titre_hero="Un nouveau post a été planifié dans le calendrier marketing.",
+        sections=[
+            {
+                "label": "📅 Calendrier marketing",
+                "titre": "Voici les détails du post.",
+                "contenu": (
+                    f'<table style="width:100%;border-collapse:collapse;margin:0 0 15px 0;">'
+                    f'<tr><td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:12px;color:#888;width:140px;">Titre</td>'
+                    f'<td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:14px;color:#2b2b2b;font-weight:600;">{titre}</td></tr>'
+                    f'<tr style="background:#faf7f3;"><td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:12px;color:#888;">Date</td>'
+                    f'<td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:14px;color:#2b2b2b;font-weight:600;">{date_publication}</td></tr>'
+                    f'<tr><td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:12px;color:#888;">Plateformes</td>'
+                    f'<td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:14px;color:#2b2b2b;font-weight:600;">{plateformes_str}</td></tr>'
+                    f'<tr style="background:#faf7f3;"><td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:12px;color:#888;">Description</td>'
+                    f'<td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:14px;color:#2b2b2b;">{description or "—"}</td></tr>'
+                    f'</table>' +
+                    _p("Connecte-toi au portail pour déposer les visuels.")
+                )
+            }
+        ],
+        cta_texte="ACCÉDER AU PORTAIL",
+        cta_url=PORTAIL_URL
+    )
+
+def email_mon_site_disponible(nom, nom_entreprise=None):
+    intro_entreprise = f" de <strong>{nom_entreprise}</strong>" if nom_entreprise else ""
+    return _base(
+        titre_hero="Modifiez votre site dès maintenant",
+        sous_titre_hero="Une nouvelle section \"Mon site\" est disponible sur votre portail.",
+        sections=[
+            {
+                "label": "Nouveauté — Portail Client",
+                "titre": "Votre site, entre vos mains",
+                "contenu": (
+                    _p(f"Bonjour <strong>{nom}</strong>,") +
+                    _p(f"Vous pouvez maintenant modifier le contenu de votre site web{intro_entreprise} vous-même, directement depuis votre portail — sans nous écrire, sans attendre.") +
+                    _highlight("Nouvelle section : Mon site") +
+                    _p("Depuis cette section, vous pouvez mettre à jour :") +
+                    (
+                        '<ul style="margin:0 0 15px 0;padding:0 0 0 20px;font-family:Montserrat,sans-serif;font-size:14px;line-height:24px;color:#555;">'
+                        '<li style="margin:0 0 6px 0;">Les textes de vos pages (accueil, à propos, contact…)</li>'
+                        '<li style="margin:0 0 6px 0;">Vos services : descriptions, tarifs, formules et photos</li>'
+                        '<li style="margin:0 0 6px 0;">Vos coordonnées et réseaux sociaux</li>'
+                        '</ul>'
+                    ) +
+                    _p("Chaque modification est enregistrée immédiatement et mise à jour sur votre site en direct. Connectez-vous à votre portail et cliquez sur <strong>Mon site</strong> dans le menu pour commencer.")
+                )
+            }
+        ],
+        cta_texte="MODIFIER MON SITE",
+        cta_url=f"{PORTAIL_URL}/mon-site"
+    )
+
+def email_identite_visuelle_prete(nom, nom_projet, lien_identite):
+    return _base(
+        titre_hero="Votre identité visuelle est prête !",
+        sous_titre_hero="Consultez et téléchargez vos livrables finaux.",
+        sections=[
+            {
+                "label": "Révision finale",
+                "titre": "À vous de jouer !",
+                "contenu": (
+                    _p(f"Bonjour <strong>{nom}</strong>,") +
+                    _p("Bonne nouvelle — votre identité visuelle est maintenant complète et prête pour révision :") +
+                    _highlight(nom_projet) +
+                    _p("Connectez-vous à votre portail pour consulter vos logos, palettes de couleurs, typographies et tous vos fichiers finaux. Vous pouvez tout télécharger depuis la page de votre identité visuelle.")
+                )
+            }
+        ],
+        cta_texte="VOIR MON IDENTITÉ VISUELLE",
+        cta_url=lien_identite
+    )
+
+def email_reset_password(nom, reset_url):
+    return _base(
+        titre_hero="Réinitialisation de votre mot de passe",
+        sous_titre_hero="Vous avez demandé un nouveau mot de passe pour votre compte.",
+        sections=[
+            {
+                "label": "Sécurité du compte",
+                "titre": f"Bonjour {nom} !",
+                "contenu": (
+                    _p("Nous avons reçu une demande de réinitialisation de mot de passe pour votre compte sur le Portail Client Cocktail Média.") +
+                    _p("Cliquez sur le bouton ci-dessous pour choisir un nouveau mot de passe. Ce lien est valide pendant <strong>1 heure</strong>.") +
+                    _p("Si vous n'avez pas fait cette demande, ignorez simplement ce courriel. Votre mot de passe restera inchangé.")
+                )
+            }
+        ],
+        cta_texte="RÉINITIALISER MON MOT DE PASSE",
+        cta_url=reset_url
+    )
+
+def email_nouveau_client(nom, email, nom_entreprise, lien_admin):
+    return _base(
+        titre_hero="Nouveau client inscrit",
+        sous_titre_hero="Un client vient de confirmer son compte sur le portail.",
+        sections=[
+            {
+                "label": "Nouveau compte confirmé",
+                "titre": "Un nouveau client est prêt.",
+                "contenu": (
+                    _p("Un client vient de confirmer son adresse email et peut maintenant se connecter au portail.") +
+                    f'<table style="width:100%;border-collapse:collapse;margin:0 0 15px 0;">'
+                    f'<tr><td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:12px;color:#888;width:140px;">Nom</td>'
+                    f'<td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:14px;color:#2b2b2b;font-weight:600;">{nom}</td></tr>'
+                    f'<tr style="background:#faf7f3;"><td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:12px;color:#888;">Email</td>'
+                    f'<td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:14px;color:#2b2b2b;">{email}</td></tr>'
+                    f'<tr><td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:12px;color:#888;">Entreprise</td>'
+                    f'<td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:14px;color:#2b2b2b;">{nom_entreprise or "—"}</td></tr>'
+                    f'</table>'
+                )
+            }
+        ],
+        cta_texte="VOIR LE NOUVEAU CLIENT",
+        cta_url=lien_admin
+    )
+
+def email_soumission_disponible(nom, titre, lien_portail):
+    return _base(
+        titre_hero="Une soumission vous attend",
+        sous_titre_hero="Consultez votre soumission confidentielle dans votre portail.",
+        sections=[
+            {
+                "label": "Soumission",
+                "titre": "Votre soumission est prête.",
+                "contenu": (
+                    _p(f"Bonjour <strong>{nom}</strong>,") +
+                    _p("Une nouvelle soumission vient d'être préparée pour vous :") +
+                    _highlight(titre) +
+                    _p("Connectez-vous à votre portail pour consulter les options, comparer les prix et accepter la formule qui vous convient.")
+                )
+            }
+        ],
+        cta_texte="VOIR MA SOUMISSION",
+        cta_url=lien_portail
+    )
+
+
+def email_soumission_acceptee_admin(nom_client, email_client, titre_soumission,
+                                    nom_option, prix_setup, prix_mensuel,
+                                    date_acceptation, lien_admin, extras_selectionnes=None):
+    tps_setup = round(prix_setup * 0.05, 2)
+    tvq_setup = round(prix_setup * 0.09975, 2)
+    total_setup = round(prix_setup + tps_setup + tvq_setup, 2)
+    tps_mensuel = round(prix_mensuel * 0.05, 2)
+    tvq_mensuel = round(prix_mensuel * 0.09975, 2)
+    total_mensuel = round(prix_mensuel + tps_mensuel + tvq_mensuel, 2)
+
+    lignes_setup = (
+        f'<tr><td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:12px;color:#888;width:180px;">Prix setup (avant taxes)</td>'
+        f'<td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:14px;color:#2b2b2b;font-weight:600;">{prix_setup:.2f} $</td></tr>'
+        f'<tr style="background:#faf7f3;"><td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:12px;color:#888;">TPS (5 %)</td>'
+        f'<td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:14px;color:#2b2b2b;">{tps_setup:.2f} $</td></tr>'
+        f'<tr><td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:12px;color:#888;">TVQ (9,975 %)</td>'
+        f'<td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:14px;color:#2b2b2b;">{tvq_setup:.2f} $</td></tr>'
+        f'<tr style="background:#faf7f3;"><td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:12px;color:#888;font-weight:700;">Total setup</td>'
+        f'<td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:15px;color:#e83b14;font-weight:700;">{total_setup:.2f} $</td></tr>'
+    )
+    lignes_mensuel = (
+        f'<tr><td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:12px;color:#888;width:180px;">Prix mensuel (avant taxes)</td>'
+        f'<td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:14px;color:#2b2b2b;font-weight:600;">{prix_mensuel:.2f} $</td></tr>'
+        f'<tr style="background:#faf7f3;"><td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:12px;color:#888;">TPS + TVQ</td>'
+        f'<td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:14px;color:#2b2b2b;">{round(tps_mensuel+tvq_mensuel,2):.2f} $</td></tr>'
+        f'<tr><td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:12px;color:#888;font-weight:700;">Total mensuel</td>'
+        f'<td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:15px;color:#e83b14;font-weight:700;">{total_mensuel:.2f} $</td></tr>'
+    ) if prix_mensuel > 0 else ''
+
+    return _base(
+        titre_hero="Soumission acceptee",
+        sous_titre_hero=f"{nom_client} a accepte une soumission.",
+        sections=[
+            {
+                "label": "Details de l'acceptation",
+                "titre": f"Option choisie : {nom_option}",
+                "contenu": (
+                    f'<table style="width:100%;border-collapse:collapse;margin:0 0 15px 0;">'
+                    f'<tr><td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:12px;color:#888;width:180px;">Client</td>'
+                    f'<td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:14px;color:#2b2b2b;font-weight:600;">{nom_client}</td></tr>'
+                    f'<tr style="background:#faf7f3;"><td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:12px;color:#888;">Email</td>'
+                    f'<td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:14px;color:#2b2b2b;">{email_client}</td></tr>'
+                    f'<tr><td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:12px;color:#888;">Soumission</td>'
+                    f'<td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:14px;color:#2b2b2b;font-weight:600;">{titre_soumission}</td></tr>'
+                    f'<tr style="background:#faf7f3;"><td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:12px;color:#888;">Option acceptee</td>'
+                    f'<td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:14px;color:#2b2b2b;font-weight:700;">{nom_option}</td></tr>'
+                    f'<tr><td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:12px;color:#888;">Date d\'acceptation</td>'
+                    f'<td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:14px;color:#2b2b2b;">{date_acceptation}</td></tr>'
+                    f'</table>'
+                    f'<table style="width:100%;border-collapse:collapse;margin:0 0 15px 0;">'
+                    + lignes_setup + lignes_mensuel +
+                    f'</table>'
+                    + (
+                        f'<p style="font-family:Montserrat,sans-serif;font-size:12px;font-weight:700;color:#e83b14;margin:18px 0 8px;text-transform:uppercase;letter-spacing:0.08em;">Extras sélectionnés par le client</p>'
+                        f'<table style="width:100%;border-collapse:collapse;">'
+                        + ''.join(
+                            f'<tr style="background:{"#faf7f3" if i%2==0 else "#fff"};">'
+                            f'<td style="padding:8px 14px;font-family:Montserrat,sans-serif;font-size:13px;color:#2b2b2b;">{e.get("situation","")}</td>'
+                            f'<td style="padding:8px 14px;font-family:Montserrat,sans-serif;font-size:13px;color:#2b2b2b;font-weight:600;white-space:nowrap;">{e.get("cout","")}</td>'
+                            f'</tr>'
+                            for i, e in enumerate(extras_selectionnes)
+                        )
+                        + f'</table>'
+                        if extras_selectionnes else ''
+                    )
+                )
+            }
+        ],
+        cta_texte="VOIR LA SOUMISSION",
+        cta_url=lien_admin
+    )
+
+
+def email_rendez_vous_confirme(nom: str, label: str, meet_link: str, google_url: str, outlook_url: str, ics_url: str) -> str:
+    """Email de confirmation de rendez-vous avec boutons 'Ajouter à l'agenda'."""
+    return _base(
+        titre_hero="Rendez-vous confirmé",
+        sous_titre_hero="Votre créneau est réservé.",
+        sections=[{
+            "label": "Votre rendez-vous",
+            "titre": f"Bonjour {nom},",
+            "contenu": (
+                _p("Un rendez-vous a été planifié avec vous :") +
+                f'<p style="margin:0 0 20px 0;padding:14px 18px;background:#faf7f3;border-left:4px solid #e83b14;'
+                f'border-radius:0 6px 6px 0;font-family:\'Bebas Neue\',Impact,sans-serif;font-size:20px;'
+                f'letter-spacing:1px;color:#2b2b2b;">{label}</p>' +
+                _add_to_calendar_html(google_url, outlook_url, ics_url) +
+                (f'<p style="margin:20px 0 0;font-family:Montserrat,sans-serif;font-size:13px;color:#555;">'
+                 f'Rejoignez la réunion : <a href="{meet_link}" style="color:#e83b14;font-weight:700;">{meet_link}</a></p>'
+                 if meet_link else '')
+            )
+        }],
+        cta_texte="REJOINDRE LA RÉUNION" if meet_link else "ACCÉDER À MON PORTAIL",
+        cta_url=meet_link or PORTAIL_URL
+    )
+
+
+def email_agenda_rendez_vous(nom, slots, booking_url=None, nom_service=None):
+    """
+    slots       = liste de dicts {'label': 'Lundi 9 juin à 9h00', 'url': 'https://...'}
+    booking_url = lien vers le calendrier complet (optionnel)
+    nom_service = si fourni, personnalise le texte pour la réservation d'une séance précise
+    """
+    boutons_html = ""
+    for slot in slots:
+        boutons_html += f"""
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin-bottom:10px;">
+          <tr><td>
+            <a href="{slot['url']}" target="_blank"
+               style="display:block;padding:14px 24px;background-color:#faf7f3;border:2px solid #e83b14;border-radius:8px;
+                      font-family:'Bebas Neue',Impact,sans-serif;font-size:16px;letter-spacing:1px;color:#2b2b2b;
+                      text-decoration:none;text-transform:uppercase;text-align:center;">
+              {slot['label']} &nbsp;→
+            </a>
+          </td></tr>
+        </table>"""
+
+    voir_calendrier = ""
+    if booking_url:
+        voir_calendrier = (
+            f'<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin-top:18px;">'
+            f'<tr><td align="center">'
+            f'<a href="{booking_url}" target="_blank" '
+            f'style="font-family:Montserrat,sans-serif;font-size:12px;color:#e83b14;font-weight:700;'
+            f'text-decoration:underline;text-underline-offset:3px;">'
+            f'Voir toutes les disponibilités →</a>'
+            f'</td></tr></table>'
+        )
+
+    if nom_service:
+        titre_hero = f"Réservez votre séance « {nom_service} »"
+        sous_titre_hero = "Choisissez le créneau qui vous convient."
+        intro = _p(f"Voici les prochains créneaux disponibles pour réserver votre séance « {nom_service} » — cliquez sur celui qui vous convient pour le confirmer.")
+        note = _p('<span style="font-size:11px;color:#888;">Votre confirmation créera automatiquement votre projet et un événement dans notre agenda. On vous demandera l\'adresse de la séance à l\'étape suivante.</span>')
+    else:
+        titre_hero = "Planifiez votre rendez-vous"
+        sous_titre_hero = "Choisissez un créneau qui vous convient."
+        intro = _p("Nous aimerions échanger avec vous ! Voici les prochains créneaux disponibles dans notre agenda — cliquez sur celui qui vous convient pour confirmer instantanément.")
+        note = _p('<span style="font-size:11px;color:#888;">Votre confirmation crée automatiquement un événement dans votre calendrier.</span>')
+
+    return _base(
+        titre_hero=titre_hero,
+        sous_titre_hero=sous_titre_hero,
+        sections=[
+            {
+                "label": "Rendez-vous",
+                "titre": f"Bonjour {nom},",
+                "contenu": (
+                    intro +
+                    boutons_html +
+                    voir_calendrier +
+                    note
+                )
+            }
+        ]
+    )
+
+
+def email_visuel_depose(titre, date_publication, plateformes, nb_fichiers):
+    plateformes_str = ', '.join(plateformes) if isinstance(plateformes, list) else plateformes
+    return _base(
+        titre_hero="Visuel(s) déposé(s)",
+        sous_titre_hero="Les visuels pour ce post sont prêts !",
+        sections=[
+            {
+                "label": "🎨 Calendrier marketing",
+                "titre": "Les visuels sont prêts.",
+                "contenu": (
+                    f'<table style="width:100%;border-collapse:collapse;margin:0 0 15px 0;">'
+                    f'<tr><td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:12px;color:#888;width:140px;">Post</td>'
+                    f'<td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:14px;color:#2b2b2b;font-weight:600;">{titre}</td></tr>'
+                    f'<tr style="background:#faf7f3;"><td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:12px;color:#888;">Date prévue</td>'
+                    f'<td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:14px;color:#2b2b2b;font-weight:600;">{date_publication}</td></tr>'
+                    f'<tr><td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:12px;color:#888;">Plateformes</td>'
+                    f'<td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:14px;color:#2b2b2b;font-weight:600;">{plateformes_str}</td></tr>'
+                    f'<tr style="background:#faf7f3;"><td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:12px;color:#888;">Fichiers déposés</td>'
+                    f'<td style="padding:10px 14px;font-family:Montserrat,sans-serif;font-size:14px;color:#2b2b2b;font-weight:600;">{nb_fichiers} visuel(s)</td></tr>'
+                    f'</table>' +
+                    _p("Connecte-toi au portail pour les consulter et télécharger.")
                 )
             }
         ],

@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+{% block title %}Médiathèque — Gabarits{% endblock %}
+
+{% block head %}
+<style>
+  .gabarit-card {
+    background: var(--couleur-blanc);
+    border: 1px solid var(--couleur-bordure);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm);
+    padding: var(--space-4);
+    margin-bottom: var(--space-4);
+  }
+  .gabarit-header {
+    display: flex; align-items: center;
+    justify-content: space-between; gap: var(--space-3);
+    margin-bottom: var(--space-3); flex-wrap: wrap;
+  }
+  .gabarit-header-left { display: flex; align-items: center; gap: var(--space-3); }
+  .preview-thumb {
+    width: 120px; height: 80px; object-fit: cover;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--couleur-bordure); flex-shrink: 0;
+  }
+  .preview-placeholder {
+    width: 120px; height: 80px;
+    background: var(--couleur-fond);
+    border: 2px dashed var(--couleur-bordure);
+    border-radius: var(--radius-sm);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.8rem; flex-shrink: 0; color: #aaa;
+  }
+  .gabarit-title { font-size: var(--fs-lg); font-weight: 700; color: var(--couleur-sombre-strong); }
+  .gabarit-desc  { font-size: var(--fs-sm); color: #7a7773; margin-top: .2rem; }
+  .fichiers-list { display: grid; gap: .5rem; margin: var(--space-3) 0; }
+  .fichier-row {
+    display: flex; align-items: center; gap: var(--space-2);
+    padding: .5rem var(--space-3);
+    background: var(--couleur-fond);
+    border: 1px solid var(--couleur-bordure);
+    border-radius: var(--radius-sm);
+  }
+  .fichier-nom { flex: 1; font-size: var(--fs-sm); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ext-badge {
+    font-size: .75rem; font-weight: 700; padding: .2rem .5rem;
+    border-radius: 4px; background: #e8f0ff; color: var(--couleur-info); flex-shrink: 0;
+  }
+  .preview-badge {
+    font-size: .75rem; font-weight: 700; padding: .2rem .5rem;
+    border-radius: 4px; background: #fff4e5; color: var(--couleur-warning); flex-shrink: 0;
+  }
+  .upload-zone {
+    margin-top: var(--space-3); padding-top: var(--space-3);
+    border-top: 1px dashed var(--couleur-bordure);
+    display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: flex-end;
+  }
+  .upload-form { display: flex; gap: .75rem; flex-wrap: wrap; align-items: flex-end; flex: 1; min-width: 220px; }
+  .upload-form .form-group { flex: 1; min-width: 180px; margin: 0; }
+  .upload-form label { font-size: var(--fs-sm); }
+  .btn-delete {
+    display: inline-flex; align-items: center; gap: .3rem;
+    font-size: var(--fs-sm); font-weight: 600; padding: .3rem .7rem;
+    border-radius: 5px; background: #fdecea; color: var(--couleur-danger);
+    text-decoration: none; transition: background var(--t-fast); white-space: nowrap; border: none; cursor: pointer;
+  }
+  .btn-delete:hover { background: #f5c6cb; color: var(--couleur-danger); text-decoration: none; }
+  .btn-sm { min-width: auto; padding: .45rem .9rem; font-size: .9rem; white-space: nowrap; }
+  .btn-grey { background: #6c757d; }
+  .btn-grey:hover { background: #545b62; }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1>Médiathèque — Gabarits</h1>
+<p class="muted" style="margin-top:-.75rem; margin-bottom:var(--space-4);">
+  Chaque dossier contient les fichiers gabarits (EPS, AI, PDF…) + une image d'aperçu visible par le pigiste.
+</p>
+
+<!-- ── Créer un dossier ──────────────────────────────────── -->
+<div class="form-container">
+  <h2 style="margin-top:0; border-color:var(--couleur-principale);">Créer un nouveau dossier</h2>
+  <form action="{{ url_for('mediatech_admin_creer') }}" method="post" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-row">
+      <div class="form-group">
+        <label>Nom du dossier *</label>
+        <input type="text" name="nom" required placeholder="ex: Journal 1/4 page horizontal">
+      </div>
+      <div class="form-group">
+        <label>Description (optionnel)</label>
+        <input type="text" name="description" placeholder="ex: 4.25″ × 5.5″ — 300 dpi CMJN">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Image d'aperçu (JPG ou PNG)</label>
+      <input type="file" name="preview" accept=".jpg,.jpeg,.png,.webp">
+      <small class="muted">Le pigiste voit cette image dans la galerie. Tu peux l'ajouter plus tard.</small>
+    </div>
+    <button type="submit">Créer le dossier</button>
+  </form>
+</div>
+
+<!-- ── Dossiers existants ────────────────────────────────── -->
+<h2>Dossiers existants ({{ gabarits|length }})</h2>
+
+{% if gabarits %}
+  {% for g in gabarits %}
+  <div class="gabarit-card">
+    <div class="gabarit-header">
+      <div class="gabarit-header-left">
+        {% if g['preview_drive_id'] %}
+          <img src="{{ url_for('api_tools_serve_file', file_id=g['preview_drive_id']) }}"
+               alt="aperçu" class="preview-thumb">
+        {% else %}
+          <div class="preview-placeholder">🖼</div>
+        {% endif %}
+        <div>
+          <div class="gabarit-title">{{ g['nom'] }}</div>
+          {% if g['description'] %}<div class="gabarit-desc">{{ g['description'] }}</div>{% endif %}
+        </div>
+      </div>
+      <form action="{{ url_for('mediatech_admin_supprimer', gabarit_id=g['id']) }}" method="post"
+            onsubmit="return confirm('Supprimer ce dossier et tous ses fichiers Drive ?')">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn-delete">✖ Supprimer</button>
+      </form>
+    </div>
+
+    <!-- Fichiers dans ce dossier -->
+    {% if g['files'] %}
+      <div class="fichiers-list">
+        {% for f in g['files'] %}
+        <div class="fichier-row">
+          <span class="fichier-nom">{{ f['name'] }}</span>
+          {% if f['id'] == g['preview_drive_id'] %}
+            <span class="preview-badge">APERÇU</span>
+          {% else %}
+            <span class="ext-badge">{{ f['name'].rsplit('.', 1)[-1].upper() if '.' in f['name'] else '—' }}</span>
+          {% endif %}
+          <form action="{{ url_for('mediatech_admin_supprimer_fichier', gabarit_id=g['id'], file_id=f['id']) }}"
+                method="post" onsubmit="return confirm('Supprimer ce fichier ?')" style="margin:0">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn-delete">✖</button>
+          </form>
+        </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="muted" style="font-size:.9rem; margin:.5rem 0 1rem;">Aucun fichier pour l'instant.</p>
+    {% endif %}
+
+    <!-- Upload fichier + changer aperçu -->
+    <div class="upload-zone">
+      <form action="{{ url_for('mediatech_admin_upload_fichier', gabarit_id=g['id']) }}"
+            method="post" enctype="multipart/form-data" class="upload-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group">
+          <label>Ajouter un fichier (EPS, AI, PDF, JPG…)</label>
+          <input type="file" name="fichier" required
+                 accept=".eps,.ai,.indd,.psd,.pdf,.svg,.zip,.jpg,.jpeg,.png,.tif,.tiff">
+        </div>
+        <button type="submit" class="btn-sm">Ajouter</button>
+      </form>
+
+      <form action="{{ url_for('mediatech_admin_set_preview', gabarit_id=g['id']) }}"
+            method="post" enctype="multipart/form-data" class="upload-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group">
+          <label>{{ 'Remplacer' if g['preview_drive_id'] else 'Ajouter' }} l'image d'aperçu</label>
+          <input type="file" name="preview" required accept=".jpg,.jpeg,.png,.webp">
+        </div>
+        <button type="submit" class="btn-sm btn-grey">
+          {{ '🔄 Changer' if g['preview_drive_id'] else '🖼 Ajouter aperçu' }}
+        </button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+{% else %}
+  <div class="empty">
+    <h3>Aucun dossier</h3>
+    <p>Utilisez le formulaire ci-dessus pour créer votre premier dossier.</p>
+  </div>
+{% endif %}
+{% endblock %}

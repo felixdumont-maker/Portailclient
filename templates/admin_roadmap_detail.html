@@ -1,0 +1,275 @@
+{% extends "base.html" %}
+{% block title %}{{ roadmap.titre }}{% endblock %}
+{% block content %}
+<div style="max-width:900px;margin:0 auto;">
+
+  <div style="margin-bottom:1rem;">
+    <a href="{{ url_for('admin_roadmaps') }}" style="font-size:13px;color:#888;">← Retour aux roadmaps</a>
+  </div>
+
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.25rem;">
+    <h1 style="margin:0;border:none;padding:0;">{{ roadmap.titre }}</h1>
+    <button onclick="document.getElementById('form-edit-projet').style.display=document.getElementById('form-edit-projet').style.display==='none'?'block':'none'" class="btn btn-secondary" style="min-width:auto;padding:.4rem .8rem;font-size:.85rem;">Modifier</button>
+  </div>
+
+  {% if roadmap.description %}
+  <p style="color:#888;font-size:0.9rem;margin-bottom:1rem;">{{ roadmap.description }}</p>
+  {% endif %}
+
+  <div id="form-edit-projet" style="display:none;margin-bottom:1.5rem;">
+    <div class="card" style="margin-bottom:0;">
+      <form method="POST" action="{{ url_for('admin_roadmap_edit', roadmap_id=roadmap.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group">
+          <label>Nom du projet</label>
+          <input type="text" name="titre" value="{{ roadmap.titre }}" required>
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <textarea name="description" style="min-height:70px;">{{ roadmap.description or '' }}</textarea>
+        </div>
+        <div class="form-group">
+          <label>Notes internes</label>
+          <textarea name="notes" placeholder="Observations, blocages, decisions..." style="min-height:80px;">{{ roadmap.notes or '' }}</textarea>
+        </div>
+        <div style="text-align:right;">
+          <button type="submit" class="btn">Sauvegarder</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  {% if roadmap.notes %}
+  <div style="background:#fff4e9;border-radius:8px;padding:10px 14px;margin-bottom:1.5rem;font-size:12px;color:#888;line-height:1.6;">
+    <strong style="color:#2b2b2b;">Notes :</strong> {{ roadmap.notes }}
+  </div>
+  {% endif %}
+
+  {% set total_global = namespace(val=0) %}
+  {% set done_global = namespace(val=0) %}
+  {% for p in phases %}
+    {% set total_global.val = total_global.val + p.todos|length %}
+    {% set done_global.val = done_global.val + p.todos|selectattr('est_coche', 'equalto', 1)|list|length %}
+  {% endfor %}
+  {% if total_global.val > 0 %}
+  {% set pct = ((done_global.val / total_global.val) * 100)|int %}
+  <div style="margin-bottom:2rem;">
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:#aaa;margin-bottom:4px;">
+      <span>Progression globale</span>
+      <span>{{ done_global.val }}/{{ total_global.val }} taches — {{ pct }}%</span>
+    </div>
+    <div class="progress"><span style="width:{{ pct }}%;"></span></div>
+  </div>
+  {% endif %}
+
+  {% for p in phases %}
+  {% set phase = p.phase %}
+  {% set todos = p.todos %}
+  {% set total = todos|length %}
+  {% set done = todos|selectattr('est_coche', 'equalto', 1)|list|length %}
+  {% set pct_phase = ((done / total * 100)|int) if total > 0 else 0 %}
+
+  <div style="margin-bottom:8px;">
+    <div onclick="togglePhase({{ phase.id }})" style="display:flex;align-items:center;gap:12px;padding:14px 16px;background:white;border:1px solid #e0d9d3;border-radius:12px;cursor:pointer;">
+      <div style="width:12px;height:12px;border-radius:50%;background:{{ phase.couleur }};flex-shrink:0;"></div>
+      <div style="flex:1;">
+        <div style="font-size:13px;font-weight:500;color:#2b2b2b;">{{ phase.titre }}</div>
+        {% if phase.date_debut or phase.date_fin %}
+        <div style="font-size:11px;color:#888;margin-top:2px;">{{ phase.date_debut or '' }}{% if phase.date_debut and phase.date_fin %} -> {% endif %}{{ phase.date_fin or '' }}</div>
+        {% endif %}
+        {% if total > 0 %}
+        <div style="margin-top:6px;">
+          <div style="height:4px;background:#f2ede8;border-radius:999px;overflow:hidden;width:200px;">
+            <div style="height:100%;width:{{ pct_phase }}%;background:linear-gradient(90deg,#e83b14,#ff6f3d);"></div>
+          </div>
+        </div>
+        {% endif %}
+      </div>
+      {% if phase.notes %}
+      <span style="font-size:10px;background:#e8f0fe;color:#1a56c0;padding:2px 8px;border-radius:20px;font-weight:500;">📝 Notes</span>
+      {% endif %}
+      <div style="font-size:11px;padding:3px 10px;border-radius:20px;background:#fff3cd;color:#856404;font-weight:500;">{{ phase.badge }}</div>
+      <div style="font-size:11px;color:#aaa;min-width:40px;text-align:right;">{% if total > 0 %}{{ done }}/{{ total }}{% endif %}</div>
+      <span id="arr-{{ phase.id }}" style="font-size:11px;color:#aaa;transition:transform 0.2s;">▶</span>
+    </div>
+
+    <div id="phase-body-{{ phase.id }}" style="display:none;background:white;border:1px solid #e0d9d3;border-top:none;border-radius:0 0 12px 12px;padding:12px 16px;margin-top:-4px;">
+
+      {% if phase.description %}
+      <div style="background:#fff4e9;border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:12px;color:#666;line-height:1.6;">{{ phase.description }}</div>
+      {% endif %}
+
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-bottom:8px;">
+        <button onclick="toggleEditPhase({{ phase.id }})" style="background:none;border:none;color:#aaa;cursor:pointer;font-size:12px;padding:2px 6px;">Modifier la phase</button>
+        <form method="POST" action="{{ url_for('admin_roadmap_delete_phase', phase_id=phase.id) }}" style="display:inline;" onsubmit="return confirm('Supprimer cette phase ?')">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" style="background:none;border:none;color:#ccc;cursor:pointer;font-size:12px;padding:2px 6px;">Supprimer</button>
+        </form>
+      </div>
+
+      <div id="edit-phase-{{ phase.id }}" style="display:none;margin-bottom:12px;">
+        <form method="POST" action="{{ url_for('admin_roadmap_edit_phase', phase_id=phase.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+            <div class="form-group" style="margin:0;grid-column:1/-1;">
+              <label style="font-size:12px;">Nom</label>
+              <input type="text" name="titre" value="{{ phase.titre }}" required>
+            </div>
+            <div class="form-group" style="margin:0;grid-column:1/-1;">
+              <label style="font-size:12px;">Description</label>
+              <textarea name="description" style="min-height:60px;">{{ phase.description or '' }}</textarea>
+            </div>
+            <div class="form-group" style="margin:0;">
+              <label style="font-size:12px;">Date debut</label>
+              <input type="text" name="date_debut" value="{{ phase.date_debut or '' }}">
+            </div>
+            <div class="form-group" style="margin:0;">
+              <label style="font-size:12px;">Date fin</label>
+              <input type="text" name="date_fin" value="{{ phase.date_fin or '' }}">
+            </div>
+            <div class="form-group" style="margin:0;">
+              <label style="font-size:12px;">Badge</label>
+              <select name="badge">
+                <option value="Planifiee" {% if phase.badge=='Planifiee' %}selected{% endif %}>Planifiee</option>
+                <option value="En cours" {% if phase.badge=='En cours' %}selected{% endif %}>En cours</option>
+                <option value="Completee" {% if phase.badge=='Completee' %}selected{% endif %}>Completee</option>
+                <option value="Objectif $" {% if phase.badge=='Objectif $' %}selected{% endif %}>Objectif $</option>
+              </select>
+            </div>
+            <div class="form-group" style="margin:0;">
+              <label style="font-size:12px;">Couleur</label>
+              <select name="couleur">
+                <option value="#f39c12" {% if phase.couleur=='#f39c12' %}selected{% endif %}>Orange</option>
+                <option value="#3498db" {% if phase.couleur=='#3498db' %}selected{% endif %}>Bleu</option>
+                <option value="#2ecc71" {% if phase.couleur=='#2ecc71' %}selected{% endif %}>Vert</option>
+                <option value="#c0321a" {% if phase.couleur=='#c0321a' %}selected{% endif %}>Rouge</option>
+              </select>
+            </div>
+          </div>
+          <div style="text-align:right;">
+            <button type="submit" class="btn" style="font-size:12px;padding:.5rem 1rem;">Sauvegarder</button>
+          </div>
+        </form>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;">
+        {% for todo in todos %}
+        <div style="display:flex;align-items:flex-start;gap:10px;padding:7px 10px;border-radius:8px;background:{% if todo.est_coche %}#f0faf4{% else %}#f9f6f2{% endif %};">
+          <form method="POST" action="{{ url_for('admin_roadmap_toggle_todo', todo_id=todo.id) }}" style="margin:0;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="checkbox" style="margin-top:2px;cursor:pointer;" {% if todo.est_coche %}checked{% endif %} onchange="this.form.submit()">
+          </form>
+          <span style="font-size:12px;color:#2b2b2b;line-height:1.5;flex:1;{% if todo.est_coche %}text-decoration:line-through;color:#aaa;{% endif %}">{{ todo.texte }}</span>
+          <form method="POST" action="{{ url_for('admin_roadmap_delete_todo', todo_id=todo.id) }}" style="margin:0;" onsubmit="return confirm('Supprimer cette tache ?')">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" style="background:none;border:none;color:#ccc;cursor:pointer;font-size:11px;padding:0 4px;">x</button>
+          </form>
+        </div>
+        {% endfor %}
+        {% if todos|length == 0 %}
+        <div style="font-size:12px;color:#aaa;padding:8px 10px;font-style:italic;">Aucune tache — ajoutez-en ci-dessous.</div>
+        {% endif %}
+      </div>
+
+      <form method="POST" action="{{ url_for('admin_roadmap_add_todo', phase_id=phase.id) }}" style="display:flex;gap:8px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="text" name="texte" placeholder="Ajouter une tache..." style="flex:1;padding:8px 12px;border:1px solid #e0d9d3;border-radius:8px;font-size:12px;color:#2b2b2b;background:white;outline:none;">
+        <button type="submit" style="padding:8px 14px;background:#2b2b2b;color:white;border:none;border-radius:8px;font-size:12px;cursor:pointer;">+ Ajouter</button>
+      </form>
+
+      <div style="margin-top:12px;border-top:1px solid #f0ebe5;padding-top:12px;">
+        <label style="font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#aaa;display:block;margin-bottom:8px;">Journal de notes</label>
+        {% set notes = p.notes %}
+        {% for note in notes %}
+        <div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid #f5f0eb;">
+          <span style="font-size:11px;color:#aaa;white-space:nowrap;padding-top:2px;">{{ note.created_at[:10] }}</span>
+          <span style="font-size:12px;color:#2b2b2b;flex:1;line-height:1.5;">{{ note.texte }}</span>
+          <form method="POST" action="{{ url_for('admin_roadmap_delete_note', note_id=note.id) }}" style="margin:0;" onsubmit="return confirm('Supprimer cette note ?')">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" style="background:none;border:none;color:#ccc;cursor:pointer;font-size:11px;padding:0 4px;">✕</button>
+          </form>
+        </div>
+        {% endfor %}
+        {% if notes|length == 0 %}
+        <div style="font-size:12px;color:#ccc;font-style:italic;margin-bottom:8px;">Aucune note pour le moment.</div>
+        {% endif %}
+        <form method="POST" action="{{ url_for('admin_roadmap_add_note', phase_id=phase.id) }}" style="display:flex;gap:8px;margin-top:8px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="text" name="texte" placeholder="Ajouter une note..." style="flex:1;padding:7px 12px;border:1px solid #e0d9d3;border-radius:8px;font-size:12px;color:#2b2b2b;background:white;outline:none;">
+          <button type="submit" style="padding:7px 14px;background:#2b2b2b;color:white;border:none;border-radius:8px;font-size:12px;cursor:pointer;">+ Note</button>
+        </form>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+
+  <div style="margin-top:2rem;">
+    <button onclick="document.getElementById('form-phase').style.display=document.getElementById('form-phase').style.display==='none'?'block':'none'" class="btn btn-ghost" style="margin-bottom:10px;">+ Ajouter une phase</button>
+    <div id="form-phase" style="display:none;">
+      <div class="card" style="margin-bottom:0;">
+        <form method="POST" action="{{ url_for('admin_roadmap_add_phase', roadmap_id=roadmap.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+            <div class="form-group" style="margin:0;grid-column:1/-1;">
+              <label>Nom de la phase</label>
+              <input type="text" name="titre" placeholder="ex: Phase 1 — Lancement" required>
+            </div>
+            <div class="form-group" style="margin:0;grid-column:1/-1;">
+              <label>Description</label>
+              <textarea name="description" placeholder="Objectif, contexte, notes..." style="min-height:70px;"></textarea>
+            </div>
+            <div class="form-group" style="margin:0;">
+              <label>Date debut</label>
+              <input type="text" name="date_debut" placeholder="ex: Avril 2026">
+            </div>
+            <div class="form-group" style="margin:0;">
+              <label>Date fin</label>
+              <input type="text" name="date_fin" placeholder="ex: Mai 2026">
+            </div>
+            <div class="form-group" style="margin:0;">
+              <label>Badge</label>
+              <select name="badge">
+                <option value="Planifiee">Planifiee</option>
+                <option value="En cours">En cours</option>
+                <option value="Completee">Completee</option>
+                <option value="Objectif $">Objectif $</option>
+              </select>
+            </div>
+            <div class="form-group" style="margin:0;">
+              <label>Couleur</label>
+              <select name="couleur">
+                <option value="#f39c12">Orange — En cours</option>
+                <option value="#3498db">Bleu — Planifiee</option>
+                <option value="#2ecc71">Vert — Completee</option>
+                <option value="#c0321a">Rouge — Objectif</option>
+              </select>
+            </div>
+          </div>
+          <div style="text-align:right;">
+            <button type="submit" class="btn">+ Ajouter la phase</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+function togglePhase(id) {
+  var body = document.getElementById('phase-body-' + id);
+  var arr = document.getElementById('arr-' + id);
+  if (body.style.display === 'none') {
+    body.style.display = 'block';
+    arr.style.transform = 'rotate(90deg)';
+  } else {
+    body.style.display = 'none';
+    arr.style.transform = 'rotate(0deg)';
+  }
+}
+function toggleEditPhase(id) {
+  var form = document.getElementById('edit-phase-' + id);
+  form.style.display = form.style.display === 'none' ? 'block' : 'none';
+}
+</script>
+{% endblock %}

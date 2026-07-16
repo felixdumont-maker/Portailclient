@@ -1,0 +1,342 @@
+{% extends "base.html" %}
+{% block title %}Calendrier Marketing{% endblock %}
+{% block content %}
+
+{% set mois_precedent = mois | mois_precedent %}
+{% set mois_suivant = mois | mois_suivant %}
+
+<div class="marketing-header">
+    <h1 class="marketing-titre">📅 Calendrier Marketing</h1>
+        <div style="display:flex;gap:8px;align-items:center;">
+            <a href="{{ url_for('marketing_nouveau_post') }}" class="btn-primary">+ Nouveau post</a>
+            <form method="POST" action="{{ url_for('marketing_notifier_felix', mois=mois) }}" style="display:inline;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" id="btn-notifier-felix" class="btn-demande" style="display:none;">📨 Notifier Félix</button>
+            </form>
+            <form method="POST" action="{{ url_for('marketing_notifier_marie', mois=mois) }}" style="display:inline;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" id="btn-notifier-marie" class="btn-demande-marie" style="display:none;">📨 Notifier Marie</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="marketing-nav">
+    <a href="{{ url_for('marketing_calendrier', mois=mois_precedent) }}" class="btn-nav">← Mois précédent</a>
+    <span class="mois-label">{{ mois }}</span>
+    <a href="{{ url_for('marketing_calendrier', mois=mois_suivant) }}" class="btn-nav">Mois suivant →</a>
+</div>
+{% if posts %}
+
+<!-- VUE LISTE -->
+<div id="vue-liste" class="marketing-grid">
+    {% for post in posts %}
+    {% set plateformes = post.plateformes | from_json %}
+    <div class="post-card statut-{{ post.statut | replace(' ', '-') }}{% if post.todo_marie_done %} marie-notifiee{% endif %}">
+        <div class="post-card-header">
+            <span class="post-date">{{ post.date_publication }}</span>
+            <span class="post-statut">{{ post.statut }}</span>
+            <form method="POST" action="{{ url_for('marketing_supprimer_post', post_id=post.id) }}" style="display:inline;background:none;" onsubmit="return confirm('Supprimer ce post ?')">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">           
+            <button type="submit" style="background:none;border:none;cursor:pointer;font-size:1rem;opacity:0.6;color:#999;padding:0;margin-left:auto;display:block;">🗑</button>
+            </form>
+        </div>
+        <h3 class="post-titre">{{ post.titre }}</h3>
+        {% if post.description %}
+        <p class="post-description">{{ post.description }}</p>
+        {% endif %}
+        <div class="post-plateformes">
+            {% for p in plateformes %}
+            <span class="badge-plateforme badge-{{ p | lower }}">{{ p }}</span>
+            {% endfor %}
+        </div>
+        {% if post.statut == 'visuels prêts' %}
+        <div class="post-visuel-ok">✅ Visuels déposés</div>
+        {% else %}
+        <form method="POST" action="{{ url_for('marketing_deposer_visuel', post_id=post.id) }}" enctype="multipart/form-data" class="form-deposer">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label class="label-upload">
+                📁 Déposer visuels (max 4)
+                <input type="file" name="visuels" multiple accept="image/*,.pdf,.psd,.ai" style="display:none;" onchange="marquerVisuelDepose(); this.form.submit();">
+            </label>
+        </form>
+        {% endif %}
+        {% if post.drive_folder_id %}
+        <a href="https://drive.google.com/drive/folders/{{ post.drive_folder_id }}" target="_blank" class="lien-drive">🔗 Voir sur Drive</a>
+        {% endif %}
+        <a href="{{ url_for('marketing_supprimer_post', post_id=post.id) }}" onclick="return confirm('Supprimer ce post ?')" style="display:block;margin-top:12px;color:#ccc;font-size:.85rem;text-decoration:none;text-align:right;">🗑 Supprimer</a>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- VUE CALENDRIER MOIS -->
+<div id="vue-calendrier" style="display:none;">
+    {% set jours_mois = mois | jours_du_mois %}
+    <div class="cal-grid">
+        <div class="cal-header-jour">Lun</div>
+        <div class="cal-header-jour">Mar</div>
+        <div class="cal-header-jour">Mer</div>
+        <div class="cal-header-jour">Jeu</div>
+        <div class="cal-header-jour">Ven</div>
+        <div class="cal-header-jour">Sam</div>
+        <div class="cal-header-jour">Dim</div>
+        {% for cell in jours_mois %}
+        <div class="cal-cell {% if cell %}cal-cell-active{% else %}cal-cell-vide{% endif %}">
+            {% if cell %}
+            <span class="cal-num">{{ cell }}</span>
+            {% set date_str = mois + '-' + '%02d'|format(cell) %}
+            {% for post in posts %}
+            {% if post.date_publication == date_str %}
+            {% set plateformes = post.plateformes | from_json %}
+            <div class="cal-post statut-{{ post.statut | replace(' ', '-') }}">
+                <span class="cal-post-titre">{{ post.titre }}</span>
+                <div class="cal-post-plates">
+                {% for p in plateformes %}
+                <span class="cal-badge badge-{{ p | lower }}">{{ p[0] }}</span>
+                {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+            {% endfor %}
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+{% else %}
+<div class="empty-state">
+    <p>Aucun post planifié pour ce mois.</p>
+    <a href="{{ url_for('marketing_nouveau_post') }}" class="btn-primary">Planifier un post</a>
+</div>
+{% endif %}
+
+{% block scripts %}<script>
+function setVue(vue) {
+    const vListe = document.getElementById('vue-liste');
+    const vCal = document.getElementById('vue-calendrier');
+    const bListe = document.getElementById('btn-liste');
+    const bCal = document.getElementById('btn-calendrier');
+    if (vListe) vListe.style.display = vue === 'liste' ? 'grid' : 'none';
+    if (vCal) vCal.style.display = vue === 'calendrier' ? 'block' : 'none';
+    if (bListe) bListe.classList.toggle('active', vue === 'liste');
+    if (bCal) bCal.classList.toggle('active', vue === 'calendrier');
+    localStorage.setItem('marketing_vue', vue);
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    const savedVue = localStorage.getItem('marketing_vue');
+    if (savedVue) setVue(savedVue);
+    const params = new URLSearchParams(window.location.search);
+    const action = params.get('action');
+    const btnFelix = document.getElementById('btn-notifier-felix');
+    const btnMarie = document.getElementById('btn-notifier-marie');
+    if (action === 'post_cree' && btnFelix) btnFelix.style.display = 'inline-block';
+    if (btnMarie) btnMarie.style.display = 'inline-block';
+});
+
+
+function marquerVisuelDepose() { return true; }
+function marquerPostCree() { return true; }
+
+</script>{% endblock %}
+
+<style>
+.marketing-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+}
+.marketing-titre { font-size: 24px; color: #2b2b2b; margin: 0; }
+.marketing-nav {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 32px;
+}
+.mois-label {
+    font-size: 18px;
+    font-weight: 700;
+    color: #2b2b2b;
+    min-width: 100px;
+    text-align: center;
+}
+.btn-nav {
+    background: #f5f5f5;
+    border: 1px solid #ddd;
+    padding: 8px 16px;
+    border-radius: 8px;
+    text-decoration: none;
+    color: #2b2b2b;
+    font-size: 14px;
+}
+.btn-nav:hover { background: #eee; }
+.marketing-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 20px;
+}
+.post-card {
+    background: #fff;
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    border-left: 4px solid #ddd;
+}
+.post-card.statut-planifié { border-left-color: #f59e0b; }
+.post-card.marie-notifiee { border-left-color: #22c55e; }
+.post-card.statut-visuels-prêts { border-left-color: #22c55e; }
+.post-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.post-date { font-size: 13px; color: #888; font-weight: 600; }
+.post-statut {
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    background: #fdecea;
+    color: #c0321a;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+.post-card.statut-visuels-prêts .post-statut {
+    background: #dcfce7;
+    color: #16a34a;
+}
+
+.post-card.marie-notifiee .post-statut {
+    background: #dcfce7;
+    color: #16a34a;
+}
+
+.post-titre { font-size: 16px; font-weight: 700; color: #2b2b2b; margin: 0 0 8px 0; }
+.post-description { font-size: 13px; color: #666; margin: 0 0 12px 0; line-height: 1.5; }
+.post-plateformes { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
+.badge-plateforme {
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-weight: 600;
+}
+.badge-instagram { background: #fce7f3; color: #be185d; }
+.badge-facebook { background: #dbeafe; color: #1d4ed8; }
+.badge-linkedin { background: #e0f2fe; color: #0369a1; }
+.form-deposer { margin-bottom: 12px; }
+.label-upload {
+    display: inline-block;
+    background: #fdecea;
+    color: #c0321a;
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.label-upload:hover { background: #c0321a; color: #fff; }
+.post-visuel-ok { font-size: 13px; color: #16a34a; font-weight: 600; margin-bottom: 12px; }
+.lien-drive { font-size: 12px; color: #888; text-decoration: none; }
+.lien-drive:hover { color: #c0321a; }
+.empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: #888;
+}
+.empty-state p { margin-bottom: 16px; font-size: 16px; }
+
+.vue-toggle { display:flex; background:#f0f0f0; border-radius:8px; padding:3px; gap:3px; }
+.vue-btn { background:transparent; border:none; padding:8px 16px; border-radius:6px; font-size:13px; font-weight:600; cursor:pointer; color:#666; }
+.vue-btn.active { background:#fff; color:#c0321a; box-shadow:0 1px 4px rgba(0,0,0,0.1); }
+
+/* Calendrier mois */
+.cal-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 4px;
+}
+.cal-header-jour {
+    text-align: center;
+    font-size: 12px;
+    font-weight: 700;
+    color: #888;
+    padding: 8px 0;
+    text-transform: uppercase;
+}
+.cal-cell {
+    min-height: 100px;
+    border-radius: 8px;
+    padding: 8px;
+    background: #fff;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
+.cal-cell-vide { background: transparent; box-shadow: none; }
+.cal-num { font-size: 13px; font-weight: 700; color: #aaa; display:block; margin-bottom:6px; }
+.cal-post {
+    border-radius: 6px;
+    padding: 5px 7px;
+    margin-bottom: 4px;
+    border-left: 3px solid #f59e0b;
+    background: #fffbeb;
+}
+.cal-post.statut-visuels-prêts { border-left-color: #22c55e; background: #f0fdf4; }
+.cal-post-titre { font-size: 11px; font-weight: 600; color: #2b2b2b; display:block; }
+.cal-post-plates { display:flex; gap:3px; margin-top:3px; }
+.cal-badge {
+    font-size: 10px;
+    font-weight: 700;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.cal-badge.badge-instagram { background:#fce7f3; color:#be185d; }
+.cal-badge.badge-facebook { background:#dbeafe; color:#1d4ed8; }
+.cal-badge.badge-linkedin { background:#e0f2fe; color:#0369a1; }
+
+.btn-demande {
+    background: #2b2b2b;
+    color: #fff;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.btn-demande:hover { background: #c0321a; }
+
+.btn-demande-marie {
+    background: #16a34a;
+    color: #fff;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.btn-demande-marie:hover { background: #15803d; }
+
+.btn-supprimer {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: .85rem;
+  opacity: 0.35;
+  padding: 0;
+  flex-shrink: 0;
+  width: auto;
+  line-height: 1;
+}
+.btn-supprimer:hover { opacity: 1; }
+
+</style>
+{% endblock %}

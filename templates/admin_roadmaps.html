@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Roadmaps{% endblock %}
+{% block content %}
+<div style="max-width:900px;margin:0 auto;">
+
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;">
+    <h1 style="margin:0;border:none;padding:0;">Roadmaps</h1>
+    <a href="{{ url_for('admin_roadmap_new') }}" class="btn">+ Nouvelle roadmap</a>
+  </div>
+
+  <!-- PROJETS ACTIFS -->
+  {% if roadmaps_actives %}
+    <p style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#aaa;margin-bottom:10px;">Projets en cours</p>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:2rem;">
+      {% for r in roadmaps_actives %}
+      <div style="background:white;border:1px solid #e0d9d3;border-radius:12px;padding:16px 20px;display:flex;align-items:center;gap:16px;">
+        <div style="width:10px;height:10px;border-radius:50%;background:#f39c12;flex-shrink:0;"></div>
+        <div style="flex:1;">
+          <div style="font-size:14px;font-weight:600;color:#2b2b2b;">{{ r.titre }}</div>
+          {% if r.description %}
+          <div style="font-size:12px;color:#888;margin-top:3px;">{{ r.description }}</div>
+          {% endif %}
+          <div style="font-size:11px;color:#aaa;margin-top:4px;">Créée le {{ r.created_at[:10] }}</div>
+        </div>
+        <a href="{{ url_for('admin_roadmap_detail', roadmap_id=r.id) }}" class="btn btn-secondary" style="min-width:auto;padding:.5rem 1rem;font-size:.9rem;">Ouvrir →</a>
+        <form method="POST" action="{{ url_for('admin_roadmap_archive', roadmap_id=r.id) }}" style="margin:0;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" style="background:none;border:none;color:#aaa;cursor:pointer;font-size:12px;padding:4px 8px;min-width:auto;box-shadow:none;" title="Archiver">Archiver</button>
+        </form>
+        <form method="POST" action="{{ url_for('admin_roadmap_delete', roadmap_id=r.id) }}" style="margin:0;" onsubmit="return confirm('Supprimer cette roadmap ?')">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" style="background:none;border:none;color:#ccc;cursor:pointer;font-size:18px;padding:4px 8px;min-width:auto;box-shadow:none;">✕</button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty" style="margin-bottom:2rem;">
+      <h3>Aucun projet actif</h3>
+      <p>Créez votre première roadmap de projet.</p>
+      <a href="{{ url_for('admin_roadmap_new') }}" class="btn">+ Nouvelle roadmap</a>
+    </div>
+  {% endif %}
+
+  <!-- PROJETS ARCHIVÉS -->
+  {% if roadmaps_archivees %}
+    <p style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#aaa;margin-bottom:10px;">Archivés</p>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      {% for r in roadmaps_archivees %}
+      <div style="background:#fafafa;border:1px solid #e0d9d3;border-radius:12px;padding:14px 20px;display:flex;align-items:center;gap:16px;opacity:0.7;">
+        <div style="width:10px;height:10px;border-radius:50%;background:#ccc;flex-shrink:0;"></div>
+        <div style="flex:1;">
+          <div style="font-size:13px;font-weight:500;color:#888;">{{ r.titre }}</div>
+          <div style="font-size:11px;color:#aaa;margin-top:3px;">Archivée — {{ r.created_at[:10] }}</div>
+        </div>
+        <a href="{{ url_for('admin_roadmap_detail', roadmap_id=r.id) }}" style="font-size:12px;color:#888;padding:.4rem .8rem;border:1px solid #e0d9d3;border-radius:6px;text-decoration:none;">Voir</a>
+        <form method="POST" action="{{ url_for('admin_roadmap_unarchive', roadmap_id=r.id) }}" style="margin:0;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" style="background:none;border:none;color:#aaa;cursor:pointer;font-size:12px;padding:4px 8px;min-width:auto;box-shadow:none;">Désarchiver</button>
+        </form>
+        <form method="POST" action="{{ url_for('admin_roadmap_delete', roadmap_id=r.id) }}" style="margin:0;" onsubmit="return confirm('Supprimer cette roadmap ?')">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" style="background:none;border:none;color:#ccc;cursor:pointer;font-size:18px;padding:4px 8px;min-width:auto;box-shadow:none;">✕</button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+</div>
+{% endblock %}

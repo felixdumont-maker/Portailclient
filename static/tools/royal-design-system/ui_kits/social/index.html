@@ -1,0 +1,1261 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <title>Royal — Social Graphics UI Kit</title>
+
+  <link rel="stylesheet" href="../../colors_and_type.css" />
+  <link rel="stylesheet" href="kit.css" />
+
+  <style>
+    body {
+      margin: 0;
+      background: #1a0708;
+      color: #fff;
+      font-family: var(--font-body);
+      min-height: 100vh;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 220px 320px 1fr;
+      min-height: 100vh;
+    }
+
+    .nav {
+      background: #120505;
+      border-right: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 28px 22px;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      box-sizing: border-box;
+    }
+
+    .nav h1 {
+      font-family: var(--font-display);
+      font-size: 22px;
+      letter-spacing: 0.06em;
+      margin: 0 0 6px;
+      line-height: 1;
+    }
+
+    .nav .sub {
+      font-size: 11px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.45);
+    }
+
+    .nav ul {
+      list-style: none;
+      padding: 0;
+      margin: 28px 0 0;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .nav button {
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      border: 1px solid transparent;
+      color: rgba(255, 255, 255, 0.7);
+      padding: 10px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+    }
+
+    .nav button:hover {
+      background: rgba(255, 255, 255, 0.04);
+      color: #fff;
+    }
+
+    .nav button.active {
+      background: var(--royal-red);
+      color: #fff;
+      border-color: rgba(255, 255, 255, 0.15);
+    }
+
+    .nav .meta {
+      position: absolute;
+      bottom: 24px;
+      left: 22px;
+      right: 22px;
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.35);
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+
+    .editor {
+      background: #160606;
+      border-right: 1px solid rgba(255, 255, 255, 0.08);
+      height: 100vh;
+      overflow: auto;
+      padding: 24px;
+      box-sizing: border-box;
+    }
+
+    .editor h2 {
+      font-family: var(--font-display);
+      font-size: 24px;
+      line-height: 1;
+      margin: 0 0 8px;
+      letter-spacing: 0.04em;
+    }
+
+    .editor .hint {
+      color: rgba(255, 255, 255, 0.52);
+      font-size: 12px;
+      line-height: 1.5;
+      margin-bottom: 20px;
+    }
+
+    .editor label {
+      display: block;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: rgba(255, 255, 255, 0.5);
+      margin: 14px 0 6px;
+    }
+
+    .editor input,
+    .editor textarea,
+    .editor select {
+      width: 100%;
+      box-sizing: border-box;
+      background: #240b0d;
+      color: #fff;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      padding: 10px 11px;
+      font: inherit;
+      font-size: 13px;
+      outline: none;
+    }
+
+    .editor textarea {
+      min-height: 70px;
+      resize: vertical;
+    }
+
+    .editor input:focus,
+    .editor textarea:focus,
+    .editor select:focus {
+      border-color: var(--royal-red);
+    }
+
+    .editor-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .game-block {
+      margin-top: 18px;
+      padding: 14px;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .game-block-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .game-block-title {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    .btn {
+      border: none;
+      border-radius: 9px;
+      padding: 10px 12px;
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .btn-primary {
+      background: var(--royal-red);
+      color: #fff;
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.08);
+      color: #fff;
+    }
+
+    .btn-danger {
+      background: rgba(255, 255, 255, 0.08);
+      color: #ffb6b6;
+      padding: 7px 9px;
+      font-size: 12px;
+    }
+
+    .editor-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 18px;
+      padding-top: 18px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .stage-wrap {
+      position: relative;
+      overflow: hidden;
+      padding: 40px;
+    }
+
+    .stage-frame {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 1080px;
+      height: 1080px;
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+      border-radius: 8px;
+      overflow: hidden;
+      transform-origin: center;
+    }
+
+    .disabled-editor {
+      color: rgba(255, 255, 255, 0.52);
+      font-size: 13px;
+      line-height: 1.6;
+      padding: 14px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 12px;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="root"></div>
+
+  <div
+    id="export-root"
+    style="
+      position: fixed;
+      left: -99999px;
+      top: 0;
+      width: 1080px;
+      height: 1080px;
+      overflow: hidden;
+      pointer-events: none;
+      z-index: -1;
+      background: transparent;
+    "
+  ></div>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+  <script src="../../vendor/html2canvas.min.js"></script>
+
+  <script src="logos.js"></script>
+  <script type="text/babel" src="R01Gameday.jsx"></script>
+  <script type="text/babel" src="R02Joueuse.jsx"></script>
+  <script type="text/babel" src="R03Resultat.jsx"></script>
+  <script type="text/babel" src="R04Horaire.jsx"></script>
+  <script type="text/babel" src="R05MultiResultats.jsx"></script>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    const ASSET_LOGOS = [
+      { label: 'LPS Physiothérapie', value: '../../assets/logos/sponsors/lps-blanc.png' },
+      { label: 'Royal LePage Centre', value: '../../assets/logos/sponsors/royal-lepage-centre.png' },
+      { label: 'Cocktail Média icône blanc', value: '../../assets/logos/cocktail-media-icon-white.png' },
+      { label: 'Cocktail Média long', value: '../../assets/logos/cocktail-media-wordmark-long.jpg' },
+      { label: 'Cocktail Média blanc SVG', value: '../../assets/logo-cocktail-white.svg' },
+      { label: 'LNHBF blanc', value: '../../assets/logo-lnhbf-white.svg' },
+      { label: 'Royal blanc', value: '../../assets/logo-royal-white.svg' },
+      { label: 'Royal Shawinigan', value: '../../assets/logos/royal-shawinigan.svg' },
+      { label: 'Partenaire 1', value: '../../assets/partner-1.svg' },
+      { label: 'Partenaire 2', value: '../../assets/partner-2.svg' },
+      { label: 'Partenaire 3', value: '../../assets/partner-3.svg' },
+      { label: 'Partenaire 4', value: '../../assets/partner-4.svg' }
+    ];
+
+    function deepClone(value) {
+      return JSON.parse(JSON.stringify(value));
+    }
+
+const DEFAULT_DATA = {
+  R02: deepClone(R02Joueuse.defaults),
+  R04: deepClone(R04Horaire.defaults)
+};
+
+function ColorsSection({ colors = {}, onChange }) {
+  function set(key, value) {
+    onChange({ ...colors, [key]: value });
+  }
+  function reset() {
+    onChange({});
+  }
+
+  return (
+    <div className="game-block" style={{ marginTop: 18 }}>
+      <div className="game-block-head">
+        <div className="game-block-title">Couleurs</div>
+        <button className="btn btn-danger" type="button" onClick={reset}>
+          Réinitialiser
+        </button>
+      </div>
+
+      <div className="editor-row">
+        <div>
+          <label>Fond</label>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              type="color"
+              value={colors.bg || '#d62127'}
+              style={{ width: 44, height: 36, padding: 2, cursor: 'pointer', borderRadius: 6, border: '1px solid rgba(255,255,255,0.12)', background: 'none' }}
+              onChange={(e) => set('bg', e.target.value)}
+            />
+            <input
+              value={colors.bg || ''}
+              placeholder="#d62127"
+              style={{ flex: 1 }}
+              onChange={(e) => set('bg', e.target.value)}
+            />
+          </div>
+        </div>
+
+        <div>
+          <label>Pilule fond</label>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              type="color"
+              value={colors.pillBg || '#ffffff'}
+              style={{ width: 44, height: 36, padding: 2, cursor: 'pointer', borderRadius: 6, border: '1px solid rgba(255,255,255,0.12)', background: 'none' }}
+              onChange={(e) => set('pillBg', e.target.value)}
+            />
+            <input
+              value={colors.pillBg || ''}
+              placeholder="#ffffff"
+              style={{ flex: 1 }}
+              onChange={(e) => set('pillBg', e.target.value)}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 10 }}>
+        <label>Pilule texte</label>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input
+            type="color"
+            value={colors.pillFg || '#d62127'}
+            style={{ width: 44, height: 36, padding: 2, cursor: 'pointer', borderRadius: 6, border: '1px solid rgba(255,255,255,0.12)', background: 'none' }}
+            onChange={(e) => set('pillFg', e.target.value)}
+          />
+          <input
+            value={colors.pillFg || ''}
+            placeholder="#d62127"
+            style={{ flex: 1 }}
+            onChange={(e) => set('pillFg', e.target.value)}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+    const TEMPLATES = [
+      {
+        id: 'R01',
+        label: 'R01 — Soir de match',
+        render: () => <R01Gameday />
+      },
+      {
+        id: 'R02',
+        label: 'R02 — Joueuse',
+        render: (data) => <R02Joueuse data={data.R02} />
+      },
+      {
+        id: 'R03',
+        label: 'R03 — Résultat',
+        render: () => <R03Resultat />
+      },
+      {
+        id: 'R04',
+        label: 'R04 — Horaire',
+        render: (data) => <R04Horaire data={data.R04} />
+      },
+      {
+        id: 'R05',
+        label: 'R05 — Multi-résultats',
+        render: () => <R05MultiResultats />
+      }
+    ];
+
+    async function exportPNG(activeTemplate, data) {
+      try {
+        if (typeof html2canvas === 'undefined') {
+          alert('Erreur : html2canvas n’est pas chargé.');
+          return;
+        }
+
+        const exportRoot = document.getElementById('export-root');
+
+        if (!exportRoot) {
+          alert('Erreur : conteneur d’export introuvable.');
+          return;
+        }
+
+        exportRoot.innerHTML = '';
+
+        const exportApp = document.createElement('div');
+        exportApp.style.width = '1080px';
+        exportApp.style.height = '1080px';
+        exportApp.style.overflow = 'hidden';
+
+        exportRoot.appendChild(exportApp);
+
+        const activeTemplateConfig = TEMPLATES.find((template) => template.id === activeTemplate);
+
+        if (!activeTemplateConfig) {
+          alert('Erreur : template introuvable.');
+          return;
+        }
+
+        const exportElement = activeTemplateConfig.render(data);
+
+        const exportReactRoot = ReactDOM.createRoot(exportApp);
+        exportReactRoot.render(exportElement);
+
+        await new Promise((resolve) => setTimeout(resolve, 500));
+
+        if (document.fonts && document.fonts.ready) {
+          await document.fonts.ready;
+        }
+
+        const EXPORT_SCALE = 3;
+
+        const canvas = await html2canvas(exportApp, {
+          scale: EXPORT_SCALE,
+          backgroundColor: null,
+          useCORS: true,
+          allowTaint: false,
+          logging: false,
+          width: 1080,
+          height: 1080,
+          windowWidth: 1080,
+          windowHeight: 1080
+        });
+        const image = canvas.toDataURL('image/png');
+
+        if (!image || image === 'data:,') {
+          alert('Erreur : le PNG généré est vide.');
+          return;
+        }
+
+        const link = document.createElement('a');
+        const timestamp = new Date().toISOString().slice(0, 19).replaceAll(':', '-');
+
+        link.download = `royal-${activeTemplate}-${timestamp}.png`;
+        link.href = image;
+        link.click();
+
+        exportReactRoot.unmount();
+        exportRoot.innerHTML = '';
+      } catch (error) {
+        console.error('Erreur export PNG :', error);
+        alert(`Erreur export PNG : ${error.message}`);
+      }
+    }
+
+function EditorPanel({ active, data, setData, onReset, onExport }) {
+  if (active === 'R02') {
+    return (
+      <EditorR02
+        data={data.R02}
+        onChange={(nextR02) => setData({ ...data, R02: nextR02 })}
+        onReset={onReset}
+        onExport={onExport}
+      />
+    );
+  }
+
+  if (active === 'R04') {
+    return (
+      <EditorR04
+        data={data.R04}
+        onChange={(nextR04) => setData({ ...data, R04: nextR04 })}
+        onReset={onReset}
+        onExport={onExport}
+      />
+    );
+  }
+
+  return (
+    <aside className="editor">
+      <h2>Édition</h2>
+
+      <div className="hint">
+        Pour l’instant, l’édition directe est branchée sur R02 — Joueuse et R04 — Horaire.
+        Les autres templates pourront être ajoutés avec le même système.
+      </div>
+
+      <div className="disabled-editor">
+        Sélectionne <strong>R02 — Joueuse</strong> ou <strong>R04 — Horaire</strong> pour modifier les données en direct.
+        Tu peux quand même exporter le template affiché en PNG.
+      </div>
+
+      <div className="editor-actions">
+        <button className="btn btn-primary" onClick={onExport} type="button">
+          Télécharger PNG
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+function EditorR02({ data, onChange, onReset, onExport }) {
+  function updateField(field, value) {
+    onChange({
+      ...data,
+      [field]: value
+    });
+  }
+
+  function updateStat(index, field, value) {
+    const stats = [...(data.stats || [])];
+
+    stats[index] = {
+      ...stats[index],
+      [field]: value
+    };
+
+    onChange({
+      ...data,
+      stats
+    });
+  }
+
+  function addStat() {
+    onChange({
+      ...data,
+      stats: [
+        ...(data.stats || []),
+        {
+          label: 'STAT',
+          value: '0'
+        }
+      ]
+    });
+  }
+
+  function removeStat(index) {
+    const stats = (data.stats || []).filter((_, i) => i !== index);
+
+    onChange({
+      ...data,
+      stats
+    });
+  }
+
+function updateSponsor(index, field, value) {
+  const sponsors = [...(data.sponsors || [])];
+
+  sponsors[index] = {
+    ...sponsors[index],
+    [field]: value
+  };
+
+  onChange({
+    ...data,
+    sponsors
+  });
+}
+
+function addSponsor() {
+  onChange({
+    ...data,
+    sponsors: [
+      ...(data.sponsors || []),
+      {
+        name: 'Nouveau partenaire',
+        logo: '../../assets/logos/sponsors/lps-blanc.png'
+      }
+    ]
+  });
+}
+
+function removeSponsor(index) {
+  const sponsors = (data.sponsors || []).filter((_, i) => i !== index);
+
+  onChange({
+    ...data,
+    sponsors
+  });
+}
+
+  return (
+    <aside className="editor">
+      <h2>R02 — Joueuse</h2>
+
+      <div className="hint">
+        Modifie les informations de la joueuse ici. Le visuel se met à jour automatiquement.
+      </div>
+
+      <label>Eyebrow</label>
+      <input
+        value={data.eyebrow}
+        onChange={(event) => updateField('eyebrow', event.target.value)}
+      />
+
+      <div className="editor-row">
+        <div>
+          <label>Numéro</label>
+          <input
+            value={data.number}
+            onChange={(event) => updateField('number', event.target.value)}
+          />
+        </div>
+
+        <div>
+          <label>Position</label>
+          <input
+            value={data.position}
+            onChange={(event) => updateField('position', event.target.value)}
+          />
+        </div>
+      </div>
+
+      <label>Lancer</label>
+      <input
+        value={data.shoots}
+        onChange={(event) => updateField('shoots', event.target.value)}
+      />
+
+      <label>Prénom</label>
+      <input
+        value={data.firstName}
+        onChange={(event) => updateField('firstName', event.target.value)}
+      />
+
+      <label>Nom</label>
+      <input
+        value={data.lastName}
+        onChange={(event) => updateField('lastName', event.target.value)}
+      />
+
+      <label>Titre bio</label>
+      <input
+        value={data.bioTitle || ''}
+        onChange={(event) => updateField('bioTitle', event.target.value)}
+      />
+
+      <label>Bio</label>
+      <textarea
+        value={data.bio}
+        onChange={(event) => updateField('bio', event.target.value)}
+      />
+
+<label>Photo</label>
+<select
+  value={data.photo || ''}
+  onChange={(event) => updateField('photo', event.target.value)}
+>
+  <option value="">Aucune photo</option>
+  <option value="../../assets/photo-joueuse-placeholder.svg">Placeholder joueuse</option>
+</select>
+
+<label>Choisir une photo dans l’ordinateur</label>
+<input
+  type="file"
+  accept="image/png,image/jpeg,image/jpg,image/webp"
+  onChange={(event) => {
+    const file = event.target.files && event.target.files[0];
+
+    if (!file) {
+      return;
+    }
+
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      updateField('photo', reader.result);
+    };
+
+    reader.readAsDataURL(file);
+  }}
+/>
+
+<label>Chemin personnalisé de la photo</label>
+<input
+  value={data.photo && data.photo.startsWith('data:') ? 'Photo locale sélectionnée' : data.photo || ''}
+  placeholder="../../uploads/nom-photo.jpg"
+  onChange={(event) => updateField('photo', event.target.value)}
+  disabled={data.photo && data.photo.startsWith('data:')}
+/>
+<label>Position photo</label>
+<input
+  value={data.photoPosition || ''}
+  placeholder="center top"
+  onChange={(event) => updateField('photoPosition', event.target.value)}
+/>
+{data.photo && data.photo.startsWith('data:') && (
+  <button
+    className="btn btn-secondary"
+    type="button"
+    style={{ marginTop: 8 }}
+    onClick={() => updateField('photo', '../../assets/photo-joueuse-placeholder.svg')}
+  >
+    Retirer la photo locale
+  </button>
+)}
+
+
+      <label>Footer gauche</label>
+      <input
+        value={data.footerLeft || ''}
+        onChange={(event) => updateField('footerLeft', event.target.value)}
+      />
+
+      <label>Footer droite</label>
+      <input
+        value={data.footerRight || ''}
+        onChange={(event) => updateField('footerRight', event.target.value)}
+      />
+
+      <div className="game-block">
+        <div className="game-block-head">
+          <div className="game-block-title">Statistiques</div>
+        </div>
+
+        {(data.stats || []).map((stat, index) => (
+          <div key={index} style={{ marginBottom: 16 }}>
+            <div className="editor-row">
+              <div>
+                <label>Label {index + 1}</label>
+                <input
+                  value={stat.label}
+                  onChange={(event) => updateStat(index, 'label', event.target.value)}
+                />
+              </div>
+
+              <div>
+                <label>Valeur {index + 1}</label>
+                <input
+                  value={stat.value}
+                  onChange={(event) => updateStat(index, 'value', event.target.value)}
+                />
+              </div>
+            </div>
+
+            <button
+              className="btn btn-danger"
+              type="button"
+              style={{ marginTop: 8 }}
+              onClick={() => removeStat(index)}
+            >
+              Supprimer cette stat
+            </button>
+          </div>
+        ))}
+
+        <button className="btn btn-secondary" type="button" onClick={addStat}>
+          Ajouter une statistique
+        </button>
+      </div>
+<label>Titre partenaires</label>
+<input
+  value={data.sponsorsTitle || ''}
+  onChange={(event) => updateField('sponsorsTitle', event.target.value)}
+/>
+
+<div className="game-block">
+  <div className="game-block-head">
+    <div className="game-block-title">Logos partenaires</div>
+  </div>
+
+  {(data.sponsors || []).map((sponsor, index) => (
+    <div key={index} style={{ marginBottom: 16 }}>
+      <label>Nom partenaire {index + 1}</label>
+      <input
+        value={sponsor.name}
+        onChange={(event) => updateSponsor(index, 'name', event.target.value)}
+      />
+
+      <label>Logo partenaire {index + 1} — bibliothèque</label>
+      <select
+        value={sponsor.logo && !sponsor.logo.startsWith('data:') ? sponsor.logo : ''}
+        onChange={(event) => updateSponsor(index, 'logo', event.target.value)}
+      >
+        <option value="">— Placeholder (aucun logo) —</option>
+        {ASSET_LOGOS.map((asset) => (
+          <option key={asset.value} value={asset.value}>
+            {asset.label}
+          </option>
+        ))}
+      </select>
+
+      <label>Ou télécharger un logo client</label>
+      <input
+        type="file"
+        accept="image/png,image/jpeg,image/jpg,image/svg+xml,image/webp"
+        onChange={(event) => {
+          const file = event.target.files && event.target.files[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = () => updateSponsor(index, 'logo', reader.result);
+          reader.readAsDataURL(file);
+        }}
+      />
+      {sponsor.logo && sponsor.logo.startsWith('data:') && (
+        <button
+          className="btn btn-secondary"
+          type="button"
+          style={{ marginTop: 6 }}
+          onClick={() => updateSponsor(index, 'logo', '')}
+        >
+          Retirer le fichier local
+        </button>
+      )}
+
+      <button
+        className="btn btn-danger"
+        type="button"
+        style={{ marginTop: 8 }}
+        onClick={() => removeSponsor(index)}
+      >
+        Supprimer ce logo
+      </button>
+    </div>
+  ))}
+
+  <button className="btn btn-secondary" type="button" onClick={addSponsor}>
+    Ajouter un logo partenaire
+  </button>
+</div>
+
+      <ColorsSection
+        colors={data.colors}
+        onChange={(nextColors) => onChange({ ...data, colors: nextColors })}
+      />
+
+      <div className="editor-actions">
+        <button className="btn btn-primary" onClick={onExport} type="button">
+          Télécharger PNG
+        </button>
+
+        <button className="btn btn-secondary" onClick={onReset} type="button">
+          Réinitialiser R02
+        </button>
+      </div>
+    </aside>
+  );
+}
+    function EditorR04({ data, onChange, onReset, onExport }) {
+      function updateField(field, value) {
+        onChange({
+          ...data,
+          [field]: value
+        });
+      }
+
+      function updateGame(index, field, value) {
+        const games = [...data.games];
+
+        games[index] = {
+          ...games[index],
+          [field]: value
+        };
+
+        onChange({
+          ...data,
+          games
+        });
+      }
+
+      function addGame() {
+        onChange({
+          ...data,
+          games: [
+            ...data.games,
+            {
+              dayName: 'VEN',
+              dayNum: '00',
+              month: 'AVR',
+              home: 'ROYAL',
+              away: 'ADVERSAIRE',
+              arena: 'Aréna Jacques-Plante · Shawinigan',
+              time: '19 H 00',
+              location: 'HOME'
+            }
+          ]
+        });
+      }
+
+      function removeGame(index) {
+        const games = data.games.filter((_, i) => i !== index);
+
+        onChange({
+          ...data,
+          games
+        });
+      }
+
+      function updatePartner(index, field, value) {
+        const partners = [...(data.partners || [])];
+
+        partners[index] = {
+          ...partners[index],
+          [field]: value
+        };
+
+        onChange({
+          ...data,
+          partners
+        });
+      }
+
+      function addPartner() {
+        onChange({
+          ...data,
+          partners: [
+            ...(data.partners || []),
+            {
+              name: 'Nouveau partenaire',
+              logo: '../../assets/logos/sponsors/lps-blanc.png'
+            }
+          ]
+        });
+      }
+
+      function removePartner(index) {
+        const partners = (data.partners || []).filter((_, i) => i !== index);
+
+        onChange({
+          ...data,
+          partners
+        });
+      }
+
+      return (
+        <aside className="editor">
+          <h2>R04 — Horaire</h2>
+
+          <div className="hint">
+            Modifie les données ici. Le visuel se met à jour automatiquement.
+          </div>
+
+          <label>Eyebrow</label>
+          <input
+            value={data.eyebrow}
+            onChange={(event) => updateField('eyebrow', event.target.value)}
+          />
+
+          <label>Titre</label>
+          <textarea
+            value={data.title}
+            onChange={(event) => updateField('title', event.target.value)}
+          />
+
+          <label>Période</label>
+          <input
+            value={data.range}
+            onChange={(event) => updateField('range', event.target.value)}
+          />
+
+          <label>Footer gauche</label>
+          <input
+            value={data.footerLeft}
+            onChange={(event) => updateField('footerLeft', event.target.value)}
+          />
+
+          <label>Footer droite</label>
+          <input
+            value={data.footerRight}
+            onChange={(event) => updateField('footerRight', event.target.value)}
+          />
+
+          <label>Titre partenaires</label>
+          <input
+            value={data.partnersTitle || ''}
+            onChange={(event) => updateField('partnersTitle', event.target.value)}
+          />
+
+          <div className="game-block">
+            <div className="game-block-head">
+              <div className="game-block-title">Logos partenaires</div>
+            </div>
+
+            {(data.partners || []).map((partner, index) => (
+              <div key={index} style={{ marginBottom: 16 }}>
+                <label>Nom partenaire {index + 1}</label>
+                <input
+                  value={partner.name}
+                  onChange={(event) => updatePartner(index, 'name', event.target.value)}
+                />
+
+                <label>Logo partenaire {index + 1} — bibliothèque</label>
+                <select
+                  value={partner.logo && !partner.logo.startsWith('data:') ? partner.logo : ''}
+                  onChange={(event) => updatePartner(index, 'logo', event.target.value)}
+                >
+                  <option value="">— Placeholder (aucun logo) —</option>
+                  {ASSET_LOGOS.map((asset) => (
+                    <option key={asset.value} value={asset.value}>
+                      {asset.label}
+                    </option>
+                  ))}
+                </select>
+
+                <label>Ou télécharger un logo client</label>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/jpg,image/svg+xml,image/webp"
+                  onChange={(event) => {
+                    const file = event.target.files && event.target.files[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = () => updatePartner(index, 'logo', reader.result);
+                    reader.readAsDataURL(file);
+                  }}
+                />
+                {partner.logo && partner.logo.startsWith('data:') && (
+                  <button
+                    className="btn btn-secondary"
+                    type="button"
+                    style={{ marginTop: 6 }}
+                    onClick={() => updatePartner(index, 'logo', '')}
+                  >
+                    Retirer le fichier local
+                  </button>
+                )}
+
+                <button
+                  className="btn btn-danger"
+                  type="button"
+                  style={{ marginTop: 8 }}
+                  onClick={() => removePartner(index)}
+                >
+                  Supprimer ce logo
+                </button>
+              </div>
+            ))}
+
+            <button className="btn btn-secondary" type="button" onClick={addPartner}>
+              Ajouter un logo partenaire
+            </button>
+          </div>
+
+          {(data.games || []).map((game, index) => (
+            <div className="game-block" key={index}>
+              <div className="game-block-head">
+                <div className="game-block-title">Match {index + 1}</div>
+
+                <button
+                  className="btn btn-danger"
+                  onClick={() => removeGame(index)}
+                  type="button"
+                >
+                  Supprimer
+                </button>
+              </div>
+
+              <div className="editor-row">
+                <div>
+                  <label>Jour</label>
+                  <input
+                    value={game.dayName}
+                    onChange={(event) => updateGame(index, 'dayName', event.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <label>Date</label>
+                  <input
+                    value={game.dayNum}
+                    onChange={(event) => updateGame(index, 'dayNum', event.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="editor-row">
+                <div>
+                  <label>Mois</label>
+                  <input
+                    value={game.month}
+                    onChange={(event) => updateGame(index, 'month', event.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <label>Type</label>
+                  <select
+                    value={game.location}
+                    onChange={(event) => updateGame(index, 'location', event.target.value)}
+                  >
+                    <option value="HOME">Domicile</option>
+                    <option value="AWAY">Extérieur</option>
+                  </select>
+                </div>
+              </div>
+
+              <label>Équipe locale</label>
+              <input
+                value={game.home}
+                onChange={(event) => updateGame(index, 'home', event.target.value)}
+              />
+
+              <label>Équipe adverse</label>
+              <input
+                value={game.away}
+                onChange={(event) => updateGame(index, 'away', event.target.value)}
+              />
+
+              <label>Lieu</label>
+              <input
+                value={game.arena}
+                onChange={(event) => updateGame(index, 'arena', event.target.value)}
+              />
+
+              <label>Heure</label>
+              <input
+                value={game.time}
+                onChange={(event) => updateGame(index, 'time', event.target.value)}
+              />
+            </div>
+          ))}
+
+          <ColorsSection
+            colors={data.colors}
+            onChange={(nextColors) => onChange({ ...data, colors: nextColors })}
+          />
+
+          <div className="editor-actions">
+            <button className="btn btn-secondary" onClick={addGame} type="button">
+              Ajouter un match
+            </button>
+
+            <button className="btn btn-primary" onClick={onExport} type="button">
+              Télécharger PNG
+            </button>
+
+            <button className="btn btn-secondary" onClick={onReset} type="button">
+              Réinitialiser R04
+            </button>
+          </div>
+        </aside>
+      );
+    }
+
+    function App() {
+      const [active, setActive] = useState('R04');
+      const [scale, setScale] = useState(0.7);
+      const [data, setData] = useState(() => deepClone(DEFAULT_DATA));
+      const wrapRef = useRef();
+
+      useEffect(() => {
+        function fit() {
+          if (!wrapRef.current) return;
+
+          const rect = wrapRef.current.getBoundingClientRect();
+          const availableWidth = rect.width - 80;
+          const availableHeight = rect.height - 80;
+
+          setScale(Math.min(availableWidth / 1080, availableHeight / 1080, 1));
+        }
+
+        fit();
+
+        window.addEventListener('resize', fit);
+
+        const resizeObserver = new ResizeObserver(fit);
+
+        if (wrapRef.current) {
+          resizeObserver.observe(wrapRef.current);
+        }
+
+        return () => {
+          window.removeEventListener('resize', fit);
+          resizeObserver.disconnect();
+        };
+      }, []);
+
+      const activeTemplate = TEMPLATES.find((template) => template.id === active);
+
+function resetCurrentTemplate() {
+  if (active === 'R02') {
+    setData({
+      ...data,
+      R02: deepClone(DEFAULT_DATA.R02)
+    });
+  }
+
+  if (active === 'R04') {
+    setData({
+      ...data,
+      R04: deepClone(DEFAULT_DATA.R04)
+    });
+  }
+}
+      return (
+        <div className="shell">
+          <aside className="nav">
+            <h1>ROYAL</h1>
+            <div className="sub">SOCIAL UI KIT</div>
+
+            <ul>
+              {TEMPLATES.map((template) => (
+                <li key={template.id}>
+                  <button
+                    className={template.id === active ? 'active' : ''}
+                    onClick={() => setActive(template.id)}
+                  >
+                    {template.label}
+                  </button>
+                </li>
+              ))}
+            </ul>
+
+            <div className="meta">1080 × 1080 · Instagram</div>
+          </aside>
+
+          <EditorPanel
+            active={active}
+            data={data}
+            setData={setData}
+            onReset={resetCurrentTemplate}
+            onExport={() => exportPNG(active, data)}
+          />
+
+          <main className="stage-wrap" ref={wrapRef}>
+            <div
+              className="stage-frame"
+              style={{ transform: `translate(-50%, -50%) scale(${scale})` }}
+            >
+              {activeTemplate.render(data)}
+            </div>
+          </main>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

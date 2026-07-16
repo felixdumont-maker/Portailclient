@@ -118,6 +118,7 @@
     <div class="card">
   <h2 style="margin-top:0;">Ajouter un service</h2>
   <form action="{{ url_for('add_service') }}" method="post" class="form" novalidate>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     
 <div class="form-row">
     <div class="form-group">
@@ -152,14 +153,32 @@
       </div>
     </div>
     <div style="display:flex;gap:var(--space-4);flex-wrap:wrap;align-items:flex-end;margin-top:var(--space-3);">
-      <div class="form-group" style="margin:0;">
-        <label>Durée de production</label>
+<div class="form-group" style="margin:0;">
+        <label>Durée de production (post-prod)</label>
         <div style="display:flex;gap:.5rem;align-items:center;">
           <input type="number" name="duree_heures" min="0" max="12" value="1" style="width:70px;padding:.5rem;">
           <span style="font-size:var(--fs-sm);color:#7a7773;">h</span>
           <input type="number" name="duree_minutes" min="0" max="59" step="5" value="0" style="width:70px;padding:.5rem;">
           <span style="font-size:var(--fs-sm);color:#7a7773;">min</span>
         </div>
+      </div>
+      <div class="form-group" style="margin:0;">
+        <label>Durée de séance sur place <span style="font-weight:400;color:#7a7773;">(optionnel)</span></label>
+        <select name="duree_seance_minutes" style="width:160px;padding:.5rem;">
+          <option value="0" selected>— aucune —</option>
+          <option value="15">15 min</option>
+          <option value="30">30 min</option>
+          <option value="45">45 min</option>
+          <option value="60">1h00</option>
+          <option value="75">1h15</option>
+          <option value="90">1h30</option>
+          <option value="105">1h45</option>
+          <option value="120">2h00</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin:0;display:none;">
+        <label>Appel exploratoire requis</label>
+        <input type="checkbox" name="appel_exploratoire_requis" value="1" style="width:auto;">
       </div>
       <div class="form-group" style="margin:0;">
         <label>Délai livraison fixe (0 = calculé automatiquement)</label>
@@ -169,18 +188,21 @@
         </div>
       </div>
     </div>
-    <div class="form-row">
+    <div class="form-row" style="display:none;">
       <div class="form-group" style="margin:0;">
         <label>Prix du service ($CA, sans taxes)</label>
-        <div style="display:flex;gap:.5rem;align-items:center;">
-          <input type="number" name="prix" min="0" step="0.01" value="0" style="width:120px;padding:.5rem;">
-          <span style="font-size:var(--fs-sm);color:#7a7773;">$CA</span>
-        </div>
+        <input type="number" name="prix" min="0" step="0.01" value="0" style="width:120px;padding:.5rem;">
       </div>
-      <div class="form-group" style="margin:0;display:flex;align-items:center;gap:.5rem;padding-top:1.8rem;">
+      <div class="form-group" style="margin:0;">
         <input type="checkbox" name="exonere_taxes" value="1" id="exonere_taxes_new">
-        <label for="exonere_taxes_new" style="font-weight:500;margin:0;">Exonéré de taxes</label>
+        <input type="checkbox" name="decision_board_requis" value="1" id="decision_board_new">
       </div>
+    </div>
+    <div class="form-group" style="margin-top:var(--space-3);">
+      <label for="drive_subfolders">Sous-dossiers Drive automatiques</label>
+      <input type="text" id="drive_subfolders" name="drive_subfolders"
+             placeholder="ex: Salon & Salle à manger|Salle de bain|Extérieur|Drone">
+      <small style="color:#7a7773;font-size:.8rem;">Séparer par | — laissez vide si vous créez les dossiers manuellement</small>
     </div>
     <button type="submit" style="margin-top:var(--space-3);">Créer le service</button>
   </form>
@@ -215,6 +237,7 @@
 
     <div id="edit-service-{{ sid }}" style="display:none;background:#f8f9fa;border:1px solid #dee2e6;border-radius:var(--radius-sm);padding:var(--space-3);margin-bottom:var(--space-3);">
       <form action="{{ url_for('edit_service', service_id=sid) }}" method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div style="display:flex;gap:var(--space-3);flex-wrap:wrap;align-items:flex-end;">
           <label class="checkbox-inline">
             <input type="checkbox" name="documents_requis" value="1" {% if s_data['service']['documents_requis'] %}checked{% endif %}>
@@ -236,7 +259,7 @@
             </select>
           </div>
           <div class="form-group" style="margin:0;">
-            <label style="font-size:.8rem;margin-bottom:.2rem;">Durée production</label>
+            <label style="font-size:.8rem;margin-bottom:.2rem;">Durée production (post-prod)</label>
             <div style="display:flex;gap:.35rem;align-items:center;">
               <input type="number" name="duree_heures" min="0" max="12" value="{{ (s_data['service']['duree_production_minutes'] or 60) // 60 }}" style="width:55px;padding:.4rem;">
               <span style="font-size:.8rem;">h</span>
@@ -244,20 +267,38 @@
               <span style="font-size:.8rem;">min</span>
             </div>
           </div>
+          <div class="form-group" style="margin:0;display:none;">
+            <label style="font-size:.8rem;margin-bottom:.2rem;">Durée séance sur place</label>
+            <select name="duree_seance_minutes" style="width:130px;padding:.4rem;">
+              {% for val, lbl in [(15,'15 min'),(30,'30 min'),(45,'45 min'),(60,'1h00'),(75,'1h15'),(90,'1h30'),(105,'1h45'),(120,'2h00')] %}
+              <option value="{{ val }}" {{ 'selected' if (s_data['service']['duree_seance_minutes'] or 60) == val }}>{{ lbl }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-group" style="margin:0;display:none;">
+            <label style="font-size:.8rem;margin-bottom:.2rem;">Appel exploratoire</label>
+            <input type="checkbox" name="appel_exploratoire_requis" value="1" style="width:auto;" {{ 'checked' if s_data['service']['appel_exploratoire_requis'] }}>
+          </div>
+
           <div class="form-group" style="margin:0;">
             <label style="font-size:.8rem;margin-bottom:.2rem;">Délai fixe (h)</label>
             <input type="number" name="delai_fixe_heures" min="0" max="168" value="{{ s_data['service']['delai_fixe_heures'] or 0 }}" style="width:65px;padding:.4rem;">
           </div>
-          <div class="form-group" style="margin:0;">
+          <div class="form-group" style="margin:0;display:none;">
             <label style="font-size:.8rem;margin-bottom:.2rem;">Prix ($CA, sans taxes)</label>
-            <div style="display:flex;gap:.35rem;align-items:center;">
-              <input type="number" name="prix" min="0" step="0.01" value="{{ s_data['service']['prix'] or 0 }}" style="width:100px;padding:.4rem;">
-              <span style="font-size:.8rem;">$CA</span>
-            </div>
+            <input type="number" name="prix" min="0" step="0.01" value="{{ s_data['service']['prix'] or 0 }}" style="width:100px;padding:.4rem;">
           </div>
-          <div class="form-group" style="margin:0;display:flex;align-items:center;gap:.4rem;padding-top:1.4rem;">
+          <div class="form-group" style="margin:0;display:none;">
             <input type="checkbox" name="exonere_taxes" value="1" {% if s_data['service']['exonere_taxes'] %}checked{% endif %} id="exonere_{{ sid }}">
-            <label for="exonere_{{ sid }}" style="font-size:.8rem;margin:0;">Sans taxes</label>
+            <input type="checkbox" name="decision_board_requis" value="1" {% if s_data['service']['decision_board_requis'] %}checked{% endif %} id="db_{{ sid }}">
+          </div>
+          <div class="form-group" style="margin:0;width:100%;">
+            <label style="font-size:.8rem;margin-bottom:.2rem;">Sous-dossiers Drive automatiques</label>
+            <input type="text" name="drive_subfolders"
+                   value="{{ s_data['service']['drive_subfolders'] or '' }}"
+                   placeholder="ex: Salon & Salle à manger|Salle de bain|Extérieur|Drone"
+                   style="width:100%;">
+            <small style="color:#7a7773;font-size:.8rem;">Séparer par |</small>
           </div>
           <button type="submit" style="min-width:auto;padding:.5rem 1rem;font-size:.9rem;">Sauvegarder</button>
         </div>
@@ -322,6 +363,7 @@
 
       <form action="{{ url_for('add_checklist_item', service_id=sid) }}"
             method="post" class="add-item-form" novalidate>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="is_revision_item" value="0">
 
 <div class="add-item-row">
@@ -373,6 +415,7 @@
 
       <form action="{{ url_for('add_checklist_item', service_id=sid) }}"
             method="post" class="add-item-form" novalidate>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="is_revision_item" value="1">
         <input type="hidden" name="item_type" value="document">
         <input type="hidden" name="requires_file" value="0">

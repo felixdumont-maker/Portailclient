@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 820" width="700" height="820">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a0a0d"></stop>
+      <stop offset="0.7" stop-color="#7a0e12"></stop>
+      <stop offset="1" stop-color="#d62127"></stop>
+    </linearGradient>
+    <radialGradient id="spot" cx="0.5" cy="0.3" r="0.6">
+      <stop offset="0" stop-color="#ffaa00" stop-opacity="0.3"></stop>
+      <stop offset="1" stop-color="#ffaa00" stop-opacity="0"></stop>
+    </radialGradient>
+  </defs>
+  <rect width="700" height="820" fill="url(#bg)"></rect>
+  <rect width="700" height="820" fill="url(#spot)"></rect>
+  
+  <g fill="#1a0405" opacity="0.85">
+    
+    <ellipse cx="350" cy="220" rx="52" ry="58"></ellipse>
+    
+    <ellipse cx="345" cy="210" rx="36" ry="22" fill="#ffffff" opacity="0.15"></ellipse>
+    
+    <path d="M250 280 Q260 270 290 268 L410 268 Q440 270 450 280 L470 380 Q470 460 460 540 L240 540 Q230 460 230 380 Z"></path>
+    
+    <path d="M450 320 L530 360 L560 420 L545 430 L515 380 L440 350 Z"></path>
+    
+    <rect x="538" y="340" width="8" height="240" transform="rotate(-15 542 460)"></rect>
+    
+    <path d="M280 540 L320 720 L380 720 L420 540 Z"></path>
+  </g>
+  
+  <g stroke="#ffffff" stroke-width="2" opacity="0.08">
+    <line x1="0" y1="100" x2="700" y2="60"></line>
+    <line x1="0" y1="120" x2="700" y2="80"></line>
+    <line x1="0" y1="160" x2="700" y2="120"></line>
+  </g>
+  
+  <text x="350" y="800" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" letter-spacing="3" fill="#ffffff" opacity="0.3">PLACEHOLDER · ACTION PHOTO</text>
+</svg>

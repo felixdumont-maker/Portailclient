@@ -1,0 +1,257 @@
+{% extends "base.html" %}
+{% block title %}Identité visuelle — {{ projet.nom_projet }}{% endblock %}
+
+{% block head %}
+{% for font in fonts %}
+<link href="https://fonts.googleapis.com/css2?family={{ font.nom_font | replace(' ', '+') }}:wght@300;400;700&display=swap" rel="stylesheet">
+{% endfor %}
+<style>
+  body { background: #F5F3EF !important; }
+  .container { background: transparent !important; box-shadow: none !important; border: none !important; max-width: 900px; }
+
+  .planche { font-family: 'Outfit', 'Poppins', sans-serif; color: #2C2C2A; }
+
+  .planche-header { text-align: center; padding: 2.5rem 0 1.5rem; border-bottom: .5px solid #C2B6A8; margin-bottom: 3rem; }
+  .planche-header .badge { font-size: .65rem; letter-spacing: 3px; color: #A89F95; text-transform: uppercase; margin-bottom: .5rem; }
+  .planche-header h1 { font-family: 'Bebas Neue', sans-serif; font-size: 2rem; letter-spacing: 4px; color: #2C2C2A; margin: 0; }
+
+  .planche-section { margin-bottom: 3.5rem; }
+  .section-label { font-size: .65rem; letter-spacing: 2px; color: #8C6B4F; text-transform: uppercase; margin-bottom: .8rem; }
+  .section-card { background: #FDFCFB; border: .5px solid #E0D9D0; border-radius: 6px; padding: 2rem; }
+
+  /* LOGOS */
+  .logos-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; }
+  .logo-col { display: flex; flex-direction: column; gap: .8rem; }
+  .logo-variante-label { font-size: .65rem; letter-spacing: 2px; color: #A89F95; text-transform: uppercase; text-align: center; }
+  .logo-swatch { border-radius: 4px; display: flex; align-items: center; justify-content: center; padding: 1.5rem; min-height: 200px; } 
+  .logo-swatch.clair { background: #EDE8E1; }
+  .logo-swatch.fonce { background: #1A1A1A; }
+  .logo-swatch img { max-width: 90%; max-height: 150px; object-fit: contain; background: transparent; } 
+  .logo-swatch .no-file { font-size: .7rem; color: #C2B6A8; text-align: center; }
+  .swatch-label { font-size: .6rem; letter-spacing: 1px; color: #A89F95; text-align: center; text-transform: uppercase; }
+  .dl-row { display: flex; gap: .5rem; justify-content: center; flex-wrap: wrap; }
+  .dl-btn { display: inline-flex; align-items: center; gap: .3rem; padding: .3rem .75rem; border-radius: 999px; font-size: .72rem; font-weight: 600; text-decoration: none; border: 1px solid #E0D9D0; color: #5F5857; background: #F5F3EF; transition: all .2s; }
+  .dl-btn:hover { background: #1A1A1A; color: #EDE8E1; border-color: #1A1A1A; }
+  .dl-btn.primary { background: #1A1A1A; color: #EDE8E1; border-color: #1A1A1A; }
+  .dl-btn.primary:hover { background: #e83b14; border-color: #e83b14; }
+
+  /* PALETTE */
+  .palette-swatches-wrap { display: flex; border-radius: 6px; overflow: hidden; height: 80px; margin-bottom: 1rem; }
+  .palette-swatch { flex: 1; }
+  .palette-infos { display: flex; gap: .8rem; flex-wrap: wrap; }
+  .palette-info-item { display: flex; align-items: center; gap: .5rem; }
+  .palette-dot { width: 14px; height: 14px; border-radius: 50%; border: 1px solid rgba(0,0,0,.1); flex-shrink: 0; }
+  .palette-info-text { }
+  .palette-hex { font-family: monospace; font-size: .78rem; color: #2C2C2A; font-weight: 600; }
+  .palette-role { font-size: .7rem; color: #A89F95; }
+
+  /* DÉCLINAISONS */
+  .decl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1.2rem; }
+  .decl-card { background: transparent; border: .5px solid #E0D9D0; border-radius: 6px; overflow: hidden; }
+  .decl-img-wrap { background: transparent; padding: 1.2rem; display: flex; align-items: center; justify-content: center; min-height: 140px; }
+  .decl-img-wrap img { max-width: 100%; max-height: 120px; object-fit: contain; background: transparent; display: block; }
+  .decl-meta { padding: .7rem 1rem; border-top: .5px solid #E0D9D0; display: flex; align-items: center; justify-content: space-between; }
+  .decl-name { font-size: .7rem; color: #5F5857; }
+  .decl-dl { font-size: .7rem; color: #8C6B4F; text-decoration: none; font-weight: 600; }
+  .decl-dl:hover { text-decoration: underline; }
+
+  /* MOCKUPS */
+  .mockup-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1.2rem; }
+  .mockup-img { width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 6px; display: block; }
+
+  /* FONTS */
+  .fonts-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.5rem; }
+  .font-block { text-align: center; }
+  .font-sample { font-size: 6rem; line-height: 1; color: #1A1A1A; margin-bottom: .8rem; }
+  .font-alphabet { font-size: 1rem; color: #5F5857; margin-bottom: .3rem; letter-spacing: .5px; line-height: 1.8; }
+  .font-alphabet-sm { font-size: .85rem; color: #A89F95; margin-bottom: 1rem; letter-spacing: .3px; }
+  .font-name { font-size: .7rem; letter-spacing: 2px; text-transform: uppercase; color: #2C2C2A; margin-bottom: .15rem; }
+  .font-usage-label { font-size: .68rem; color: #A89F95; margin-bottom: .6rem; }
+  .font-link { font-size: .68rem; color: #8C6B4F; text-decoration: none; letter-spacing: .5px; }
+  .font-link:hover { text-decoration: underline; }
+  .divider { border: none; border-top: .5px solid #E0D9D0; margin: 1rem 0; }
+
+  /* ZIP */
+  .zip-bar { background: #1A1A1A; border-radius: 6px; padding: 1.2rem 1.8rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-top: 2rem; }
+  .zip-bar-text strong { display: block; font-family: 'Bebas Neue', sans-serif; font-size: 1.2rem; color: #EDE8E1; letter-spacing: 1px; }
+  .zip-bar-text span { font-size: .78rem; color: #9a9490; }
+  .zip-btn { display: inline-flex; align-items: center; gap: .4rem; background: #e83b14; color: #fff; padding: .6rem 1.5rem; border-radius: 999px; font-family: 'Bebas Neue', sans-serif; font-size: 1rem; letter-spacing: 1px; text-decoration: none; transition: background .2s; }
+  .zip-btn:hover { background: #c0321a; color: #fff; }
+
+  .planche-footer { border-top: .5px solid #C2B6A8; text-align: center; padding: 1.5rem 0 2rem; font-size: .65rem; letter-spacing: 2px; color: #C2B6A8; text-transform: uppercase; margin-top: 3rem; }
+  .back-link { display: inline-flex; align-items: center; gap: .4rem; color: #A89F95; text-decoration: none; font-size: .82rem; margin-bottom: 1.5rem; }
+  .back-link:hover { color: #e83b14; }
+
+  @media (max-width: 600px) {
+    .logos-row { grid-template-columns: 1fr; }
+    .fonts-row { grid-template-columns: 1fr; }
+    .decl-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="planche">
+
+  <a href="{{ url_for('project_detail', project_id=projet.id) }}" class="back-link">
+    <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+    Retour au projet
+  </a>
+
+  <div class="planche-header">
+    <div class="badge">Identité visuelle · Planche logo</div>
+    <h1>{{ projet.nom_projet.split(' — ')[1] if ' — ' in projet.nom_projet else projet.nom_projet }}</h1>
+  </div>
+  {% if iv and iv.contexte %}
+  <div class="planche-section">
+    <div style="max-width:640px;margin:0 auto;text-align:center;padding:1rem 0 .5rem;">
+      <p style="font-size:.95rem;color:#5F5857;line-height:1.8;font-style:italic;">{{ iv.contexte }}</p>
+    </div>
+  </div>
+  {% endif %}
+  <!-- 01 LOGOS -->
+  {% set has_logos = logos.get('principal') or logos.get('icone') or logos.get('variante') %}
+  {% if has_logos %}
+  <div class="planche-section">
+    <div class="section-label">01 — Déclinaisons du logo</div>
+    <div class="section-card">
+      <div class="logos-row">
+        {% for variante_key, label in [('principal','Logo principal'),('icone','Icône'),('variante','Variante')] %}
+        {% set logo = logos.get(variante_key) %}
+        <div class="logo-col">
+          <div class="logo-variante-label">{{ label }}</div>
+          <div class="logo-swatch clair">
+            {% if logo and logo.public_url %}
+              <img src="{{ logo.public_url }}" alt="{{ label }}">
+            {% else %}
+              <span class="no-file">Non disponible</span>
+            {% endif %}
+          </div>
+          <div class="swatch-label">Fond clair</div>
+          <div class="logo-swatch fonce">
+            {% if logo and logo.public_url %}
+              <img src="{{ logo.public_url }}" alt="{{ label }}" style="filter:brightness(0) invert(1);">
+            {% else %}
+              <span class="no-file" style="color:#5F5857;">Non disponible</span>
+            {% endif %}
+          </div>
+          <div class="swatch-label">Fond foncé</div>
+          {% if logo and logo.drive_file_id %}
+          <div class="dl-row">
+            <a href="https://drive.google.com/uc?export=download&id={{ logo.drive_file_id }}" class="dl-btn primary" target="_blank">↓ Télécharger</a>
+            {% if logo.preview_file_id %}
+            <a href="https://drive.google.com/file/d/{{ logo.preview_file_id }}/view" class="dl-btn" target="_blank">Voir</a>
+            {% else %}
+            <a href="{{ logo.public_url }}" class="dl-btn" target="_blank">Voir</a>
+            {% endif %}
+          </div>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- 02 PALETTE -->
+  {% if iv and iv.palette_json %}
+  {% set palette = iv.palette_json | fromjson %}
+  {% if palette %}
+  <div class="planche-section">
+    <div class="section-label">02 — Palette de couleurs</div>
+    <div class="section-card">
+      <div class="palette-swatches-wrap">
+        {% for c in palette %}
+        <div class="palette-swatch" style="background:{{ c.hex }};"></div>
+        {% endfor %}
+      </div>
+      <div class="palette-infos">
+        {% for c in palette %}
+        <div class="palette-info-item">
+          <div class="palette-dot" style="background:{{ c.hex }};"></div>
+          <div class="palette-info-text">
+            <div class="palette-hex">{{ c.hex }}</div>
+            {% if c.label %}<div class="palette-role">{{ c.label }}</div>{% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+  {% endif %}
+
+  <!-- 03 DÉCLINAISONS -->
+  {% if declinaisons %}
+  <div class="planche-section">
+    <div class="section-label">03 — Déclinaisons couleur</div>
+    <div class="section-card" style="padding:1.5rem;">
+      <div class="decl-grid">
+        {% for d in declinaisons %}
+        <div class="decl-card">
+          <div class="decl-img-wrap">
+            <img src="{{ d.public_url }}" alt="{{ d.filename }}">
+          </div>
+          <div class="decl-meta">
+            <span class="decl-name">{{ d.filename | replace('_', ' ') | replace('-', ' ') }}</span>
+            <a href="https://drive.google.com/uc?export=download&id={{ d.drive_file_id }}" class="decl-dl" target="_blank">↓ SVG</a>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- 04 TYPOGRAPHIE -->
+  {% if fonts %}
+  <div class="planche-section">
+    <div class="section-label">{% if declinaisons %}04{% else %}03{% endif %} — Typographie</div>
+    <div class="section-card">
+      <div class="fonts-row">
+        {% for font in fonts %}
+        <div class="font-block">
+          <div class="font-sample" style="font-family:'{{ font.nom_font }}',serif,sans-serif;">Aa</div>
+          <div class="font-alphabet" style="font-family:'{{ font.nom_font }}',serif,sans-serif;">Aa Bb Cc Dd Ee Ff Gg Hh Ii Jj Kk Ll Mm</div>
+          <div class="font-alphabet-sm" style="font-family:'{{ font.nom_font }}',serif,sans-serif;">Nn Oo Pp Qq Rr Ss Tt Uu Vv Ww Xx Yy Zz</div>
+          <hr class="divider">
+          <div class="font-name">{{ font.nom_font }}</div>
+          {% if font.usage %}<div class="font-usage-label">{{ font.usage }}</div>{% endif %}
+          <a href="{{ font.google_font_url }}" class="font-link" target="_blank">Voir sur Google Fonts →</a>
+        </div>        
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- 05 MOCKUPS -->
+  {% if mockups %}
+  <div class="planche-section">
+    <div class="section-label">{% if declinaisons %}05{% else %}04{% endif %} — Mises en situation</div>
+    <div class="mockup-grid">
+      {% for m in mockups %}
+      <img src="{{ m.public_url }}" alt="{{ m.filename }}" class="mockup-img">
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- ZIP -->
+  <div class="zip-bar">
+    <div class="zip-bar-text">
+      <strong>Télécharger tous les fichiers</strong>
+      <span>Logo principal, icône, variante et tous les assets en un seul ZIP.</span>
+    </div>
+    <a href="{{ url_for('telecharger_zip_identite', project_id=projet.id) }}" class="zip-btn">
+      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+      Télécharger le ZIP
+    </a>
+  </div>
+
+  <div class="planche-footer">
+    {{ projet.nom_projet.split(' — ')[1] if ' — ' in projet.nom_projet else projet.nom_projet }} · Identité visuelle · Cocktail Média
+  </div>
+
+</div>
+{% endblock %}

@@ -5,13 +5,32 @@ Scheduler facturation mensuelle — Cocktail Média
 """
 
 import os
+import fcntl
 import sqlite3
 import pathlib
 from datetime import date, datetime
 import calendar
 
+_scheduler_lock_fd = None  # garde le verrou ouvert pour la vie du process
+
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
+
+
+def sync_todoist_job():
+    """Polling Todoist → todos_perso (toutes les X minutes)."""
+    if not os.getenv("TODOIST_API_TOKEN", "").strip():
+        return
+    try:
+        import todoist_service
+        conn = get_db()
+        res = todoist_service.sync(conn)
+        conn.close()
+        if res.get("nouvelles") or res.get("fermes"):
+            print(f"[TODOIST] sync: {res}")
+    except Exception as e:
+        print(f"[TODOIST] sync échoué: {e}")
 
 
 def get_db():
@@ -227,6 +246,17 @@ def ajouter_ligne_facture_mensuelle(id_client: int, id_projet: int,
             WHERE id_client = ? AND periode_mois = ? AND statut = 'ouverte'
         """, (id_client, periode)).fetchone()
 
+    # Garde anti-doublon : évite une 2e ligne pour le même projet sur la facture ouverte du
+    # mois (peut arriver si le déclencheur "travaux en cours" tourne deux fois pour le même
+    # projet — ex. bouton dédié suivi d'un forçage de statut).
+    deja = conn.execute(
+        "SELECT id FROM facture_lignes WHERE id_facture = ? AND id_projet = ?",
+        (facture['id'], id_projet)
+    ).fetchone()
+    if deja:
+        print(f"[SCHEDULER] Ligne déjà présente pour ce projet sur la facture mensuelle, ignorée: {description}")
+        return
+
     conn.execute("""
         INSERT INTO facture_lignes
         (id_facture, id_projet, description, date_service, localisation, quantite, prix_unitaire, total_ligne)
@@ -236,8 +266,93 @@ def ajouter_ligne_facture_mensuelle(id_client: int, id_projet: int,
     print(f"[SCHEDULER] Ligne ajoutée à facture mensuelle: {description} — {prix}$")
 
 
+def sync_calendar_todos():
+    """Sync bidirectionnelle : si un événement lié à un todo est déplacé/supprimé
+       dans Google Agenda, on répercute sur le todo (date_echeance / déplanification)."""
+    try:
+        from calendar_service import get_event_datetime
+    except Exception:
+        return
+    conn = get_db()
+    todos = conn.execute(
+        "SELECT id, date_echeance, calendar_event_id FROM todos_perso "
+        "WHERE calendar_event_id IS NOT NULL AND calendar_event_id != '' AND est_coche=0"
+    ).fetchall()
+    modifs = 0
+    for t in todos:
+        res = get_event_datetime(t['calendar_event_id'])
+        if res is None:
+            continue  # erreur transitoire → on ne touche à rien
+        if res == 'deleted':
+            conn.execute("UPDATE todos_perso SET calendar_event_id=NULL WHERE id=?", (t['id'],))
+            modifs += 1
+            continue
+        new_date, _heure = res
+        if new_date and new_date != t['date_echeance']:
+            conn.execute("UPDATE todos_perso SET date_echeance=? WHERE id=?", (new_date, t['id']))
+            modifs += 1
+    conn.close()
+    if modifs:
+        print(f"[CALENDAR-SYNC] {modifs} todo(s) mis à jour depuis l'agenda")
+
+
+def envoyer_recap_todos(app, mail):
+    """Récap matinal : tâches planifiées aujourd'hui + en retard + notifs non lues."""
+    from flask_mail import Message as MailMessage
+    destinataire = os.getenv("TODO_RECAP_EMAIL", "felix.dumont@cocktailmedia.ca")
+    with app.app_context():
+        conn = get_db()
+        today = date.today().strftime("%Y-%m-%d")
+        aujourdhui = conn.execute(
+            "SELECT texte, projet_nom FROM todos_perso "
+            "WHERE est_coche=0 AND COALESCE(is_titre,0)=0 AND date_echeance=? ORDER BY priorite", (today,)
+        ).fetchall()
+        retard = conn.execute(
+            "SELECT texte, projet_nom, date_echeance FROM todos_perso "
+            "WHERE est_coche=0 AND COALESCE(is_titre,0)=0 AND date_echeance IS NOT NULL AND date_echeance < ? "
+            "ORDER BY date_echeance", (today,)
+        ).fetchall()
+        notifs = conn.execute("SELECT COUNT(*) FROM admin_notifications WHERE is_read=0").fetchone()[0]
+        conn.close()
+        if not aujourdhui and not retard and not notifs:
+            return  # rien à signaler → pas d'email
+
+        def li(rows, show_date=False):
+            out = ""
+            for r in rows:
+                proj = f" — {r['projet_nom']}" if r['projet_nom'] else ""
+                d = f" <span style='color:#888'>(échéance {r['date_echeance']})</span>" if show_date else ""
+                out += f"<li style='margin:4px 0'>{r['texte']}{proj}{d}</li>"
+            return out or "<li style='color:#888'><i>Aucune</i></li>"
+
+        html = f"""<div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;color:#2b2b2b">
+          <h2 style="color:#c0321a">📋 Ton récap du jour</h2>
+          <p><b>Aujourd'hui ({len(aujourdhui)})</b></p><ul>{li(aujourdhui)}</ul>
+          <p><b>En retard ({len(retard)})</b></p><ul>{li(retard, show_date=True)}</ul>
+          <p style="margin-top:16px">🔔 <b>{notifs}</b> notification(s) non lue(s) sur le portail.</p>
+        </div>"""
+        try:
+            msg = MailMessage(
+                f"📋 Récap tâches — {len(aujourdhui)} aujourd'hui, {len(retard)} en retard",
+                sender=os.getenv("MAIL_DEFAULT_SENDER"), recipients=[destinataire])
+            msg.body = f"{len(aujourdhui)} tâche(s) aujourd'hui, {len(retard)} en retard, {notifs} notif(s) non lues."
+            msg.html = html
+            mail.send(msg)
+            print(f"[SCHEDULER] Récap todos envoyé à {destinataire}")
+        except Exception as e:
+            print(f"[SCHEDULER] Récap todos échoué: {e}")
+
+
 def init_scheduler(app, mail):
-    """Initialise et démarre le scheduler APScheduler."""
+    """Initialise et démarre le scheduler APScheduler.
+       Verrou fichier : un seul worker gunicorn exécute réellement les jobs (évite ×N)."""
+    global _scheduler_lock_fd
+    try:
+        _scheduler_lock_fd = open('/tmp/portail_scheduler.lock', 'w')
+        fcntl.flock(_scheduler_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("[SCHEDULER] Déjà actif dans un autre worker — pas de démarrage ici")
+        return None
     scheduler = BackgroundScheduler(timezone="America/Toronto")
 
     # Dernier jour du mois à 17h00
@@ -257,6 +372,56 @@ def init_scheduler(app, mail):
         replace_existing=True,
     )
 
+    # Récap des tâches chaque matin à 8h
+    scheduler.add_job(
+        func=lambda: envoyer_recap_todos(app, mail),
+        trigger=CronTrigger(hour=8, minute=0),
+        id="recap_todos",
+        name="Récap tâches quotidien",
+        replace_existing=True,
+    )
+
+    # Sync agenda → todos toutes les 10 minutes (déplacement/suppression d'événement)
+    scheduler.add_job(
+        func=sync_calendar_todos,
+        trigger=IntervalTrigger(minutes=10),
+        id="sync_calendar_todos",
+        name="Sync agenda → todos",
+        replace_existing=True,
+    )
+
+    # Polling Todoist toutes les 5 minutes (filet + capture)
+    if os.getenv("TODOIST_API_TOKEN", "").strip():
+        scheduler.add_job(
+            func=sync_todoist_job,
+            trigger=IntervalTrigger(minutes=5),
+            id="sync_todoist",
+            name="Sync Todoist → todos",
+            replace_existing=True,
+            next_run_time=datetime.now(),  # premier passage immédiat
+        )
+
+    # Ingestion Gmail des factures fournisseurs — toutes les 15 min.
+    # Le job no-op proprement s'il n'y a aucune intégration Gmail active.
+    _gmail_ready = bool(os.getenv("GOOGLE_CLIENT_ID", "").strip() and os.getenv("GOOGLE_CLIENT_SECRET", "").strip())
+    if _gmail_ready:
+        def _gmail_job():
+            try:
+                import app as _app
+                with _app.app.app_context():
+                    _app.sync_gmail_factures(_app.app)
+            except Exception as e:
+                print(f"[GMAIL] job planifié échoué: {e}")
+        scheduler.add_job(
+            func=_gmail_job,
+            trigger=IntervalTrigger(minutes=15),
+            id="sync_gmail_factures",
+            name="Ingestion Gmail → factures à valider",
+            replace_existing=True,
+        )
+
     scheduler.start()
-    print("[SCHEDULER] Démarré — jobs: fermer_factures + creer_factures_mensuelles")
+    print("[SCHEDULER] Démarré — jobs: fermer_factures + creer_factures_mensuelles"
+          + (" + sync_todoist" if os.getenv("TODOIST_API_TOKEN", "").strip() else "")
+          + (" + sync_gmail_factures" if _gmail_ready else ""))
     return scheduler

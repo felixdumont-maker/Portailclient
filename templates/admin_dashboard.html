@@ -30,6 +30,194 @@
 
 {% block content %}
 
+{# ── Section Aujourd'hui ── #}
+{% if aujourd_hui.projets_du_jour or aujourd_hui.taches_admin or aujourd_hui.a_ne_pas_oublier %}
+<div style="background:#fff;border:1px solid #e0d9d3;border-radius:12px;margin-bottom:1.5rem;overflow:hidden;">
+
+  {# En-tête #}
+  <div style="background:#2b2b2b;padding:14px 20px;display:flex;align-items:center;gap:12px;">
+    <div style="width:4px;height:28px;background:#e83b14;border-radius:2px;flex-shrink:0;"></div>
+    <div>
+      <div style="font-family:var(--font-display);font-size:1.15rem;letter-spacing:2px;color:#faf7f3;text-transform:uppercase;">
+        Aujourd'hui — {{ aujourd_hui.weekday_label }}
+      </div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;">
+
+    {# ── Colonne gauche : projets du jour + tâches admin #}
+    {% if aujourd_hui.projets_du_jour or aujourd_hui.taches_admin %}
+    <div style="padding:16px 20px;border-right:1px solid #f0ede9;">
+
+      {% if aujourd_hui.projets_du_jour %}
+      <div style="font-size:11px;font-weight:700;color:#e83b14;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px;">
+        Projets à traiter
+      </div>
+      {% for p in aujourd_hui.projets_du_jour %}
+      <div style="display:flex;align-items:flex-start;gap:10px;padding:8px 10px;border-radius:8px;background:#faf7f3;margin-bottom:6px;">
+        <div style="width:8px;height:8px;border-radius:50%;background:#e83b14;flex-shrink:0;margin-top:4px;"></div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:12px;font-weight:700;color:#2b2b2b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+            {{ p.client_nom }}
+          </div>
+          <div style="font-size:11px;color:#555;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="{{ p.nom_projet }}">
+            {{ p.nom_projet }}
+          </div>
+          {% if p.date_livraison_estimee %}
+          <div style="font-size:10px;color:#aaa;margin-top:2px;">livraison {{ p.date_livraison_estimee }}</div>
+          {% endif %}
+        </div>
+        <a href="{{ url_for('project_detail', project_id=p.id) }}"
+           style="font-size:11px;color:#e83b14;text-decoration:none;font-weight:700;flex-shrink:0;">→</a>
+      </div>
+      {% endfor %}
+      {% endif %}
+
+      {% if aujourd_hui.taches_admin %}
+      <div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:1.5px;margin:{% if aujourd_hui.projets_du_jour %}12px{% else %}0{% endif %} 0 10px 0;">
+        Tâches admin
+      </div>
+      {% for tache in aujourd_hui.taches_admin %}
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:8px;border:1px dashed #e0d9d3;margin-bottom:6px;">
+        <div style="width:16px;height:16px;border:2px solid #ccc;border-radius:4px;flex-shrink:0;"></div>
+        <span style="font-size:12px;color:#2b2b2b;">{{ tache }}</span>
+      </div>
+      {% endfor %}
+      {% endif %}
+
+    </div>
+    {% endif %}
+
+    {# ── Colonne droite : À ne pas oublier #}
+    {% if aujourd_hui.a_ne_pas_oublier %}
+    <div style="padding:16px 20px;{% if not aujourd_hui.projets_du_jour and not aujourd_hui.taches_admin %}grid-column:1/-1;{% endif %}">
+      <div style="font-size:11px;font-weight:700;color:#c0321a;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px;">
+        ⚠ À ne pas oublier
+      </div>
+      {% for item in aujourd_hui.a_ne_pas_oublier %}
+      <div style="padding:8px 10px;border-radius:8px;background:#fff4f2;border-left:3px solid #e83b14;margin-bottom:6px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+          <div style="min-width:0;flex:1;">
+            <div style="font-size:12px;font-weight:700;color:#2b2b2b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+              {{ item.client_nom }} — <span style="font-weight:400;">{{ item.nom_projet }}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;margin-top:3px;flex-wrap:wrap;">
+              <span style="font-size:10px;background:#fdecea;color:#c0321a;padding:2px 7px;border-radius:10px;font-weight:600;">
+                {{ item.statut }}
+              </span>
+              <span style="font-size:10px;color:#999;">{{ item.raison }}</span>
+            </div>
+          </div>
+          <a href="{{ url_for('project_detail', project_id=item.id) }}"
+             style="font-size:11px;color:#e83b14;text-decoration:none;font-weight:700;flex-shrink:0;">→</a>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+  </div>{# /grid #}
+</div>
+{% endif %}
+{# ── Fin section Aujourd'hui ── #}
+
+{# Todos Roadmap en cours #}
+{% if true %}
+<div style="background:white;border:1px solid #e0d9d3;border-radius:12px;padding:16px 20px;margin-bottom:1.5rem;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+    <div style="font-family:var(--font-display);font-size:1.1rem;letter-spacing:1px;color:#2b2b2b;">TÂCHES EN COURS</div>
+    <a href="{{ url_for('admin_roadmaps') }}" style="font-size:12px;color:#888;">Voir tous les projets →</a>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:6px;">
+    {% for todo in todos_roadmap %}
+    <div style="display:flex;align-items:center;gap:12px;padding:8px 12px;border-radius:8px;background:#f9f6f2;">
+      <div style="width:8px;height:8px;border-radius:50%;background:#f39c12;flex-shrink:0;"></div>
+      <span style="font-size:12px;color:#2b2b2b;flex:1;">{{ todo.texte }}</span>
+      <span style="font-size:11px;color:#aaa;">{{ todo.phase_titre }}</span>
+      <a href="{{ url_for('admin_roadmap_detail', roadmap_id=todo.roadmap_id) }}" style="font-size:11px;color:#e83b14;text-decoration:none;">{{ todo.roadmap_titre }} →</a>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+
+<!-- TO-DO MARKETING -->
+{% if marketing_posts_todo or marketing_posts_complets %}
+<div class="todo-mkt-bar">
+    <div class="todo-mkt-col">
+        <div class="todo-mkt-titre">📋 Posts ce mois-ci</div>
+        {% for post in marketing_posts_todo %}
+        {% set plateformes = post.plateformes | from_json %}
+        <div class="todo-mkt-row">
+            <input type="checkbox" class="todo-check"
+                   data-post-id="{{ post.id }}"
+                   onchange="toggleTodoMkt(this)">
+            <span class="todo-mkt-date">{{ post.date_publication }}</span>
+            <span class="todo-mkt-nom">{{ post.titre }}</span>
+            <span class="todo-mkt-plates">
+                {% for p in plateformes %}<span class="mkt-badge badge-{{ p | lower }}">{{ p[0] }}</span>{% endfor %}
+            </span>
+            <a href="{{ url_for('marketing_calendrier', mois=post.date_publication[:7]) }}" class="todo-mkt-lien">↗</a>
+        </div>
+        {% else %}
+        <div style="font-size:12px;color:#aaa;padding:6px 0;">Aucun post actif ce mois-ci.</div>
+        {% endfor %}
+    </div>
+</div>
+{% if marketing_posts_complets %}
+<details class="todo-mkt-complets">
+    <summary>✅ Complétés ce mois-ci ({{ marketing_posts_complets | length }})</summary>
+    <div class="todo-mkt-complets-list">
+        {% for post in marketing_posts_complets %}
+        {% set plateformes = post.plateformes | from_json %}
+        <div class="todo-mkt-row done">
+            <span class="todo-mkt-check-done">✓</span>
+            <span class="todo-mkt-date">{{ post.date_publication }}</span>
+            <span class="todo-mkt-nom">{{ post.titre }}</span>
+            <span class="todo-mkt-plates">
+                {% for p in plateformes %}<span class="mkt-badge badge-{{ p | lower }}">{{ p[0] }}</span>{% endfor %}
+            </span>
+            <a href="{{ url_for('marketing_calendrier', mois=post.date_publication[:7]) }}" class="todo-mkt-lien">↗</a>
+        </div>
+        {% endfor %}
+    </div>
+</details>
+{% endif %}
+<script>
+function toggleTodoMkt(cb) {
+    const postId = cb.dataset.postId;
+    fetch(`/admin/marketing/post/${postId}/todo-toggle`, {method: 'POST'})
+        .then(r => r.json())
+        .then(() => { window.location.reload(); })
+        .catch(() => { cb.checked = !cb.checked; });
+}
+</script>
+<style>
+.todo-mkt-bar { display:flex; gap:16px; margin-bottom:16px; flex-wrap:wrap; }
+.todo-mkt-col { flex:1; min-width:280px; background:#fff; border-radius:10px; padding:16px; box-shadow:0 2px 8px rgba(0,0,0,0.07); border-top:3px solid #c0321a; }
+.todo-mkt-titre { font-size:13px; font-weight:700; color:#2b2b2b; margin-bottom:12px; text-transform:uppercase; letter-spacing:0.5px; }
+.todo-mkt-row { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid #f5f5f5; font-size:13px; }
+.todo-mkt-row:last-child { border-bottom:none; }
+.todo-mkt-row.done { opacity:0.4; text-decoration:line-through; }
+.todo-check { cursor:pointer; accent-color:#c0321a; width:15px; height:15px; flex-shrink:0; }
+.todo-mkt-date { color:#aaa; font-size:11px; white-space:nowrap; min-width:70px; }
+.todo-mkt-nom { flex:1; font-weight:600; color:#2b2b2b; }
+.todo-mkt-plates { display:flex; gap:3px; }
+.mkt-badge { font-size:10px; font-weight:700; width:16px; height:16px; border-radius:50%; display:flex; align-items:center; justify-content:center; }
+.badge-instagram { background:#fce7f3; color:#be185d; }
+.badge-facebook { background:#dbeafe; color:#1d4ed8; }
+.badge-linkedin { background:#e0f2fe; color:#0369a1; }
+.todo-mkt-lien { color:#c0321a; text-decoration:none; font-weight:700; font-size:14px; }
+.todo-mkt-check-done { color:#16a34a; font-size:13px; flex-shrink:0; width:15px; text-align:center; }
+.todo-mkt-complets { margin-bottom:16px; }
+.todo-mkt-complets summary { cursor:pointer; font-size:12px; font-weight:700; color:#6b7280; text-transform:uppercase; letter-spacing:0.5px; padding:6px 0; user-select:none; }
+.todo-mkt-complets summary:hover { color:#374151; }
+.todo-mkt-complets-list { background:#fff; border-radius:8px; padding:8px 16px; box-shadow:0 1px 4px rgba(0,0,0,0.05); margin-top:6px; }
+</style>
+{% endif %}
+
 <div class="admin-topbar">
   <h1 style="margin:0;border:none;padding:0;">Tableau de bord admin</h1>
   <a href="{{ url_for('admin_services') }}" class="btn">Gérer les services &amp; checklists</a>
@@ -41,6 +229,7 @@
   <div class="card">
     <h2 style="margin-top:0;">Ajouter un projet</h2>
     <form action="{{ url_for('add_project') }}" method="post" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
       <div class="form-group">
         <label for="id_client">Client</label>
@@ -67,18 +256,48 @@
         <label for="date_seance">Date de la séance</label>
         <input type="date" id="date_seance" name="date_seance" required value="{{ today }}">
       </div>
-<div class="form-group" id="localisation-group" style="display:none;">
+      <div class="form-row">
+        <div class="form-group">
+          <label for="heure_seance">Heure de la séance</label>
+          <input type="time" id="heure_seance" name="heure_seance">
+        </div>
+        <div class="form-group">
+          <label for="titre_projet">Titre du projet (affiché au client)</label>
+          <input type="text" id="titre_projet" name="titre_projet" placeholder="ex: GALA AESI, Conférence RH 2025…">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Lien de réunion / appel exploratoire</label>
+        <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.5rem;">
+          <input type="checkbox" id="generer_meet" name="generer_meet" value="1" style="width:auto;">
+          <label for="generer_meet" style="font-weight:400;margin:0;">Générer automatiquement un lien Google Meet</label>
+        </div>
+        <div id="meet-date-wrap" style="display:none;margin-bottom:.5rem;">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Date de la réunion</label>
+              <input type="date" id="date_reunion" name="date_reunion">
+            </div>
+            <div class="form-group">
+              <label>Heure de la réunion</label>
+              <input type="time" id="heure_reunion" name="heure_reunion">
+            </div>
+          </div>
+        </div>
+        <input type="url" id="lien_reunion" name="lien_reunion" placeholder="https://meet.google.com/... ou https://calendly.com/...">
+      </div>
+      <div class="form-group" id="localisation-group" style="display:none;">
         <label for="localisation">Adresse de la séance</label>
         <input type="text" id="localisation" name="localisation" placeholder="123 rue Example, Trois-Rivières">
       </div>
       <button type="submit">Créer le projet</button>
     </form>
   </div>
-
   {# Nouveau client #}
   <div class="card">
     <h2 style="margin-top:0;">Ajouter un client</h2>
     <form action="{{ url_for('add_client') }}" method="post" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-group">
         <label for="nom_complet">Nom complet</label>
         <input type="text" id="nom_complet" name="nom_complet" required>
@@ -86,10 +305,6 @@
       <div class="form-group">
         <label for="email">Email</label>
         <input type="email" id="email" name="email" required>
-      </div>
-      <div class="form-group">
-        <label for="password">Mot de passe initial</label>
-        <input type="password" id="password" name="password" required>
       </div>
       <div class="form-group">
         <label for="nom_entreprise">Entreprise (optionnel)</label>
@@ -158,6 +373,19 @@
             <a href="{{ url_for('edit_client', client_id=client['id']) }}" class="action-btn btn-edit">Modifier</a>
             <a href="{{ url_for('delete_client', client_id=client['id']) }}" class="action-btn btn-delete"
                onclick="return confirm('Supprimer ce client ?');">Supprimer</a>
+            {% if client['drive_folder_id'] %}
+            <a href="https://drive.google.com/drive/folders/{{ client['drive_folder_id'] }}"
+               target="_blank" rel="noopener" title="Dossier Drive" class="action-btn" style="padding:.3rem .5rem;">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 87.3 78" style="width:16px;height:14px;vertical-align:middle;" aria-hidden="true">
+                <path d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8H0c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/>
+                <path d="M43.65 25 29.9 1.2C28.55 2 27.4 3.1 26.6 4.5L1.2 48.4c-.8 1.4-1.2 2.95-1.2 4.5h27.5z" fill="#00ac47"/>
+                <path d="M73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5H59.8l5.85 11.5z" fill="#ea4335"/>
+                <path d="M43.65 25 57.4 1.2C56.05.4 54.5 0 52.9 0H34.4c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d"/>
+                <path d="M59.8 53H27.5L13.75 76.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z" fill="#2684fc"/>
+                <path d="M73.4 26.5l-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3L43.65 25 59.8 53h27.45c0-1.55-.4-3.1-1.2-4.5z" fill="#ffba00"/>
+              </svg>
+            </a>
+            {% endif %}
           </td>
         </tr>
       {% else %}
@@ -184,13 +412,22 @@
     <tbody>
       {% for f in factures_ouvertes %}
       <tr>
-        <td><strong>{{ f['nom_complet'] }}</strong><br><span class="muted" style="font-size:.8rem;">{{ f['nom_entreprise'] or '' }}</span></td>
+        <td><strong>{{ f['nom_complet'] }}</strong><br><span class="muted" style="font-size:.8rem;">{{ f['nom_entreprise'] or '' }}</span>
+          {% if not f['is_email_confirmed'] %}
+            <br><span class="badge badge--danger" style="font-size:.7rem;">⚠ Compte non confirmé</span>
+          {% endif %}
+        </td>
         <td>{{ f['periode_mois'] or '—' }}</td>
         <td>{{ f['nb_lignes'] }}</td>
         <td>{{ "%.2f"|format(f['sous_total']) }} $CA</td>
         <td><strong>{{ "%.2f"|format(f['total']) }} $CA</strong></td>
         <td>
+          <a href="{{ url_for('admin_facture', facture_id=f['id']) }}"
+             class="btn btn-secondary" style="min-width:auto;padding:.4rem .8rem;font-size:.85rem;">
+            Modifier
+          </a>
           <form action="{{ url_for('fermer_facture', facture_id=f['id']) }}" method="post" style="display:inline;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn" style="min-width:auto;padding:.4rem .8rem;font-size:.85rem;"
               onclick="return confirm('Fermer et envoyer cette facture au client ?');">
               Fermer et envoyer
@@ -239,14 +476,23 @@
         </td>
         <td>
           {% if f['statut'] != 'payee' %}
+          <a href="{{ url_for('admin_facture', facture_id=f['id']) }}"
+             class="btn btn-secondary" style="min-width:auto;padding:.35rem .7rem;font-size:.8rem;">
+            Modifier
+          </a>
           <form action="{{ url_for('marquer_facture_payee', facture_id=f['id']) }}" method="post" style="display:inline;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-secondary" style="min-width:auto;padding:.35rem .7rem;font-size:.8rem;"
               onclick="return confirm('Marquer comme payée ?');">
               ✓ Payée
             </button>
           </form>
           {% endif %}
+          <a href="{{ url_for('admin_download_facture', facture_id=f['id']) }}" class="btn" style="min-width:auto;padding:.35rem .7rem;font-size:.8rem;background:#1a73e8;display:inline-flex;">
+            ⬇ PDF
+          </a>
           <form action="{{ url_for('supprimer_facture', facture_id=f['id']) }}" method="post" style="display:inline;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn" style="min-width:auto;padding:.35rem .7rem;font-size:.8rem;background:#c62828;"
               onclick="return confirm('Supprimer définitivement cette facture ?');">
               Supprimer
@@ -267,6 +513,11 @@ const servicesLocalisation = {{ services_localisation | tojson }};
 document.getElementById('id_service').addEventListener('change', function() {
   const group = document.getElementById('localisation-group');
   group.style.display = servicesLocalisation[this.value] ? 'block' : 'none';
+});
+
+document.getElementById('generer_meet').addEventListener('change', function() {
+  document.getElementById('meet-date-wrap').style.display = this.checked ? 'block' : 'none';
+  document.getElementById('lien_reunion').style.display = this.checked ? 'none' : 'block';
 });
 </script>
 {% endblock %}

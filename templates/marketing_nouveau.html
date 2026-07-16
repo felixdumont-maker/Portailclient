@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Nouveau post marketing{% endblock %}
+{% block content %}
+
+<div class="marketing-header">
+    <h1 class="marketing-titre">✏️ Nouveau post</h1>
+    <a href="{{ url_for('marketing_calendrier') }}" class="btn-nav">← Retour au calendrier</a>
+</div>
+
+<div class="form-card">
+    <form method="POST" action="{{ url_for('marketing_nouveau_post') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+        <div class="form-group">
+            <label class="form-label">Titre du post *</label>
+            <input type="text" name="titre" class="form-input" placeholder="Ex: Lancement été 2025" required>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">Description / Caption</label>
+            <textarea name="description" class="form-input" rows="4" placeholder="Texte du post, consignes pour le visuel..."></textarea>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">Date de publication *</label>
+            <input type="date" name="date_publication" class="form-input" required>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">Plateformes *</label>
+            <div class="plateformes-grid">
+                <label class="plateforme-option">
+                    <input type="checkbox" name="plateformes" value="Instagram">
+                    <span class="plateforme-badge badge-instagram">📸 Instagram</span>
+                </label>
+                <label class="plateforme-option">
+                    <input type="checkbox" name="plateformes" value="Facebook">
+                    <span class="plateforme-badge badge-facebook">👥 Facebook</span>
+                </label>
+                <label class="plateforme-option">
+                    <input type="checkbox" name="plateformes" value="LinkedIn">
+                    <span class="plateforme-badge badge-linkedin">💼 LinkedIn</span>
+                </label>
+            </div>
+        </div>
+
+        <div class="form-actions">
+            <button type="submit" class="btn-primary">Planifier le post</button>
+            <a href="{{ url_for('marketing_calendrier') }}" class="btn-secondary">Annuler</a>
+        </div>
+
+    </form>
+</div>
+
+<style>
+.form-card {
+    background: #fff;
+    border-radius: 16px;
+    padding: 32px;
+    max-width: 600px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+}
+.form-group { margin-bottom: 24px; }
+.form-label {
+    display: block;
+    font-size: 13px;
+    font-weight: 700;
+    color: #2b2b2b;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.form-input {
+    width: 100%;
+    padding: 12px 16px;
+    border: 1.5px solid #e5e5e5;
+    border-radius: 8px;
+    font-size: 14px;
+    color: #2b2b2b;
+    box-sizing: border-box;
+    transition: border-color 0.2s;
+}
+.form-input:focus {
+    outline: none;
+    border-color: #c0321a;
+}
+.plateformes-grid {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+.plateforme-option { cursor: pointer; }
+.plateforme-option input[type="checkbox"] { display: none; }
+.plateforme-badge {
+    display: inline-block;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    border: 2px solid transparent;
+    transition: all 0.2s;
+}
+.plateforme-option input:checked + .badge-instagram { border-color: #be185d; }
+.plateforme-option input:checked + .badge-facebook { border-color: #1d4ed8; }
+.plateforme-option input:checked + .badge-linkedin { border-color: #0369a1; }
+.badge-instagram { background: #fce7f3; color: #be185d; }
+.badge-facebook { background: #dbeafe; color: #1d4ed8; }
+.badge-linkedin { background: #e0f2fe; color: #0369a1; }
+.form-actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 32px;
+}
+.btn-secondary {
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    text-decoration: none;
+    background: #f5f5f5;
+    color: #2b2b2b;
+}
+</style>
+{% endblock %}
+

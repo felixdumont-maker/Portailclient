@@ -325,6 +325,21 @@ tr:hover{ background-color: #fff8f2; }
   font-size: 0.85rem;
 }
 
+.badge-purple {
+  background: #8e44ad;
+  color: white;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.badge-grey {
+  background: #95a5a6;
+  color: white;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
 
 /* =================================
    9) ALERTES / FLASH MESSAGES

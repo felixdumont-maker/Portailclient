@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}{{ gabarit['nom'] }} — Gabarits{% endblock %}
+
+{% block head %}
+<style>
+  .dossier-header {
+    display: flex; align-items: flex-start; gap: var(--space-4);
+    margin-bottom: var(--space-5); flex-wrap: wrap;
+  }
+  .dossier-preview {
+    width: 240px; border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    border: 1px solid var(--couleur-bordure);
+    flex-shrink: 0;
+  }
+  .dossier-preview-placeholder {
+    width: 240px; height: 160px;
+    background: var(--couleur-fond);
+    border: 2px dashed var(--couleur-bordure);
+    border-radius: var(--radius-md);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 3rem; color: #ccc; flex-shrink: 0;
+  }
+  .fichiers-liste { display: grid; gap: var(--space-2); margin-top: var(--space-3); }
+  .fichier-card {
+    display: flex; align-items: center; gap: var(--space-3);
+    padding: var(--space-3);
+    background: var(--couleur-blanc);
+    border: 1px solid var(--couleur-bordure);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-sm);
+  }
+  .fichier-icon {
+    width: 44px; height: 44px; border-radius: var(--radius-sm);
+    background: var(--couleur-fond); display: flex;
+    align-items: center; justify-content: center;
+    font-size: .8rem; font-weight: 800; color: var(--couleur-principale);
+    flex-shrink: 0; border: 1px solid var(--couleur-bordure);
+  }
+  .fichier-nom  { flex: 1; font-weight: 600; font-size: var(--fs-sm); color: var(--couleur-sombre-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .btn-dl {
+    display: inline-flex; align-items: center; gap: .3rem;
+    font-size: .85rem; font-weight: 700; padding: .45rem .9rem;
+    border-radius: 5px; background: var(--couleur-principale);
+    color: #fff; text-decoration: none; white-space: nowrap;
+    transition: background var(--t-fast);
+  }
+  .btn-dl:hover { background: var(--couleur-principale-hover); text-decoration: none; color: #fff; }
+</style>
+{% endblock %}
+
+{% block content %}
+<nav class="navbar">
+  <div class="nav-container">
+    <a href="{{ url_for('mediatech_galerie') }}" class="nav-brand">← Gabarits</a>
+    <span class="nav-brand-center">{{ gabarit['nom'] }}</span>
+    <a href="{{ url_for('logout') }}" class="nav-link">Déconnexion</a>
+  </div>
+</nav>
+
+<div class="container">
+  <div class="dossier-header">
+    {% if gabarit['preview_drive_id'] %}
+      <img src="{{ url_for('api_tools_serve_file', file_id=gabarit['preview_drive_id']) }}"
+           alt="aperçu" class="dossier-preview">
+    {% else %}
+      <div class="dossier-preview-placeholder">🖼</div>
+    {% endif %}
+    <div>
+      <h1 style="margin-bottom:.5rem;">{{ gabarit['nom'] }}</h1>
+      {% if gabarit['description'] %}
+        <p class="muted">{{ gabarit['description'] }}</p>
+      {% endif %}
+      <p style="margin-top:1rem;font-size:.9rem;">Téléchargez le gabarit qui correspond à votre format.</p>
+    </div>
+  </div>
+
+  <h2>Fichiers disponibles</h2>
+
+  {% if fichiers %}
+    <div class="fichiers-liste">
+      {% for f in fichiers %}
+        {% if not f['is_preview'] %}
+        <div class="fichier-card">
+          <div class="fichier-icon">
+            {{ f['name'].rsplit('.', 1)[-1].upper() if '.' in f['name'] else '—' }}
+          </div>
+          <span class="fichier-nom">{{ f['name'] }}</span>
+          <a href="{{ url_for('mediatech_telecharger', file_id=f['id'], filename=f['name']) }}"
+             class="btn-dl">
+            ↓ Télécharger
+          </a>
+        </div>
+        {% endif %}
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty">
+      <h3>Aucun fichier</h3>
+      <p>Les fichiers seront disponibles prochainement.</p>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

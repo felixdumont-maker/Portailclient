@@ -1,0 +1,493 @@
+{% extends "base.html" %}
+{% block title %}Identité visuelle (Admin) — {{ projet.nom_projet }}{% endblock %}
+
+{% block head %}
+<style>
+  .iv-admin-page { max-width: 900px; margin: 0 auto; padding: 2rem 1rem 4rem; }
+  .iv-admin-header { margin-bottom: 2rem; }
+  .iv-admin-header h1 { font-family: 'Bebas Neue', sans-serif; font-size: 2.2rem; color: #2b2b2b; margin: 0 0 .2rem; }
+  .iv-admin-header p { color: #9a9490; font-size: .9rem; margin: 0; }
+  .iv-card { background: #fff; border: 1px solid #e0d9d3; border-radius: 20px; padding: 1.8rem; margin-bottom: 1.5rem; }
+  .iv-card-title { font-family: 'Bebas Neue', sans-serif; font-size: 1.2rem; letter-spacing: .5px; color: #2b2b2b; margin: 0 0 1.2rem; padding-bottom: .6rem; border-bottom: 2px solid #e83b14; }
+  .logos-upload-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1.2rem; }
+  .logo-upload-card { border: 2px dashed #e0d9d3; border-radius: 16px; padding: 1.2rem; text-align: center; transition: border-color .2s; background: #FAF7F3; }
+  .logo-upload-card:hover { border-color: #e83b14; }
+  .variante-label { font-family: 'Bebas Neue', sans-serif; font-size: 1rem; letter-spacing: .5px; color: #2b2b2b; margin-bottom: .8rem; display: block; }
+  .logo-preview-thumb { width: 100%; height: 120px; object-fit: contain; border-radius: 8px; margin-bottom: .8rem; background: #fff; padding: .5rem; box-sizing: border-box; }
+  .logo-preview-placeholder { width: 100%; height: 120px; display: flex; align-items: center; justify-content: center; color: #c0b8b0; margin-bottom: .8rem; }
+  .upload-input-wrap { position: relative; }
+  .upload-input-wrap input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+  .upload-btn { display: block; background: #2b2b2b; color: #fff; border-radius: 999px; padding: .45rem .9rem; font-size: .8rem; font-family: 'Bebas Neue', sans-serif; letter-spacing: .5px; cursor: pointer; }
+  .upload-btn:hover { background: #e83b14; }
+  .file-name-display { font-size: .72rem; color: #9a9490; margin-top: .4rem; min-height: 1rem; }
+  .current-file { font-size: .75rem; color: #2b2b2b; background: #e8f5e9; border-radius: 6px; padding: .3rem .6rem; margin-bottom: .6rem; display: inline-flex; align-items: center; gap: .3rem; }
+  .current-file a { color: #e83b14; text-decoration: none; font-weight: 600; }
+  .font-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: .6rem; align-items: end; margin-bottom: .6rem; }
+  .form-row { margin-bottom: 0; }
+  .form-row label { display: block; font-size: .82rem; font-weight: 600; color: #2b2b2b; margin-bottom: .3rem; }
+  .form-row input[type="text"] { width: 100%; padding: .6rem .9rem; border: 1.5px solid #e0d9d3; border-radius: 10px; font-size: .9rem; font-family: inherit; color: #2b2b2b; background: #FAF7F3; box-sizing: border-box; transition: border-color .2s; }
+  .form-row input[type="text"]:focus { outline: none; border-color: #e83b14; }
+  .remove-font { background: #fdecea; border: none; border-radius: 8px; color: #c0321a; cursor: pointer; padding: .6rem .7rem; font-size: .9rem; }
+  .remove-font:hover { background: #c0321a; color: #fff; }
+  .btn-add-font { display: inline-flex; align-items: center; gap: .4rem; background: #FAF7F3; border: 1.5px dashed #e0d9d3; border-radius: 10px; color: #9a9490; cursor: pointer; padding: .5rem 1rem; font-size: .85rem; margin-top: .5rem; font-family: inherit; }
+  .btn-add-font:hover { border-color: #e83b14; color: #e83b14; }
+  .complete-toggle { display: flex; align-items: center; gap: 1rem; background: #FAF7F3; border: 1.5px solid #e0d9d3; border-radius: 14px; padding: 1rem 1.2rem; }
+  .complete-toggle input[type="checkbox"] { width: 18px; height: 18px; accent-color: #e83b14; cursor: pointer; }
+  .complete-toggle label { font-size: .9rem; font-weight: 600; color: #2b2b2b; cursor: pointer; margin: 0; }
+  .complete-toggle .hint { font-size: .78rem; color: #9a9490; margin: 0; }
+  .btn-save { display: inline-flex; align-items: center; gap: .5rem; background: #e83b14; color: #fff; border: none; border-radius: 999px; padding: .9rem 2.5rem; font-family: 'Bebas Neue', sans-serif; font-size: 1.1rem; letter-spacing: 1px; cursor: pointer; margin-top: 1rem; }
+  .btn-save:hover { background: #c0321a; }
+  .back-link { display: inline-flex; align-items: center; gap: .4rem; color: #9a9490; text-decoration: none; font-size: .9rem; margin-bottom: 1.5rem; }
+  .back-link:hover { color: #e83b14; }
+  .preview-link { display: inline-flex; align-items: center; gap: .4rem; color: #e83b14; text-decoration: none; font-size: .85rem; font-weight: 600; margin-left: 1rem; }
+  .field-group { margin-bottom: 1rem; }
+  .field-group label { display: block; font-size: .82rem; font-weight: 600; color: #2b2b2b; margin-bottom: .3rem; }
+  .field-group input { width: 100%; padding: .7rem 1rem; border: 1.5px solid #e0d9d3; border-radius: 10px; font-size: .95rem; font-family: inherit; color: #2b2b2b; background: #FAF7F3; box-sizing: border-box; }
+  .field-group input:focus { outline: none; border-color: #e83b14; }
+  .field-group .hint { font-size: .75rem; color: #9a9490; margin-top: .3rem; }
+
+  /* Upload zone drag */
+  .upload-zone { border: 2px dashed #e0d9d3; border-radius: 14px; padding: 1.5rem; text-align: center; background: #FAF7F3; cursor: pointer; transition: border-color .2s; }
+  .upload-zone:hover { border-color: #e83b14; }
+  .upload-zone input[type="file"] { display: none; }
+  .upload-zone-label { display: inline-flex; align-items: center; gap: .4rem; background: #2b2b2b; color: #fff; border-radius: 999px; padding: .5rem 1.2rem; font-family: 'Bebas Neue', sans-serif; font-size: .9rem; letter-spacing: .5px; cursor: pointer; margin-top: .5rem; }
+  .upload-zone-label:hover { background: #e83b14; }
+
+  /* Grilles fichiers */
+  .files-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 1rem; margin-top: 1rem; }
+  .file-card { background: #FAF7F3; border: 1px solid #e0d9d3; border-radius: 12px; overflow: hidden; position: relative; }
+  .file-card img { width: 100%; height: 120px; object-fit: cover; display: block; background: #fff; }
+  .file-card-svg { width: 100%; height: 120px; display: flex; align-items: center; justify-content: center; background: transparent; padding: 1rem; box-sizing: border-box; }
+  .file-card-svg img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  .file-card-meta { padding: .5rem .7rem; border-top: 1px solid #e0d9d3; }
+  .file-card-name { font-size: .7rem; color: #2b2b2b; font-weight: 600; margin-bottom: .3rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .file-card-delete { font-size: .68rem; color: #c0321a; background: none; border: none; cursor: pointer; padding: 0; font-weight: 600; }
+  .file-card-delete:hover { text-decoration: underline; }
+
+  /* Palette inputs */
+  .palette-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap: .8rem; }
+  .palette-entry { }
+  .palette-entry label { font-size: .75rem; font-weight: 600; color: #2b2b2b; display: block; margin-bottom: .3rem; }
+  .palette-color-wrap { display: flex; align-items: center; gap: .5rem; margin-bottom: .3rem; }
+  .palette-color-wrap input[type="color"] { width: 36px; height: 36px; border: 1.5px solid #e0d9d3; border-radius: 8px; cursor: pointer; padding: 2px; }
+  .palette-color-wrap input[type="text"] { width: 85px; padding: .4rem .6rem; border: 1.5px solid #e0d9d3; border-radius: 8px; font-size: .82rem; font-family: monospace; }
+  .palette-entry input[type="text"].label-input { width: 100%; padding: .4rem .6rem; border: 1.5px solid #e0d9d3; border-radius: 8px; font-size: .78rem; font-family: inherit; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="iv-admin-page">
+
+  <a href="{{ url_for('project_detail', project_id=projet.id) }}" class="back-link">
+    <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+    Retour au projet
+  </a>
+
+  <div class="iv-admin-header">
+    <h1>Identité visuelle</h1>
+    <p>{{ projet.nom_projet }}</p>
+  </div>
+
+  <form method="POST" action="{{ url_for('admin_identite_visuelle', project_id=projet.id) }}" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+    <!-- LOGOS FINAUX -->
+    <div class="iv-card">
+      <div class="iv-card-title">Logos finaux (livrables)</div>
+      <p style="font-size:.82rem;color:#9a9490;margin:0 0 1.2rem;">SVG = fichier livrable téléchargeable. PNG = preview affiché sur la planche client.</p>
+      <div class="logos-upload-grid">
+        {% for variante_key, label in [('principal','Logo principal'),('icone','Icône'),('variante','Variante')] %}
+        {% set logo = logos.get(variante_key) %}
+        <div class="logo-upload-card">
+          <span class="variante-label">{{ label }}</span>
+          {% if logo and logo.public_url %}
+            <div style="width:100%;height:120px;display:flex;align-items:center;justify-content:center;margin-bottom:.8rem;background:transparent;">
+              <img src="{{ logo.public_url }}" alt="{{ label }}" style="max-width:100%;max-height:110px;object-fit:contain;">
+            </div>
+            <div class="current-file">✓ {{ logo.filename or 'Fichier présent' }} <a href="{{ logo.public_url }}" target="_blank">Voir</a></div>
+          {% else %}
+            <div class="logo-preview-placeholder">
+              <svg width="32" height="32" fill="none" viewBox="0 0 24 24" stroke="#e0d9d3" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+            </div>
+          {% endif %}
+          <div class="upload-input-wrap">
+            <div class="upload-btn">{% if logo and logo.public_url %}Remplacer{% else %}Choisir{% endif %}</div>
+            <input type="file" name="logo_{{ variante_key }}" accept=".png,.svg,.webp,.jpg,.jpeg,.pdf,.ai,.eps,.zip" onchange="showFileName(this,'{{ variante_key }}')">
+          </div>
+          <div class="file-name-display" id="fname-{{ variante_key }}"></div>
+          <div style="margin-top:.8rem;padding-top:.8rem;border-top:1px dashed #e0d9d3;">
+            <div style="font-size:.72rem;color:#9a9490;margin-bottom:.4rem;">PNG preview (affiché côté client)</div>
+            {% if logo and logo.preview_url %}
+            <div style="font-size:.72rem;color:#2e7d32;margin-bottom:.4rem;">✓ Preview PNG présent</div>
+            {% endif %}
+            <div class="upload-input-wrap">
+              <div class="upload-btn" style="background:#9a9490;font-size:.75rem;">PNG Preview</div>
+              <input type="file" name="logo_{{ variante_key }}_preview" accept=".png,.jpg,.webp" onchange="showFileNamePreview(this,'{{ variante_key }}')">
+            </div>
+            <div class="file-name-display" id="fname-prev-{{ variante_key }}"></div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- PALETTE -->
+    <div class="iv-card">
+      <div class="iv-card-title">Palette de couleurs</div>
+      <p style="font-size:.82rem;color:#9a9490;margin:0 0 1.2rem;">Couleurs de l'identité — visibles sur la planche client avec leur rôle.</p>
+      <div class="palette-row" id="palette-container">
+        {% set palette = [] %}
+        {% if iv and iv.palette_json %}
+          {% set palette = iv.palette_json | fromjson %}
+        {% endif %}
+        {% for entry in palette %}
+        <div class="palette-entry" id="pe-{{ loop.index }}">
+          <label>Couleur {{ loop.index }}</label>
+          <div class="palette-color-wrap">
+            <input type="color" value="{{ entry.hex }}" oninput="syncPaletteColor(this)">
+            <input type="text" class="hex-input" value="{{ entry.hex }}" placeholder="#1A1A1A" oninput="syncPaletteHex(this)">
+          </div>
+          <input type="text" class="label-input" value="{{ entry.label }}" placeholder="Ex: Principal · Logo">
+          <button type="button" onclick="this.closest('.palette-entry').remove(); majSwatches();" style="font-size:.7rem;color:#c0321a;background:none;border:none;cursor:pointer;margin-top:.3rem;">✕ Retirer</button>
+        </div>
+        {% endfor %}
+        {% if not palette %}
+        {% for hex, lbl in [('#1A1A1A','Principal · Logo · Texte'),('#8C6B4F','Accent · Filets · Détails'),('#C2B6A8','Neutre · Séparateurs'),('#EDE8E1','Clair · Fond')] %}
+        <div class="palette-entry">
+          <label>Couleur {{ loop.index }}</label>
+          <div class="palette-color-wrap">
+            <input type="color" value="{{ hex }}" oninput="syncPaletteColor(this)">
+            <input type="text" class="hex-input" value="{{ hex }}" placeholder="#1A1A1A" oninput="syncPaletteHex(this)">
+          </div>
+          <input type="text" class="label-input" value="{{ lbl }}" placeholder="Ex: Principal · Logo">
+          <button type="button" onclick="this.closest('.palette-entry').remove(); majSwatches();" style="font-size:.7rem;color:#c0321a;background:none;border:none;cursor:pointer;margin-top:.3rem;">✕ Retirer</button>
+        </div>
+        {% endfor %}
+        {% endif %}
+      </div>
+      <button type="button" onclick="ajouterCouleur()" style="display:inline-flex;align-items:center;gap:.4rem;background:#FAF7F3;border:1.5px dashed #e0d9d3;border-radius:10px;color:#9a9490;cursor:pointer;padding:.5rem 1rem;font-size:.85rem;margin-top:.8rem;font-family:inherit;">+ Ajouter une couleur</button>
+
+      <!-- Aperçu swatches -->
+      <div style="margin-top:1.2rem;">
+        <div style="font-size:.7rem;letter-spacing:2px;color:#9a9490;text-transform:uppercase;margin-bottom:.6rem;">Aperçu</div>
+        <div id="palette-swatches-preview" style="display:flex;border-radius:10px;overflow:hidden;height:50px;margin-bottom:.5rem;"></div>
+        <div id="palette-labels-preview" style="display:flex;gap:.4rem;flex-wrap:wrap;"></div>
+      </div>
+
+      <input type="hidden" name="palette_json" id="palette_json_input">
+    </div>
+
+    <!-- TYPOGRAPHIE -->
+    <div class="iv-card">
+      <div class="iv-card-title">Typographie</div>
+      <p style="font-size:.82rem;color:#9a9490;margin:0 0 1.2rem;">Nom exact tel qu'il apparaît sur Google Fonts</p>
+      <div id="fonts-container">
+        {% if fonts %}
+          {% for font in fonts %}
+          <div class="font-row">
+            <div class="form-row"><label>Nom de la police</label><input type="text" name="font_nom" value="{{ font.nom_font }}" placeholder="Ex: Vidaloka" oninput="majTypo()"></div>
+            <div class="form-row"><label>Usage</label><input type="text" name="font_usage" value="{{ font.usage or '' }}" placeholder="Ex: Titres"></div>
+            <button type="button" class="remove-font" onclick="this.closest('.font-row').remove();majTypo();">✕</button>
+          </div>
+          {% endfor %}
+        {% else %}
+          <div class="font-row">
+            <div class="form-row"><label>Nom de la police</label><input type="text" name="font_nom" placeholder="Ex: Vidaloka" oninput="majTypo()"></div>
+            <div class="form-row"><label>Usage</label><input type="text" name="font_usage" placeholder="Ex: Titres"></div>
+            <button type="button" class="remove-font" onclick="this.closest('.font-row').remove();majTypo();">✕</button>
+          </div>
+        {% endif %}
+      </div>
+      <button type="button" class="btn-add-font" onclick="addFont()">+ Ajouter une police</button>
+      <div style="margin-top:1.5rem;">
+        <div style="font-size:.72rem;letter-spacing:2px;color:#9a9490;text-transform:uppercase;margin-bottom:.8rem;">Aperçu</div>
+        <div id="typo-preview-wrap" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;"></div>
+      </div>
+    </div>
+
+    <!-- VISIBILITÉ -->
+    <div class="iv-card">
+      <div class="iv-card-title">Contexte du projet</div>
+      <p style="font-size:.82rem;color:#9a9490;margin:0 0 1rem;">Texte affiché en haut de la planche client — positionnement, valeurs, direction créative.</p>
+      <textarea name="contexte" rows="5" style="width:100%;padding:.8rem 1rem;border:1.5px solid #e0d9d3;border-radius:10px;font-family:inherit;font-size:.9rem;color:#2b2b2b;background:#FAF7F3;resize:vertical;box-sizing:border-box;" placeholder="Ex: L'Avenue est une équipe immobilière premium...">{{ iv.contexte if iv and iv.contexte else '' }}</textarea>
+    </div>
+    <div class="iv-card">
+      <div class="iv-card-title">Visibilité client</div>
+      <div class="complete-toggle">
+        <input type="checkbox" name="is_complete" id="is_complete" value="1" {{ 'checked' if iv and iv.is_complete == 1 else '' }}>
+        <div>
+          <label for="is_complete">Marquer comme complété et visible par le client</label>
+          <p class="hint">Une fois activé, le client pourra voir et télécharger son identité visuelle.</p>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;flex-wrap:wrap;gap:.8rem;">
+      <button type="submit" class="btn-save">
+        <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+        Sauvegarder
+      </button>
+      {% if iv and iv.is_complete %}
+      <a href="{{ url_for('client_identite_visuelle', project_id=projet.id) }}" class="preview-link" target="_blank">Voir la page client →</a>
+      {% endif %}
+    </div>
+
+  </form>
+
+  <!-- DÉCLINAISONS -->
+  <div class="iv-card" style="margin-top:2rem;">
+    <div class="iv-card-title">Déclinaisons logo</div>
+    <p style="font-size:.82rem;color:#9a9490;margin:0 0 1.2rem;">Upload les SVG finaux colorés depuis Affinity. Fond transparent obligatoire.</p>
+
+    <!-- Upload zone -->
+    <div class="upload-zone" id="zone-decl" onclick="document.getElementById('input-decl').click()">
+      <svg width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="#c0b8b0" stroke-width="1.5" style="margin:0 auto .5rem;display:block;"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+      <div style="font-size:.82rem;color:#9a9490;">SVG, PNG — fond transparent</div>
+      <input type="file" id="input-decl" accept=".svg,.png,.webp" multiple onchange="uploadDeclinaisons(this.files)">
+      <div class="upload-zone-label">Choisir les fichiers</div>
+    </div>
+    <div id="status-decl" style="font-size:.8rem;margin-top:.5rem;min-height:1rem;"></div>
+
+    <!-- Grille existante -->
+    <div class="files-grid" id="grid-decl">
+      {% for d in declinaisons %}
+      <div class="file-card" id="decl-{{ d.id }}">
+        <div class="file-card-svg">
+          <img src="{{ d.public_url }}" alt="{{ d.filename }}">
+        </div>
+        <div class="file-card-meta">
+          <div class="file-card-name">{{ d.filename }}</div>
+          <button class="file-card-delete" onclick="deleteDeclinaison({{ d.id }})">✕ Supprimer</button>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- MOCKUPS -->
+  <div class="iv-card" style="margin-top:1.5rem;">
+    <div class="iv-card-title">Mockups — mises en situation</div>
+    <p style="font-size:.82rem;color:#9a9490;margin:0 0 1.2rem;">Photos réelles de mise en application — carte d'affaires, panneau, vitrine...</p>
+
+    <div class="upload-zone" id="zone-mock" onclick="document.getElementById('input-mock').click()">
+      <svg width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="#c0b8b0" stroke-width="1.5" style="margin:0 auto .5rem;display:block;"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+      <div style="font-size:.82rem;color:#9a9490;">PNG, JPG, WEBP</div>
+      <input type="file" id="input-mock" accept=".png,.jpg,.jpeg,.webp" multiple onchange="uploadMockups(this.files)">
+      <div class="upload-zone-label">Choisir les fichiers</div>
+    </div>
+    <div id="status-mock" style="font-size:.8rem;margin-top:.5rem;min-height:1rem;"></div>
+
+    <div class="files-grid" id="grid-mock">
+      {% for m in mockups %}
+      <div class="file-card" id="mock-{{ m.id }}">
+        <img src="{{ m.public_url }}" alt="{{ m.filename }}">
+        <div class="file-card-meta">
+          <div class="file-card-name">{{ m.filename }}</div>
+          <button class="file-card-delete" onclick="deleteMockup({{ m.id }})">✕ Supprimer</button>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+</div>
+
+<script>
+const PROJECT_ID = {{ projet.id }};
+const CSRF_TOKEN = '{{ csrf_token() }}';
+const loadedFonts = new Set();
+
+function showFileNamePreview(input, variante) {
+  const d = document.getElementById('fname-prev-' + variante);
+  if (d && input.files[0]) d.textContent = input.files[0].name;
+}
+
+function showFileName(input, variante) {
+  const d = document.getElementById('fname-' + variante);
+  if (d && input.files[0]) d.textContent = input.files[0].name;
+}
+
+function addFont() {
+  const c = document.getElementById('fonts-container');
+  const r = document.createElement('div');
+  r.className = 'font-row';
+  r.innerHTML = '<div class="form-row"><label>Nom de la police</label><input type="text" name="font_nom" placeholder="Ex: Montserrat" oninput="majTypo()"></div><div class="form-row"><label>Usage</label><input type="text" name="font_usage" placeholder="Ex: Titres"></div><button type="button" class="remove-font" onclick="this.closest(\'.font-row\').remove();majTypo();">✕</button>';
+  c.appendChild(r);
+}
+
+function chargerFont(nom) {
+  if (!nom || loadedFonts.has(nom)) return;
+  loadedFonts.add(nom);
+  const l = document.createElement('link');
+  l.rel = 'stylesheet';
+  l.href = 'https://fonts.googleapis.com/css2?family=' + nom.replace(/ /g,'+') + ':wght@300;400;700&display=swap';
+  document.head.appendChild(l);
+}
+
+function majTypo() {
+  const noms = document.querySelectorAll('input[name="font_nom"]');
+  const usages = document.querySelectorAll('input[name="font_usage"]');
+  const wrap = document.getElementById('typo-preview-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  noms.forEach(function(el, i) {
+    const nom = el.value.trim();
+    if (!nom) return;
+    chargerFont(nom);
+    const usage = usages[i] ? usages[i].value.trim() : '';
+    const card = document.createElement('div');
+    card.style.cssText = 'background:#FAF7F3;border:1px solid #e0d9d3;border-radius:14px;padding:1.5rem;';
+    card.innerHTML =
+      '<div style="font-size:.6rem;letter-spacing:2px;color:#9a9490;text-transform:uppercase;margin-bottom:.6rem;">' + (usage||'Typographie') + '</div>' +
+      '<div style="font-family:\'' + nom + '\',serif,sans-serif;font-size:3rem;line-height:1;color:#1A1A1A;margin-bottom:.5rem;">Aa</div>' +
+      '<div style="font-family:\'' + nom + '\',serif,sans-serif;font-size:.9rem;color:#5F5857;margin-bottom:.3rem;">Aa Bb Cc Dd Ee Ff Gg Hh</div>' +
+      '<div style="font-family:\'' + nom + '\',serif,sans-serif;font-size:.78rem;color:#A89F95;margin-bottom:.8rem;">Ii Jj Kk Ll Mm Nn Oo Pp Qq Rr Ss Tt Uu Vv Ww Xx Yy Zz</div>' +
+      '<div style="border-top:1px solid #e0d9d3;padding-top:.7rem;display:flex;align-items:center;justify-content:space-between;">' +
+        '<span style="font-family:\'Bebas Neue\',sans-serif;font-size:.9rem;color:#2b2b2b;">' + nom + '</span>' +
+        '<a href="https://fonts.google.com/specimen/' + nom.replace(/ /g,'+') + '" target="_blank" style="font-size:.7rem;color:#e83b14;text-decoration:none;font-weight:600;">Google Fonts →</a>' +
+      '</div>';
+    wrap.appendChild(card);
+  });
+}
+
+// PALETTE
+function syncPaletteColor(input) {
+  const wrap = input.closest('.palette-color-wrap');
+  const hexIn = wrap.querySelector('.hex-input');
+  if (hexIn) hexIn.value = input.value.toUpperCase();
+  majSwatches();
+}
+function syncPaletteHex(input) {
+  const hex = input.value.trim();
+  const wrap = input.closest('.palette-color-wrap');
+  const col = wrap.querySelector('input[type="color"]');
+  if (/^#[0-9A-Fa-f]{6}$/.test(hex) && col) col.value = hex;
+  majSwatches();
+}
+function ajouterCouleur() {
+  const c = document.getElementById('palette-container');
+  const n = c.querySelectorAll('.palette-entry').length + 1;
+  const div = document.createElement('div');
+  div.className = 'palette-entry';
+  div.innerHTML = '<label>Couleur ' + n + '</label><div class="palette-color-wrap"><input type="color" value="#888888" oninput="syncPaletteColor(this)"><input type="text" class="hex-input" value="#888888" placeholder="#888888" oninput="syncPaletteHex(this)"></div><input type="text" class="label-input" placeholder="Ex: Accent · Détails"><button type="button" onclick="this.closest(\'.palette-entry\').remove();majSwatches();" style="font-size:.7rem;color:#c0321a;background:none;border:none;cursor:pointer;margin-top:.3rem;">✕ Retirer</button>';
+  c.appendChild(div);
+  majSwatches();
+}
+function getPaletteData() {
+  const entries = document.querySelectorAll('.palette-entry');
+  const result = [];
+  entries.forEach(function(e) {
+    const hex = e.querySelector('.hex-input') ? e.querySelector('.hex-input').value.trim() : '';
+    const label = e.querySelector('.label-input') ? e.querySelector('.label-input').value.trim() : '';
+    if (hex) result.push({hex: hex, label: label});
+  });
+  return result;
+}
+function majSwatches() {
+  const data = getPaletteData();
+  const sw = document.getElementById('palette-swatches-preview');
+  const lb = document.getElementById('palette-labels-preview');
+  if (!sw||!lb) return;
+  sw.innerHTML = ''; lb.innerHTML = '';
+  data.forEach(function(c) {
+    const d = document.createElement('div');
+    d.style.cssText = 'flex:1;background:' + c.hex + ';';
+    sw.appendChild(d);
+    const pill = document.createElement('div');
+    pill.style.cssText = 'display:inline-flex;align-items:center;gap:.4rem;background:#fff;border:1px solid #e0d9d3;border-radius:999px;padding:.2rem .6rem;font-size:.72rem;';
+    pill.innerHTML = '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + c.hex + ';border:1px solid #e0d9d3;"></span><span style="font-family:monospace;color:#2b2b2b;">' + c.hex.toUpperCase() + '</span>' + (c.label ? '<span style="color:#9a9490;"> · ' + c.label + '</span>' : '');
+    lb.appendChild(pill);
+  });
+  // Mettre à jour le champ hidden
+  const hidden = document.getElementById('palette_json_input');
+  if (hidden) hidden.value = JSON.stringify(data);
+}
+
+// UPLOAD DÉCLINAISONS
+async function uploadDeclinaisons(files) {
+  const status = document.getElementById('status-decl');
+  const grid = document.getElementById('grid-decl');
+  status.style.color = '#9a9490';
+  status.textContent = 'Upload en cours...';
+  let ok = 0, err = 0;
+  for (const file of files) {
+    const fd = new FormData();
+    fd.append('fichier', file, file.name);
+    fd.append('label', file.name.replace(/\.[^.]+$/, ''));
+    try {
+      const resp = await fetch('/admin/projet/' + PROJECT_ID + '/identite/upload_declinaison', {method:'POST', body:fd, headers:{'X-CSRFToken': CSRF_TOKEN}});
+      const data = await resp.json();
+      if (data.ok) {
+        ok++;
+        const card = document.createElement('div');
+        card.className = 'file-card';
+        card.id = 'decl-new-' + ok;
+        const isSVG = file.name.toLowerCase().endsWith('.svg');
+        card.innerHTML = (isSVG
+          ? '<div class="file-card-svg"><img src="' + data.public_url + '" alt="' + file.name + '"></div>'
+          : '<img src="' + data.public_url + '" alt="' + file.name + '">') +
+          '<div class="file-card-meta"><div class="file-card-name">' + file.name + '</div></div>';
+        grid.appendChild(card);
+      } else { err++; }
+    } catch(e) { err++; }
+  }
+  status.style.color = err===0 ? '#2e7d32' : '#c62828';
+  status.textContent = err===0 ? '✓ ' + ok + ' fichier(s) uploadé(s).' : ok + ' uploadés, ' + err + ' erreurs.';
+}
+
+async function deleteDeclinaison(id) {
+  if (!confirm('Supprimer ce fichier ?')) return;
+  const resp = await fetch('/admin/projet/' + PROJECT_ID + '/identite/delete_declinaison/' + id, {method:'POST', headers:{'X-CSRFToken': CSRF_TOKEN}});
+  const data = await resp.json();
+  if (data.ok) { const el = document.getElementById('decl-' + id); if (el) el.remove(); }
+}
+
+// UPLOAD MOCKUPS
+async function uploadMockups(files) {
+  const status = document.getElementById('status-mock');
+  const grid = document.getElementById('grid-mock');
+  status.style.color = '#9a9490';
+  status.textContent = 'Upload en cours...';
+  let ok = 0, err = 0;
+  for (const file of files) {
+    const fd = new FormData();
+    fd.append('fichier', file, file.name);
+    fd.append('label', file.name.replace(/\.[^.]+$/, ''));
+    try {
+      const resp = await fetch('/admin/projet/' + PROJECT_ID + '/identite/upload_mockup', {method:'POST', body:fd, headers:{'X-CSRFToken': CSRF_TOKEN}});
+      const data = await resp.json();
+      if (data.ok) {
+        ok++;
+        const card = document.createElement('div');
+        card.className = 'file-card';
+        card.innerHTML = '<img src="' + data.public_url + '" alt="' + file.name + '"><div class="file-card-meta"><div class="file-card-name">' + file.name + '</div></div>';
+        grid.appendChild(card);
+      } else { err++; }
+    } catch(e) { err++; }
+  }
+  status.style.color = err===0 ? '#2e7d32' : '#c62828';
+  status.textContent = err===0 ? '✓ ' + ok + ' mockup(s) uploadé(s).' : ok + ' uploadés, ' + err + ' erreurs.';
+}
+
+async function deleteMockup(id) {
+  if (!confirm('Supprimer ce mockup ?')) return;
+  const resp = await fetch('/admin/projet/' + PROJECT_ID + '/identite/delete_mockup/' + id, {method:'POST', headers:{'X-CSRFToken': CSRF_TOKEN}});
+  const data = await resp.json();
+  if (data.ok) { const el = document.getElementById('mock-' + id); if (el) el.remove(); }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  majTypo();
+  majSwatches();
+  document.querySelectorAll('input[name="font_nom"]').forEach(function(el) {
+    el.addEventListener('input', majTypo);
+  });
+  const fc = document.getElementById('fonts-container');
+  if (fc) new MutationObserver(function(){majTypo();}).observe(fc,{childList:true,subtree:true});
+  // Sync palette hidden avant submit
+  document.querySelector('form').addEventListener('submit', function() {
+    majSwatches();
+  });
+});
+</script>
+{% endblock %}

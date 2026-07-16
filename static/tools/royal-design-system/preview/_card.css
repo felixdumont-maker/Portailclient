@@ -1,0 +1,72 @@
+/* Shared card styles for preview cards */
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+  background: #f7f4ef;
+  color: #1a1a1a;
+  -webkit-font-smoothing: antialiased;
+}
+body { padding: 18px; }
+
+.card-wrap {
+  width: 700px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.row { display: flex; gap: 10px; align-items: stretch; }
+.col { display: flex; flex-direction: column; gap: 8px; }
+
+.eyebrow {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.42em;
+  text-transform: uppercase;
+  color: rgba(0,0,0,0.45);
+}
+
+.label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #1a1a1a;
+}
+.sublabel {
+  font-size: 9px;
+  font-weight: 500;
+  color: rgba(0,0,0,0.5);
+  font-family: 'Plus Jakarta Sans', monospace;
+}
+
+.swatch {
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 110px;
+  position: relative;
+  overflow: hidden;
+}
+
+.swatch-name {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.swatch-meta {
+  font-size: 10px;
+  font-weight: 500;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+.tex-bg {
+  background-color: #d62127;
+  background-image: repeating-linear-gradient(-55deg,
+    transparent 0, transparent 60px,
+    rgba(0,0,0,0.04) 60px, rgba(0,0,0,0.04) 120px);
+}

@@ -19,6 +19,7 @@
     <h1 style="text-align:center;font-size:var(--fs-xl);border:none;padding:0;margin-bottom:var(--space-4);">Connexion au portail</h1>
     <img src="{{ url_for('static', filename='cocktailos-logo-noir.png') }}" alt="CocktailOS" class="auth-logo">
     <form method="post" action="{{ url_for('login') }}" class="form" novalidate>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-group">
         <label for="email">Adresse email</label>
         <input type="email" id="email" name="email" required>
