@@ -1586,6 +1586,13 @@ def init_db():
             conn.execute("ALTER TABLE rendez_vous ADD COLUMN id_projet INTEGER")
         except Exception:
             pass  # colonne déjà présente
+        # Migration : coordonnées de contact directement sur une tâche (PWA Tâches, phase 2) —
+        # ex. transférer un contact iPhone (.vcf) sur une tâche sans créer de fiche client.
+        for _col in ('contact_nom', 'contact_telephone', 'contact_courriel'):
+            try:
+                conn.execute(f"ALTER TABLE todos_perso ADD COLUMN {_col} TEXT")
+            except Exception:
+                pass  # colonne déjà présente
 
         # Réconciliation one-shot de la checklist "Site Web Vitrine" : le seed _SERVICES_SEED
         # ci-dessus ne retouche jamais un service déjà en base, donc les items déjà créés
@@ -1955,6 +1962,20 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
                 organisation_id INTEGER,
+                token_hash TEXT NOT NULL UNIQUE,
+                label TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                last_used_at TEXT,
+                revoked INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        # Appareils jumelés pour la PWA Tâches (/taches) : même principe que capture_devices,
+        # mais un jeton par PERSONNE de l'équipe (chacun jumelle son propre téléphone avec
+        # son propre compte) — indépendant de la session CRM.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS task_devices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
                 token_hash TEXT NOT NULL UNIQUE,
                 label TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -3956,6 +3977,7 @@ def api_booking_confirm():
             f"Nouveau rendez-vous — {client['nom_complet']}",
             f"{client['nom_complet']} ({client['email']}) a confirmé : {label}.\nMeet : {meet_link}"
         )
+        _creer_tache_depuis_booking(client, f"Rendez-vous confirmé — {client['nom_complet']} — {label}", start_dt.date().isoformat())
     except Exception as e:
         print(f"[BOOKING] Création événement échouée: {e}")
         return jsonify({'error': "Erreur lors de la création du rendez-vous"}), 500
@@ -4004,6 +4026,26 @@ def _find_service_slots(duree_seance_minutes: int, n: int = 4, jours_max: int = 
                 resultats.append((bloc_debut, bloc_fin, seance_debut, seance_fin))
                 break
     return resultats
+
+
+def _creer_tache_depuis_booking(client_row, texte, date_echeance, id_projet=None, projet_nom=None, lien='/admin'):
+    """Crée une tâche partagée (visible par toute l'équipe) à la confirmation d'une
+    réservation cliente. Comble l'angle mort identifié par l'audit du module de tâches
+    (2026-07-16) : jusqu'ici, un booking confirmé ne générait ni tâche ni notification
+    in-app, seulement un courriel à felix.dumont@cocktailmedia.ca."""
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            "INSERT INTO todos_perso (texte, priorite, date_echeance, is_titre, projet_id, projet_nom, client_id) "
+            "VALUES (?, 'normale', ?, 0, ?, ?, ?)",
+            (texte, date_echeance, id_projet, projet_nom, client_row['id'])
+        )
+        conn.commit()
+        push_admin_notif(conn, "Nouvelle réservation", texte, type='todo', lien=lien)
+    except Exception as e:
+        print(f"[BOOKING] Création tâche de suivi échouée: {e}")
+    finally:
+        conn.close()
 
 
 def _creer_projet_depuis_booking(id_client: int, id_service: int, date_seance: str, heure_seance: str, localisation: str):
@@ -4297,6 +4339,11 @@ def api_booking_confirm_service_finaliser():
         send_email('felix.dumont@cocktailmedia.ca', f"Nouvelle réservation de service — {client['nom_complet']}", notif_felix)
     except Exception as e:
         print(f"[MAIL] Confirmation réservation service échouée: {e}")
+
+    if id_projet:
+        _creer_tache_depuis_booking(client, f"Préparer la séance — {nom_projet}", date_seance, id_projet=id_projet, projet_nom=nom_projet, lien=f'/admin/projet/{id_projet}')
+    else:
+        _creer_tache_depuis_booking(client, f"Séance réservée — {client['nom_complet']} — {label}", date_seance)
 
     return jsonify({
         'success': True,
@@ -14321,18 +14368,6 @@ def api_push_test():
     conn.close()
     return jsonify({'success': True})
 
-@app.route('/api/v1/admin/todoist/sync', methods=['POST'])
-@admin_required
-def api_todoist_sync():
-    try:
-        import todoist_service
-        conn = get_db_connection()
-        res = todoist_service.sync(conn)
-        conn.close()
-        return jsonify(res)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
 @app.route('/api/v1/admin/team', methods=['GET'])
 @admin_required
 def api_admin_team():
@@ -14348,10 +14383,9 @@ def api_admin_team():
         'id': r['id'], 'nom_complet': r['nom_complet'], 'email': r['email'], 'role': r['role'],
     } for r in rows])
 
-@app.route('/api/v1/admin/todos', methods=['GET'])
-@admin_required
-def api_todos_list():
-    view = request.args.get('view', 'mine')
+def _todos_query(user_id, view='mine'):
+    """Requête partagée des tâches — utilisée par la session CRM (/admin/todos) et par
+    le jeton d'appareil de la PWA Tâches (/taches/todos), pour ne pas dupliquer le SQL."""
     conn = get_db_connection()
     where_assign = ""
     params: list = []
@@ -14366,7 +14400,7 @@ def api_todos_list():
                  JOIN todo_assignees ca ON ca.todo_id = c.id AND ca.admin_id = ?
                  WHERE c.parent_titre_id = t.id
                ))"""
-        params.extend([session['user_id'], session['user_id']])
+        params.extend([user_id, user_id])
     todos = conn.execute(f"""
         SELECT t.*,
                COALESCE(pc.nom_complet, dc.nom_complet) AS client_nom,
@@ -14398,15 +14432,15 @@ def api_todos_list():
         d = dict(t)
         d['assignees'] = assignees_by_todo.get(t['id'], [])
         result.append(d)
-    return jsonify(result)
+    return result
 
-@app.route('/api/v1/admin/todos', methods=['POST'])
-@admin_required
-def api_todos_create():
-    data = request.get_json() or {}
+
+def _create_todo(default_assignee_id, data):
+    """Création de tâche partagée — utilisée par la session CRM et par le jeton d'appareil
+    de la PWA Tâches. `default_assignee_id` : assigné par défaut si assigne_admin_ids absent."""
     texte = (data.get('texte') or '').strip()
     if not texte:
-        return jsonify({'error': 'Texte requis'}), 400
+        return {'error': 'Texte requis'}, 400
     priorite = data.get('priorite', 'normale')
     date_echeance = data.get('date_echeance') or None
     is_titre = 1 if data.get('is_titre') else 0
@@ -14417,7 +14451,7 @@ def api_todos_create():
     if 'assigne_admin_ids' in data:
         assigne_admin_ids = [i for i in (data.get('assigne_admin_ids') or []) if i]
     else:
-        assigne_admin_ids = [session.get('user_id')] if session.get('user_id') else []
+        assigne_admin_ids = [default_assignee_id] if default_assignee_id else []
     agenda_date  = (data.get('agenda_date')  or '').strip() or None
     agenda_heure = (data.get('agenda_heure') or '').strip() or None
     agenda_duree = int(data.get('agenda_duree') or 60)
@@ -14469,16 +14503,22 @@ def api_todos_create():
     d = dict(todo)
     d['assignees'] = _todo_assignees(conn, todo_id)
     conn.close()
-    return jsonify(d), 201
+    # Projet/client/contact fournis dès la création (ex. feuille d'ajout enrichie de la PWA
+    # Tâches) — réutilise _update_todo plutôt que dupliquer cette logique d'assignation.
+    extra = {k: data[k] for k in ('projet_id', 'client_id', 'contact_nom', 'contact_telephone', 'contact_courriel') if k in data}
+    if extra:
+        d, _status = _update_todo(todo_id, extra)
+    return d, 201
 
-@app.route('/api/v1/admin/todos/<int:todo_id>/toggle', methods=['POST'])
-@admin_required
-def api_todos_toggle(todo_id):
+
+def _toggle_todo(todo_id):
+    """Bascule coché/décoché — utilisée par la session CRM et par le jeton d'appareil de
+    la PWA Tâches. Répercute sur la roadmap liée si applicable."""
     conn = get_db_connection()
     todo = conn.execute("SELECT * FROM todos_perso WHERE id=?", (todo_id,)).fetchone()
     if not todo:
         conn.close()
-        return jsonify({'error': 'Todo introuvable'}), 404
+        return {'error': 'Todo introuvable'}, 404
     new_val = 0 if todo['est_coche'] else 1
     conn.execute("UPDATE todos_perso SET est_coche=? WHERE id=?", (new_val, todo_id))
     conn.commit()
@@ -14486,34 +14526,49 @@ def api_todos_toggle(todo_id):
     if linked_roadmap_todo_id:
         _sync_roadmap_todo_completion(conn, linked_roadmap_todo_id, bool(new_val))
     conn.close()
-    # Reflet vers Todoist : cocher ferme la tâche, décocher la rouvre (cohérence avec Marie)
-    tid = todo['todoist_task_id'] if 'todoist_task_id' in todo.keys() else None
-    if tid:
-        try:
-            import todoist_service
-            if new_val:
-                todoist_service.close_task(tid)
-            else:
-                todoist_service.reopen_task(tid)
-        except Exception as e:
-            print(f"[TODOIST] reflet complétion: {e}")
-    return jsonify({'success': True, 'est_coche': bool(new_val)})
+    return {'success': True, 'est_coche': bool(new_val)}, 200
 
-@app.route('/api/v1/admin/todos/<int:todo_id>', methods=['PATCH'])
+
+@app.route('/api/v1/admin/todos', methods=['GET'])
 @admin_required
-def api_todos_update(todo_id):
-    data = request.get_json() or {}
+def api_todos_list():
+    view = request.args.get('view', 'mine')
+    return jsonify(_todos_query(session['user_id'], view))
+
+@app.route('/api/v1/admin/todos', methods=['POST'])
+@admin_required
+def api_todos_create():
+    body, status = _create_todo(session.get('user_id'), request.get_json() or {})
+    return jsonify(body), status
+
+@app.route('/api/v1/admin/todos/<int:todo_id>/toggle', methods=['POST'])
+@admin_required
+def api_todos_toggle(todo_id):
+    body, status = _toggle_todo(todo_id)
+    return jsonify(body), status
+
+def _update_todo(todo_id, data):
+    """Mise à jour partagée d'une tâche — utilisée par la session CRM et par le jeton
+    d'appareil de la PWA Tâches."""
     conn = get_db_connection()
     todo = conn.execute("SELECT * FROM todos_perso WHERE id=?", (todo_id,)).fetchone()
     if not todo:
         conn.close()
-        return jsonify({'error': 'Todo introuvable'}), 404
+        return {'error': 'Todo introuvable'}, 404
     if 'priorite' in data:
         conn.execute("UPDATE todos_perso SET priorite=? WHERE id=?", (data['priorite'], todo_id))
     if 'texte' in data:
         txt = (data.get('texte') or '').strip()
         if txt:
             conn.execute("UPDATE todos_perso SET texte=? WHERE id=?", (txt, todo_id))
+    if 'date_echeance' in data:
+        conn.execute("UPDATE todos_perso SET date_echeance=? WHERE id=?", (data.get('date_echeance') or None, todo_id))
+    if 'contact_nom' in data:
+        conn.execute("UPDATE todos_perso SET contact_nom=? WHERE id=?", (data.get('contact_nom') or None, todo_id))
+    if 'contact_telephone' in data:
+        conn.execute("UPDATE todos_perso SET contact_telephone=? WHERE id=?", (data.get('contact_telephone') or None, todo_id))
+    if 'contact_courriel' in data:
+        conn.execute("UPDATE todos_perso SET contact_courriel=? WHERE id=?", (data.get('contact_courriel') or None, todo_id))
     # Assignation à un projet (le client est déduit du projet). On sort la tâche de sa section.
     if 'projet_id' in data:
         pid = data['projet_id']
@@ -14541,27 +14596,36 @@ def api_todos_update(todo_id):
         conn.execute("UPDATE todos_perso SET parent_titre_id=? WHERE id=?",
                      (data['parent_titre_id'] or None, todo_id))
     # Assignation à un ou plusieurs comptes admin (liste vide = tâche partagée,
-    # visible par toute l'équipe) — remplace le set complet des assigné·es.
+    # visible par toute l'équipe) — remplace le set complet des assigné·es. Notifie
+    # (push) uniquement les personnes nouvellement ajoutées, pas tout le monde à
+    # chaque modification de la tâche.
     if 'assigne_admin_ids' in data:
+        old_ids = {a['id'] for a in _todo_assignees(conn, todo_id)}
+        new_ids = {i for i in (data.get('assigne_admin_ids') or []) if i}
         conn.execute("DELETE FROM todo_assignees WHERE todo_id=?", (todo_id,))
-        for admin_id in (data.get('assigne_admin_ids') or []):
-            if admin_id:
-                conn.execute("INSERT OR IGNORE INTO todo_assignees (todo_id, admin_id) VALUES (?, ?)", (todo_id, admin_id))
+        for admin_id in new_ids:
+            conn.execute("INSERT OR IGNORE INTO todo_assignees (todo_id, admin_id) VALUES (?, ?)", (todo_id, admin_id))
+        added = new_ids - old_ids
+        if added:
+            texte_notif = (data.get('texte') or todo['texte'] or '').strip()
+            for row in conn.execute(f"SELECT email FROM clients WHERE id IN ({','.join('?' * len(added))})", tuple(added)).fetchall():
+                push_admin_notif(conn, "Tâche assignée", texte_notif, type='assignation', lien='/taches', destinataire=row['email'])
     conn.commit()
     todo = conn.execute("SELECT * FROM todos_perso WHERE id=?", (todo_id,)).fetchone()
     d = dict(todo)
     d['assignees'] = _todo_assignees(conn, todo_id)
     conn.close()
-    return jsonify(d)
+    return d, 200
 
-@app.route('/api/v1/admin/todos/<int:todo_id>', methods=['DELETE'])
-@admin_required
-def api_todos_delete(todo_id):
+
+def _delete_todo(todo_id):
+    """Suppression partagée — utilisée par la session CRM et par le jeton d'appareil de
+    la PWA Tâches."""
     conn = get_db_connection()
     todo = conn.execute("SELECT * FROM todos_perso WHERE id=?", (todo_id,)).fetchone()
     if not todo:
         conn.close()
-        return jsonify({'error': 'Todo introuvable'}), 404
+        return {'error': 'Todo introuvable'}, 404
     if todo['calendar_event_id']:
         try:
             from calendar_service import delete_calendar_event
@@ -14571,12 +14635,12 @@ def api_todos_delete(todo_id):
     conn.execute("DELETE FROM todos_perso WHERE id=?", (todo_id,))
     conn.commit()
     conn.close()
-    return jsonify({'success': True})
+    return {'success': True}, 200
 
-@app.route('/api/v1/admin/todos/<int:todo_id>/planifier', methods=['POST'])
-@admin_required
-def api_todos_planifier(todo_id):
-    data = request.get_json() or {}
+
+def _planifier_todo(todo_id, data):
+    """Planification calendrier partagée — utilisée par la session CRM et par le jeton
+    d'appareil de la PWA Tâches."""
     date_str = (data.get('date') or '').strip()
     heure = (data.get('heure') or '09:00').strip()
     try:
@@ -14584,12 +14648,12 @@ def api_todos_planifier(todo_id):
     except (TypeError, ValueError):
         duree = 60
     if not date_str:
-        return jsonify({'error': 'Date requise'}), 400
+        return {'error': 'Date requise'}, 400
     conn = get_db_connection()
     todo = conn.execute("SELECT * FROM todos_perso WHERE id=?", (todo_id,)).fetchone()
     if not todo:
         conn.close()
-        return jsonify({'error': 'Todo introuvable'}), 404
+        return {'error': 'Todo introuvable'}, 404
     # Re-planification : on retire l'ancien événement d'abord
     if todo['calendar_event_id']:
         try:
@@ -14602,21 +14666,22 @@ def api_todos_planifier(todo_id):
         cal_id = create_task_block(todo['texte'], date_str, heure, duree, todo['priorite'] or 'normale')
     except Exception as e:
         conn.close()
-        return jsonify({'error': f'Calendrier: {e}'}), 500
+        return {'error': f'Calendrier: {e}'}, 500
     conn.execute("UPDATE todos_perso SET calendar_event_id=?, date_echeance=? WHERE id=?",
                  (cal_id, date_str, todo_id))
     conn.commit()
     conn.close()
-    return jsonify({'success': True, 'calendar_event_id': cal_id, 'date_echeance': date_str})
+    return {'success': True, 'calendar_event_id': cal_id, 'date_echeance': date_str}, 200
 
-@app.route('/api/v1/admin/todos/<int:todo_id>/deplanifier', methods=['POST'])
-@admin_required
-def api_todos_deplanifier(todo_id):
+
+def _deplanifier_todo(todo_id):
+    """Retrait du calendrier partagé — utilisée par la session CRM et par le jeton
+    d'appareil de la PWA Tâches."""
     conn = get_db_connection()
     todo = conn.execute("SELECT * FROM todos_perso WHERE id=?", (todo_id,)).fetchone()
     if not todo:
         conn.close()
-        return jsonify({'error': 'Todo introuvable'}), 404
+        return {'error': 'Todo introuvable'}, 404
     if todo['calendar_event_id']:
         try:
             from calendar_service import delete_calendar_event
@@ -14626,7 +14691,32 @@ def api_todos_deplanifier(todo_id):
     conn.execute("UPDATE todos_perso SET calendar_event_id=NULL WHERE id=?", (todo_id,))
     conn.commit()
     conn.close()
-    return jsonify({'success': True})
+    return {'success': True}, 200
+
+
+@app.route('/api/v1/admin/todos/<int:todo_id>', methods=['PATCH'])
+@admin_required
+def api_todos_update(todo_id):
+    body, status = _update_todo(todo_id, request.get_json() or {})
+    return jsonify(body), status
+
+@app.route('/api/v1/admin/todos/<int:todo_id>', methods=['DELETE'])
+@admin_required
+def api_todos_delete(todo_id):
+    body, status = _delete_todo(todo_id)
+    return jsonify(body), status
+
+@app.route('/api/v1/admin/todos/<int:todo_id>/planifier', methods=['POST'])
+@admin_required
+def api_todos_planifier(todo_id):
+    body, status = _planifier_todo(todo_id, request.get_json() or {})
+    return jsonify(body), status
+
+@app.route('/api/v1/admin/todos/<int:todo_id>/deplanifier', methods=['POST'])
+@admin_required
+def api_todos_deplanifier(todo_id):
+    body, status = _deplanifier_todo(todo_id)
+    return jsonify(body), status
 
 @app.route('/api/v1/admin/projet/<int:projet_id>/rename', methods=['POST'])
 @admin_required
@@ -16651,6 +16741,296 @@ def api_capture_logout():
         conn.commit()
         conn.close()
     return jsonify({'success': True})
+
+
+def _task_user():
+    """Retourne {'user_id': ...} si le jeton d'appareil de la PWA Tâches (/taches) est
+    valide, sinon None. Même principe que _capture_user, mais un jeton par personne de
+    l'équipe (chacun jumelle son propre appareil avec son propre compte)."""
+    import hashlib
+    token = request.headers.get('X-Task-Token')
+    if not token:
+        token = (request.get_json(silent=True) or {}).get('token')
+    if not token:
+        return None
+    th = hashlib.sha256(token.encode()).hexdigest()
+    conn = get_db_connection()
+    row = conn.execute(
+        "SELECT id, user_id FROM task_devices WHERE token_hash = ? AND revoked = 0",
+        (th,)
+    ).fetchone()
+    if row:
+        conn.execute("UPDATE task_devices SET last_used_at = ? WHERE id = ?",
+                     (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), row['id']))
+        conn.commit()
+    conn.close()
+    return {'user_id': row['user_id']} if row else None
+
+
+@app.route('/api/v1/taches/login', methods=['POST'])
+@limiter.limit("5 per minute")
+def api_taches_login():
+    """Connexion PROPRE à la PWA Tâches : vérifie les identifiants et jumelle l'appareil
+    (émet un jeton). N'ouvre PAS de session CRM. Chaque membre de l'équipe (compte admin
+    avec un rôle — même critère que /api/v1/admin/team) jumelle son propre appareil."""
+    import secrets, hashlib
+    data = request.get_json(silent=True) or {}
+    email = (data.get('email') or '').strip().lower()
+    password = data.get('password') or ''
+    if email and _redis_login_locked(email):
+        return jsonify({'error': 'Trop de tentatives. Réessayez dans 15 min.'}), 429
+    conn = get_db_connection()
+    user = conn.execute("SELECT * FROM clients WHERE email = ?", (email,)).fetchone()
+    ok = False
+    if user and user['auth_provider'] == 'password' and user['mot_de_passe_hash']:
+        try:
+            ok = bcrypt.check_password_hash(user['mot_de_passe_hash'], password)
+        except Exception:
+            ok = False
+    if not ok or not int(user['is_admin'] or 0) or not user['role']:
+        conn.close()
+        _redis_login_fail_inc(email)
+        return jsonify({'error': 'Identifiants invalides.'}), 401
+    if not int(user['is_email_confirmed'] or 0):
+        conn.close()
+        return jsonify({'error': 'Courriel non confirmé.'}), 403
+    _redis_login_reset(email)
+    token = secrets.token_urlsafe(32)
+    th = hashlib.sha256(token.encode()).hexdigest()
+    conn.execute(
+        "INSERT INTO task_devices (user_id, token_hash, label) VALUES (?, ?, ?)",
+        (user['id'], th, 'Appareil')
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'token': token})
+
+
+@app.route('/api/v1/taches/verify', methods=['POST'])
+def api_taches_verify():
+    u = _task_user()
+    if not u:
+        return jsonify({'error': 'Appareil non lié'}), 401
+    conn = get_db_connection()
+    row = conn.execute("SELECT nom_complet, email FROM clients WHERE id = ?", (u['user_id'],)).fetchone()
+    conn.close()
+    compte = (row['nom_complet'] or row['email']) if row else None
+    return jsonify({'success': True, 'compte': compte, 'email': row['email'] if row else None})
+
+
+@app.route('/api/v1/taches/logout', methods=['POST'])
+def api_taches_logout():
+    """Déconnexion de l'appareil : révoque le jeton (il devient inutilisable)."""
+    import hashlib
+    token = request.headers.get('X-Task-Token') or (request.get_json(silent=True) or {}).get('token')
+    if token:
+        th = hashlib.sha256(token.encode()).hexdigest()
+        conn = get_db_connection()
+        conn.execute("UPDATE task_devices SET revoked = 1 WHERE token_hash = ?", (th,))
+        conn.commit()
+        conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/v1/taches/todos', methods=['GET'])
+def api_taches_todos_list():
+    u = _task_user()
+    if not u:
+        return jsonify({'error': 'Appareil non lié'}), 401
+    return jsonify(_todos_query(u['user_id'], 'mine'))
+
+
+@app.route('/api/v1/taches/todos', methods=['POST'])
+def api_taches_todos_create():
+    u = _task_user()
+    if not u:
+        return jsonify({'error': 'Appareil non lié'}), 401
+    body, status = _create_todo(u['user_id'], request.get_json() or {})
+    return jsonify(body), status
+
+
+@app.route('/api/v1/taches/todos/<int:todo_id>/toggle', methods=['POST'])
+def api_taches_todos_toggle(todo_id):
+    if not _task_user():
+        return jsonify({'error': 'Appareil non lié'}), 401
+    body, status = _toggle_todo(todo_id)
+    return jsonify(body), status
+
+
+@app.route('/api/v1/taches/todos/<int:todo_id>', methods=['PATCH'])
+def api_taches_todos_update(todo_id):
+    if not _task_user():
+        return jsonify({'error': 'Appareil non lié'}), 401
+    body, status = _update_todo(todo_id, request.get_json() or {})
+    return jsonify(body), status
+
+
+@app.route('/api/v1/taches/todos/<int:todo_id>', methods=['DELETE'])
+def api_taches_todos_delete(todo_id):
+    if not _task_user():
+        return jsonify({'error': 'Appareil non lié'}), 401
+    body, status = _delete_todo(todo_id)
+    return jsonify(body), status
+
+
+@app.route('/api/v1/taches/todos/<int:todo_id>/planifier', methods=['POST'])
+def api_taches_todos_planifier(todo_id):
+    if not _task_user():
+        return jsonify({'error': 'Appareil non lié'}), 401
+    body, status = _planifier_todo(todo_id, request.get_json() or {})
+    return jsonify(body), status
+
+
+@app.route('/api/v1/taches/todos/<int:todo_id>/deplanifier', methods=['POST'])
+def api_taches_todos_deplanifier(todo_id):
+    if not _task_user():
+        return jsonify({'error': 'Appareil non lié'}), 401
+    body, status = _deplanifier_todo(todo_id)
+    return jsonify(body), status
+
+
+@app.route('/api/v1/taches/team', methods=['GET'])
+def api_taches_team():
+    """Équipe assignable — même critère que /api/v1/admin/team (comptes admin avec un rôle)."""
+    if not _task_user():
+        return jsonify({'error': 'Appareil non lié'}), 401
+    conn = get_db_connection()
+    rows = conn.execute(
+        "SELECT id, nom_complet FROM clients WHERE is_admin = 1 AND role IS NOT NULL ORDER BY nom_complet"
+    ).fetchall()
+    conn.close()
+    return jsonify([{'id': r['id'], 'nom_complet': r['nom_complet']} for r in rows])
+
+
+@app.route('/api/v1/taches/clients', methods=['GET'])
+def api_taches_clients():
+    """Liste allégée des clients — pour le sélecteur d'assignation de la PWA Tâches."""
+    if not _task_user():
+        return jsonify({'error': 'Appareil non lié'}), 401
+    conn = get_db_connection()
+    rows = conn.execute(
+        "SELECT id, nom_complet FROM clients WHERE is_admin = 0 ORDER BY nom_complet"
+    ).fetchall()
+    conn.close()
+    return jsonify([{'id': r['id'], 'nom_complet': r['nom_complet']} for r in rows])
+
+
+@app.route('/api/v1/taches/projets', methods=['GET'])
+def api_taches_projets():
+    """Liste allégée des projets actifs — pour le sélecteur d'assignation de la PWA Tâches."""
+    if not _task_user():
+        return jsonify({'error': 'Appareil non lié'}), 401
+    conn = get_db_connection()
+    rows = conn.execute("""
+        SELECT p.id, p.nom_projet, c.nom_complet AS client_nom
+        FROM projets p
+        LEFT JOIN clients c ON c.id = p.id_client
+        WHERE COALESCE(p.is_archived, 0) = 0
+        ORDER BY p.created_at DESC
+    """).fetchall()
+    conn.close()
+    return jsonify([{'id': r['id'], 'nom_projet': r['nom_projet'], 'client_nom': r['client_nom']} for r in rows])
+
+
+@app.route('/api/v1/taches/push/vapid-public-key', methods=['GET'])
+def api_taches_push_vapid_key():
+    if not _task_user():
+        return jsonify({'error': 'Appareil non lié'}), 401
+    return jsonify({'key': VAPID_PUBLIC_KEY})
+
+
+@app.route('/api/v1/taches/push/subscribe', methods=['POST'])
+def api_taches_push_subscribe():
+    """Abonnement Web Push depuis la PWA Tâches — même table que le portail desktop
+    (push_subscriptions), rattaché au courriel du compte jumelé pour que l'assignation
+    d'une tâche puisse cibler cette personne précisément."""
+    u = _task_user()
+    if not u:
+        return jsonify({'error': 'Appareil non lié'}), 401
+    data = request.get_json() or {}
+    endpoint = data.get('endpoint')
+    keys = data.get('keys') or {}
+    p256dh, auth = keys.get('p256dh'), keys.get('auth')
+    if not (endpoint and p256dh and auth):
+        return jsonify({'error': 'Abonnement invalide'}), 400
+    conn = get_db_connection()
+    user = conn.execute("SELECT email FROM clients WHERE id=?", (u['user_id'],)).fetchone()
+    conn.execute(
+        "INSERT INTO push_subscriptions (email, endpoint, p256dh, auth) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(endpoint) DO UPDATE SET email=excluded.email, p256dh=excluded.p256dh, auth=excluded.auth",
+        (user['email'] if user else None, endpoint, p256dh, auth)
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/v1/taches/push/unsubscribe', methods=['POST'])
+def api_taches_push_unsubscribe():
+    if not _task_user():
+        return jsonify({'error': 'Appareil non lié'}), 401
+    data = request.get_json() or {}
+    endpoint = data.get('endpoint')
+    if endpoint:
+        conn = get_db_connection()
+        conn.execute("DELETE FROM push_subscriptions WHERE endpoint=?", (endpoint,))
+        conn.commit()
+        conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/v1/taches/marketing', methods=['GET'])
+def api_taches_marketing():
+    """Posts marketing en attente de dépôt de visuels (todo_felix_done=0), pour la
+    personne au rôle 'production' — convergence Phase 4 : ces posts apparaissaient déjà
+    dans /admin/marketing et un widget dashboard, jamais dans la PWA Tâches. On exclut
+    les posts déjà liés à un item roadmap (linked_roadmap_todo_id) : ceux-là ont déjà
+    une tâche todos_perso jumelle qui apparaît dans la liste principale — les inclure
+    ici les ferait apparaître en double. todo_marie_done n'est pas une case à cocher
+    personnelle (c'est un indicateur « Félix a notifié Marie » posé par un envoi groupé
+    de courriel côté /admin/marketing), donc rien à afficher ici pour le rôle gestion."""
+    import json as _json
+    u = _task_user()
+    if not u:
+        return jsonify({'error': 'Appareil non lié'}), 401
+    conn = get_db_connection()
+    user = conn.execute("SELECT role FROM clients WHERE id=?", (u['user_id'],)).fetchone()
+    if not user or user['role'] != 'production':
+        conn.close()
+        return jsonify([])
+    posts = conn.execute("""
+        SELECT id, titre, date_publication, plateformes, statut FROM marketing_posts
+        WHERE todo_felix_done = 0 AND linked_roadmap_todo_id IS NULL
+        ORDER BY date_publication ASC
+    """).fetchall()
+    conn.close()
+    return jsonify([{
+        'id': p['id'], 'titre': p['titre'], 'date_publication': p['date_publication'],
+        'plateformes': _json.loads(p['plateformes']) if p['plateformes'] else [],
+        'statut': p['statut'],
+    } for p in posts])
+
+
+@app.route('/api/v1/taches/marketing/<int:post_id>/toggle', methods=['POST'])
+def api_taches_marketing_toggle(post_id):
+    u = _task_user()
+    if not u:
+        return jsonify({'error': 'Appareil non lié'}), 401
+    conn = get_db_connection()
+    user = conn.execute("SELECT role FROM clients WHERE id=?", (u['user_id'],)).fetchone()
+    if not user or user['role'] != 'production':
+        conn.close()
+        return jsonify({'error': 'Réservé au rôle production'}), 403
+    post = conn.execute("SELECT todo_felix_done FROM marketing_posts WHERE id=?", (post_id,)).fetchone()
+    if not post:
+        conn.close()
+        return jsonify({'error': 'Post introuvable'}), 404
+    new_val = 0 if int(post['todo_felix_done'] or 0) else 1
+    conn.execute("UPDATE marketing_posts SET todo_felix_done=? WHERE id=?", (new_val, post_id))
+    conn.commit()
+    conn.close()
+    return jsonify({'done': bool(new_val)})
+
 
 @app.route('/api/v1/capture/scan', methods=['POST'])
 def api_capture_scan():

@@ -18,21 +18,6 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 
-def sync_todoist_job():
-    """Polling Todoist → todos_perso (toutes les X minutes)."""
-    if not os.getenv("TODOIST_API_TOKEN", "").strip():
-        return
-    try:
-        import todoist_service
-        conn = get_db()
-        res = todoist_service.sync(conn)
-        conn.close()
-        if res.get("nouvelles") or res.get("fermes"):
-            print(f"[TODOIST] sync: {res}")
-    except Exception as e:
-        print(f"[TODOIST] sync échoué: {e}")
-
-
 def get_db():
     db_path = os.getenv("DB_PATH", "/data/instance/portail.db")
     conn = sqlite3.connect(db_path, timeout=10, isolation_level=None)
@@ -390,17 +375,6 @@ def init_scheduler(app, mail):
         replace_existing=True,
     )
 
-    # Polling Todoist toutes les 5 minutes (filet + capture)
-    if os.getenv("TODOIST_API_TOKEN", "").strip():
-        scheduler.add_job(
-            func=sync_todoist_job,
-            trigger=IntervalTrigger(minutes=5),
-            id="sync_todoist",
-            name="Sync Todoist → todos",
-            replace_existing=True,
-            next_run_time=datetime.now(),  # premier passage immédiat
-        )
-
     # Ingestion Gmail des factures fournisseurs — toutes les 15 min.
     # Le job no-op proprement s'il n'y a aucune intégration Gmail active.
     _gmail_ready = bool(os.getenv("GOOGLE_CLIENT_ID", "").strip() and os.getenv("GOOGLE_CLIENT_SECRET", "").strip())
@@ -422,6 +396,5 @@ def init_scheduler(app, mail):
 
     scheduler.start()
     print("[SCHEDULER] Démarré — jobs: fermer_factures + creer_factures_mensuelles"
-          + (" + sync_todoist" if os.getenv("TODOIST_API_TOKEN", "").strip() else "")
           + (" + sync_gmail_factures" if _gmail_ready else ""))
     return scheduler
