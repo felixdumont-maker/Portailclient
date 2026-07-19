@@ -31,6 +31,21 @@ from dotenv import load_dotenv
 from pathlib import Path
 ENV_PATH = (Path(__file__).resolve().parent / ".." / ".env").resolve()
 load_dotenv(dotenv_path=ENV_PATH)
+
+# Suivi d'erreurs backend (audit sécurité du 19 juillet 2026 — Sentry n'existait que
+# côté Next.js). send_default_pii volontairement laissé à False (défaut) : cette app
+# gère des données clients réelles (factures, coordonnées) — pas d'IP/PII envoyée à un
+# tiers sans y avoir réfléchi explicitement.
+import sentry_sdk
+_sentry_dsn = os.getenv("SENTRY_DSN")
+if _sentry_dsn:
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        environment=os.getenv("FLASK_ENV", "development"),
+        traces_sample_rate=0.1 if os.getenv("FLASK_ENV") == "production" else 1.0,
+        send_default_pii=False,
+    )
+
 from drive_service import create_folder, upload_file, get_folder_link, list_files_in_folder, list_subfolders, make_folder_public, make_file_public, make_file_public, share_folder_with_user
 from calendar_service import (
     create_production_event, delete_production_event,
