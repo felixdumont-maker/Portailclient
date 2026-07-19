@@ -1073,22 +1073,25 @@ def init_db():
         ]:
             try:
                 conn.execute(ddl)
-            except sqlite3.OperationalError:
-                pass  # colonne déjà présente
+            except sqlite3.OperationalError as e:
+                if 'duplicate column' not in str(e):
+                    print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
 
         # Migration additive : type de notification client (pour icône Lucide côté UI)
         try:
             conn.execute("ALTER TABLE notifications ADD COLUMN type TEXT NOT NULL DEFAULT 'info'")
-        except sqlite3.OperationalError:
-            pass  # colonne déjà présente
+        except sqlite3.OperationalError as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
 
         # Migration additive : marquer un client comme compte de test — exclu de tous
         # les agrégats/statistiques admin (revenus, compteurs) mais visible normalement
         # dans sa propre fiche et son propre portail.
         try:
             conn.execute("ALTER TABLE clients ADD COLUMN is_test_client INTEGER NOT NULL DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass  # colonne déjà présente
+        except sqlite3.OperationalError as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
 
         # Migration additive : documents de marque du client (logo, favicon, couleurs)
         for col, ddl in [
@@ -1099,18 +1102,21 @@ def init_db():
         ]:
             try:
                 conn.execute(ddl)
-            except sqlite3.OperationalError:
-                pass  # colonne déjà présente
+            except sqlite3.OperationalError as e:
+                if 'duplicate column' not in str(e):
+                    print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
 
         # Migration additive : catalogue de services — actif/inactif + durée affichée (texte libre)
         try:
             conn.execute("ALTER TABLE services ADD COLUMN actif INTEGER NOT NULL DEFAULT 1")
-        except sqlite3.OperationalError:
-            pass  # colonne déjà présente
+        except sqlite3.OperationalError as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         try:
             conn.execute("ALTER TABLE services ADD COLUMN duree_affichee TEXT")
-        except sqlite3.OperationalError:
-            pass  # colonne déjà présente
+        except sqlite3.OperationalError as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
 
         # Migration additive : extras par service (catalogue consultable par la création de projet)
         conn.execute("""
@@ -1452,70 +1458,90 @@ def init_db():
         try:
             conn.execute("ALTER TABLE projets ADD COLUMN statut_updated_at TEXT")
             conn.execute("UPDATE projets SET statut_updated_at = created_at WHERE statut_updated_at IS NULL")
-        except Exception:
-            pass  # colonne déjà présente
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         # Migration: colonne titre_affiche sur projets
         try:
             conn.execute("ALTER TABLE projets ADD COLUMN titre_affiche TEXT")
-        except Exception:
-            pass  # colonne déjà présente
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
+        # Migration: flag posé quand la génération de facture échoue silencieusement dans
+        # _do_start_travaux (audit sécurité du 19 juillet 2026) — un todo actionnable est
+        # aussi créé dans le module Tâches, ce flag sert surtout à filtrer/vérifier.
+        try:
+            conn.execute("ALTER TABLE projets ADD COLUMN facture_generation_echouee INTEGER NOT NULL DEFAULT 0")
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         # Migration: commentaire client sur les items de révision (distinct de text_value,
         # qui a la sémantique "renseigner = coché" pour les champs de saisie classiques —
         # un commentaire de révision ne doit jamais cocher l'item automatiquement)
         try:
             conn.execute("ALTER TABLE checklist_items ADD COLUMN commentaire TEXT")
-        except Exception:
-            pass  # colonne déjà présente
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         # Migration: admin_resolu — coche admin distincte de est_coche (qui reflète la
         # réponse du CLIENT). Sert à suivre, item par item, quelles corrections demandées
         # ont été effectivement faites par l'équipe.
         try:
             conn.execute("ALTER TABLE checklist_items ADD COLUMN admin_resolu INTEGER DEFAULT 0")
-        except Exception:
-            pass  # colonne déjà présente
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         # Migration: role admin (gestion/production) — distingue qui gère/assigne (accès
         # complet à l'admin) de qui produit (seul destinataire valide des mandats/tâches).
         try:
             conn.execute("ALTER TABLE clients ADD COLUMN role TEXT")
-        except Exception:
-            pass  # colonne déjà présente
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         # Migration: is_producteur_principal — seul(s) pigiste(s) marqué(s) ainsi peu(ven)t
         # être ciblé(s) par une création de mandat (voir api_admin_mandats_create /
         # api_admin_mandats_pigistes_create).
         try:
             conn.execute("ALTER TABLE pigistes ADD COLUMN is_producteur_principal INTEGER DEFAULT 0")
-        except Exception:
-            pass  # colonne déjà présente
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         # Migration: assigne_admin_id — NULL = tâche partagée/visible par toute l'équipe
         # admin (comportement historique, préservé pour les tâches existantes), sinon
         # id du compte admin (clients.id) auquel la tâche appartient.
         try:
             conn.execute("ALTER TABLE todos_perso ADD COLUMN assigne_admin_id INTEGER")
-        except Exception:
-            pass  # colonne déjà présente
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         # Migration: liaison roadmap (planification de campagne) <-> tâche perso
         # assignée <-> post marketing programmé, pour que cocher à n'importe lequel
         # des 3 endroits se propage aux autres (voir _sync_roadmap_todo_completion).
         try:
             conn.execute("ALTER TABLE roadmap_todos ADD COLUMN assigne_admin_id INTEGER")
-        except Exception:
-            pass  # colonne déjà présente
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         try:
             conn.execute("ALTER TABLE roadmap_todos ADD COLUMN linked_todo_perso_id INTEGER")
-        except Exception:
-            pass  # colonne déjà présente
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         try:
             conn.execute("ALTER TABLE roadmap_todos ADD COLUMN linked_marketing_post_id INTEGER")
-        except Exception:
-            pass  # colonne déjà présente
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         try:
             conn.execute("ALTER TABLE todos_perso ADD COLUMN linked_roadmap_todo_id INTEGER")
-        except Exception:
-            pass  # colonne déjà présente
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         try:
             conn.execute("ALTER TABLE marketing_posts ADD COLUMN linked_roadmap_todo_id INTEGER")
-        except Exception:
-            pass  # colonne déjà présente
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         # Migration: assignation multi-personnes (une tâche/item peut être assigné à
         # plusieurs membres de l'équipe, pas juste un·e) — remplace l'usage de
         # assigne_admin_id (colonne conservée mais plus lue/écrite après cette migration).
@@ -1586,32 +1612,37 @@ def init_db():
         # de libellés devinée par le prefill de création de site.
         try:
             conn.execute("ALTER TABLE checklist_model_items ADD COLUMN content_key TEXT")
-        except Exception:
-            pass  # colonne déjà présente
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         try:
             conn.execute("ALTER TABLE checklist_items ADD COLUMN content_key TEXT")
-        except Exception:
-            pass  # colonne déjà présente
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         # Migration: id_projet sur sites — pour savoir quelle checklist pousser vers Sanity
         # à la création (voir _push_checklist_content_to_sanity)
         try:
             conn.execute("ALTER TABLE sites ADD COLUMN id_projet INTEGER")
-        except Exception:
-            pass  # colonne déjà présente
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         # Migration: id_projet sur rendez_vous — permet de lier une réservation confirmée au
         # projet qui l'attendait (statut "En attente de rendez-vous") pour faire avancer son
         # statut automatiquement, sans deviner (voir _lier_rendez_vous_au_projet)
         try:
             conn.execute("ALTER TABLE rendez_vous ADD COLUMN id_projet INTEGER")
-        except Exception:
-            pass  # colonne déjà présente
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         # Migration : coordonnées de contact directement sur une tâche (PWA Tâches, phase 2) —
         # ex. transférer un contact iPhone (.vcf) sur une tâche sans créer de fiche client.
         for _col in ('contact_nom', 'contact_telephone', 'contact_courriel'):
             try:
                 conn.execute(f"ALTER TABLE todos_perso ADD COLUMN {_col} TEXT")
-            except Exception:
-                pass  # colonne déjà présente
+            except Exception as e:
+                if 'duplicate column' not in str(e):
+                    print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
 
         # Réconciliation one-shot de la checklist "Site Web Vitrine" : le seed _SERVICES_SEED
         # ci-dessus ne retouche jamais un service déjà en base, donc les items déjà créés
@@ -1687,17 +1718,20 @@ def init_db():
         # Migration: liaison Todoist sur todos_perso
         try:
             conn.execute("ALTER TABLE todos_perso ADD COLUMN todoist_task_id TEXT")
-        except Exception:
-            pass  # colonne déjà présente
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         try:
             conn.execute("ALTER TABLE todos_perso ADD COLUMN source TEXT DEFAULT 'portail'")
-        except Exception:
-            pass  # colonne déjà présente
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         # Migration: assignation directe d'un todo à un client (en plus du projet)
         try:
             conn.execute("ALTER TABLE todos_perso ADD COLUMN client_id INTEGER")
-        except Exception:
-            pass  # colonne déjà présente
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         # Anti-doublon Todoist (poll multi-workers) : une tâche Todoist = un seul todo
         try:
             conn.execute(
@@ -1719,8 +1753,9 @@ def init_db():
         # Migration: colonne sections_json sur client_ressources (sections d'un guide, pour classer les captures)
         try:
             conn.execute("ALTER TABLE client_ressources ADD COLUMN sections_json TEXT")
-        except Exception:
-            pass  # colonne déjà présente
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         # Migration: table ressource_bundles + colonne bundle_id
         conn.execute('''CREATE TABLE IF NOT EXISTS ressource_bundles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1732,8 +1767,9 @@ def init_db():
         )''')
         try:
             conn.execute("ALTER TABLE client_ressources ADD COLUMN bundle_id INTEGER")
-        except Exception:
-            pass  # colonne déjà présente
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         # Migration: table ressource_assignations (envoyer une ressource du catalogue à un client précis, depuis un projet, sans la rendre exclusive)
         conn.execute('''CREATE TABLE IF NOT EXISTS ressource_assignations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1748,8 +1784,9 @@ def init_db():
         # Migration: colonne section_id sur ressource_images (rattacher une capture à une section du guide)
         try:
             conn.execute("ALTER TABLE ressource_images ADD COLUMN section_id TEXT")
-        except Exception:
-            pass  # colonne déjà présente
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         # Migration: supprimer le CHECK constraint sur iv_logos.variante
         try:
             row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='iv_logos'").fetchone()
@@ -1907,8 +1944,9 @@ def init_db():
         for _col in ("ligne_t2125 TEXT", "ligne_tp80 TEXT"):
             try:
                 conn.execute(f"ALTER TABLE transactions ADD COLUMN {_col}")
-            except Exception:
-                pass  # colonne déjà présente
+            except Exception as e:
+                if 'duplicate column' not in str(e):
+                    print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         # Backfill des dépenses existantes selon leur catégorie
         for _cat, _lignes in LIGNES_FISCALES.items():
             conn.execute(
@@ -1920,12 +1958,14 @@ def init_db():
         # Migration: revenus multi-source — réf. externe + date de paiement des factures
         try:
             conn.execute("ALTER TABLE transactions ADD COLUMN source_ref TEXT")
-        except Exception:
-            pass  # colonne déjà présente
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         try:
             conn.execute("ALTER TABLE factures ADD COLUMN date_paiement TEXT")
-        except Exception:
-            pass  # colonne déjà présente
+        except Exception as e:
+            if 'duplicate column' not in str(e):
+                print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
         # Anti-doublon : une facture = au plus une ligne revenu matérialisée
         try:
             conn.execute(
@@ -5408,8 +5448,21 @@ def _do_start_travaux(conn, projet, client, date_livraison_override=None):
                         conn.commit()
                 except Exception as e:
                     print(f"[DRIVE] Upload facture _do_start_travaux: {e}")
+        # Génération réussie (ou volontairement sautée) — efface un flag d'échec précédent
+        conn.execute("UPDATE projets SET facture_generation_echouee=0 WHERE id=?", (project_id,))
+        conn.commit()
     except Exception as e:
         print(f"[INVOICE] _do_start_travaux: {e}")
+        conn.execute("UPDATE projets SET facture_generation_echouee=1 WHERE id=?", (project_id,))
+        gestion_id = _admin_id_for_role(conn, 'gestion')
+        cur = conn.execute(
+            """INSERT INTO todos_perso (texte, priorite, projet_id, projet_nom)
+               VALUES (?, 'haute', ?, ?)""",
+            (f"⚠️ Facture non générée pour « {projet['nom_projet']} » — vérifier et relancer manuellement", project_id, projet['nom_projet'])
+        )
+        if gestion_id:
+            conn.execute("INSERT OR IGNORE INTO todo_assignees (todo_id, admin_id) VALUES (?, ?)", (cur.lastrowid, gestion_id))
+        conn.commit()
 
     try:
         if client and client['email']:
@@ -6510,6 +6563,17 @@ def api_identite_visuelle_client(projet_id):
         'mockups': [{'id': m['id'], 'public_url': m['public_url'], 'label': m['label'], 'filename': m['filename']} for m in mockups],
         'zip_url': f'/projet/{projet_id}/identite/zip',
     })
+
+
+@app.route('/healthz')
+def healthz():
+    try:
+        conn = get_db_connection()
+        conn.execute("SELECT 1").fetchone()
+        conn.close()
+    except Exception as e:
+        return jsonify({'status': 'error', 'detail': str(e)}), 503
+    return jsonify({'status': 'ok'}), 200
 
 
 # ───────────────────────────────────────────────────────────
