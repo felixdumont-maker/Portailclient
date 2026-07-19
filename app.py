@@ -4048,19 +4048,29 @@ def _find_service_slots(duree_seance_minutes: int, n: int = 4, jours_max: int = 
 
 
 def _creer_tache_depuis_booking(client_row, texte, date_echeance, id_projet=None, projet_nom=None, lien='/admin'):
-    """Crée une tâche partagée (visible par toute l'équipe) à la confirmation d'une
-    réservation cliente. Comble l'angle mort identifié par l'audit du module de tâches
+    """Crée une tâche à la confirmation d'une réservation cliente, assignée par défaut
+    au rôle gestion. Comble l'angle mort identifié par l'audit du module de tâches
     (2026-07-16) : jusqu'ici, un booking confirmé ne générait ni tâche ni notification
-    in-app, seulement un courriel à felix.dumont@cocktailmedia.ca."""
+    in-app, seulement un courriel à felix.dumont@cocktailmedia.ca.
+    Assignée (pas partagée/broadcast) — une tâche non assignée est invisible dans « Mes
+    tâches » (PWA et desktop filtrent strictement sur l'assignation), donc restait sans
+    propriétaire et sans être vue (2026-07-18)."""
     conn = get_db_connection()
     try:
-        conn.execute(
+        gestion_id = _admin_id_for_role(conn, 'gestion')
+        cur = conn.execute(
             "INSERT INTO todos_perso (texte, priorite, date_echeance, is_titre, projet_id, projet_nom, client_id) "
             "VALUES (?, 'normale', ?, 0, ?, ?, ?)",
             (texte, date_echeance, id_projet, projet_nom, client_row['id'])
         )
+        todo_id = cur.lastrowid
+        destinataire = None
+        if gestion_id:
+            conn.execute("INSERT OR IGNORE INTO todo_assignees (todo_id, admin_id) VALUES (?, ?)", (todo_id, gestion_id))
+            row = conn.execute("SELECT email FROM clients WHERE id=?", (gestion_id,)).fetchone()
+            destinataire = row['email'] if row else None
         conn.commit()
-        push_admin_notif(conn, "Nouvelle réservation", texte, type='todo', lien=lien)
+        push_admin_notif(conn, "Nouvelle réservation", texte, type='todo', lien=lien, destinataire=destinataire)
     except Exception as e:
         print(f"[BOOKING] Création tâche de suivi échouée: {e}")
     finally:
@@ -5337,12 +5347,19 @@ def _do_start_travaux(conn, projet, client, date_livraison_override=None):
         icon_service = service_row['icon'] if service_row and service_row['icon'] else 'default'
         taches = TACHES_PAR_SERVICE.get(icon_service, TACHES_PAR_SERVICE['default'])
         date_echeance = str(date_livraison) if date_livraison else None
+        # Assignées par défaut au rôle gestion — sinon invisibles dans « Mes tâches »
+        # (filtrée sur l'assignation) et perdues dans « Toutes ». Le regroupement « Par
+        # projet » du module Tâches (projet_id) les affiche déjà comme des sous-tâches
+        # sous une barre de progression par projet, une fois assignées (2026-07-18).
+        gestion_id = _admin_id_for_role(conn, 'gestion')
         for texte in taches:
-            conn.execute(
+            cur = conn.execute(
                 """INSERT INTO todos_perso (texte, priorite, date_echeance, projet_id, projet_nom)
                    VALUES (?, 'normale', ?, ?, ?)""",
                 (texte, date_echeance, project_id, projet['nom_projet'])
             )
+            if gestion_id:
+                conn.execute("INSERT OR IGNORE INTO todo_assignees (todo_id, admin_id) VALUES (?, ?)", (cur.lastrowid, gestion_id))
     conn.commit()
 
     facture = None
