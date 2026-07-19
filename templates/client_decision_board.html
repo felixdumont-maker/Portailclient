@@ -116,7 +116,7 @@
 
 <script>
 // Config parsée depuis le serveur
-const RAW_CONFIG = {{ board.config_json | safe if board and board.config_json else '{}' }};
+const RAW_CONFIG = {{ (board.config_json | fromjson if board and board.config_json else {}) | tojson }};
 const CLIENT_NAME = {{ client_name | tojson }};
 const ICONS = [
   {% for i in range(1,5) %}

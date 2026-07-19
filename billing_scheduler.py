@@ -1,15 +1,17 @@
 # billing_scheduler.py
 """
 Scheduler facturation mensuelle — Cocktail Média
-- Dernier jour du mois à 17h : ferme factures ouvertes + envoie + crée nouvelles
+- Dernier jour ouvrable du mois à 17h : ferme les factures ouvertes ayant au moins
+  une ligne et les envoie. La facture ouverte d'un client mensuel n'est créée qu'à
+  la volée, à l'assignation de son premier projet du mois (voir ajouter_ligne_facture_mensuelle).
 """
 
 import os
 import fcntl
 import sqlite3
 import pathlib
-from datetime import date, datetime
 import calendar
+from datetime import date, datetime, timedelta
 
 _scheduler_lock_fd = None  # garde le verrou ouvert pour la vie du process
 
@@ -27,14 +29,25 @@ def get_db():
     return conn
 
 
-def est_dernier_jour_du_mois() -> bool:
-    today = date.today()
-    dernier = calendar.monthrange(today.year, today.month)[1]
-    return today.day == dernier
+def dernier_jour_ouvrable_du_mois(reference: date | None = None) -> date:
+    """Dernier jour ouvrable (lun-ven) du mois de `reference` (aujourd'hui par défaut).
+       Ex.: si le 31 tombe un dimanche et le 30 un samedi, retourne le 29 (vendredi)."""
+    ref = reference or date.today()
+    dernier = calendar.monthrange(ref.year, ref.month)[1]
+    d = date(ref.year, ref.month, dernier)
+    while d.weekday() >= 5:  # 5=samedi, 6=dimanche
+        d -= timedelta(days=1)
+    return d
+
+
+def est_dernier_jour_ouvrable_du_mois() -> bool:
+    return date.today() == dernier_jour_ouvrable_du_mois()
 
 
 def fermer_factures_ouvertes(app, mail):
     """Ferme toutes les factures ouvertes et les envoie aux clients."""
+    if not est_dernier_jour_ouvrable_du_mois():
+        return
     from invoice_service import generer_pdf_facture
     from email_templates import email_nouvelle_facture
     from drive_service import upload_file
@@ -155,47 +168,6 @@ def fermer_factures_ouvertes(app, mail):
 
             except Exception as e:
                 print(f"[SCHEDULER] Erreur facture {facture['numero']}: {e}")
-
-        conn.close()
-
-
-def creer_factures_mensuelles(app):
-    """Crée les factures ouvertes du mois suivant pour les clients mensuels."""
-    from invoice_service import generer_numero_facture
-
-    with app.app_context():
-        conn = get_db()
-        today      = date.today()
-        # Mois suivant
-        if today.month == 12:
-            mois_suivant = date(today.year + 1, 1, 1)
-        else:
-            mois_suivant = date(today.year, today.month + 1, 1)
-        periode = mois_suivant.strftime("%Y-%m")
-
-        clients_mensuels = conn.execute("""
-            SELECT * FROM clients
-            WHERE mode_facturation = 'mensuel'
-        """).fetchall()
-
-        for client in clients_mensuels:
-            # Vérifier si facture du mois suivant existe déjà
-            existe = conn.execute("""
-                SELECT 1 FROM factures
-                WHERE id_client = ? AND periode_mois = ? AND statut = 'ouverte'
-            """, (client['id'], periode)).fetchone()
-
-            if existe:
-                continue
-
-            numero = generer_numero_facture(client['id'], conn)
-            conn.execute("""
-                INSERT INTO factures
-                (numero, id_client, statut, type_facturation, periode_mois)
-                VALUES (?, ?, 'ouverte', 'mensuel', ?)
-            """, (numero, client['id'], periode))
-            conn.commit()
-            print(f"[SCHEDULER] Facture ouverte créée: {numero} pour {client['nom_complet']} — {periode}")
 
         conn.close()
 
@@ -340,20 +312,18 @@ def init_scheduler(app, mail):
         return None
     scheduler = BackgroundScheduler(timezone="America/Toronto")
 
-    # Dernier jour du mois à 17h00
+    # Dernier jour OUVRABLE du mois à 17h00 (bug corrigé le 2026-07-19 : le job
+    # tournait tous les jours ; day='25-31' + la garde est_dernier_jour_ouvrable_du_mois()
+    # limitent le déclenchement réel au vendredi si le 30/31 tombe un samedi/dimanche).
+    # Pas de job de pré-création du mois suivant : la facture ouverte d'un client mensuel
+    # ne doit exister qu'à partir de l'assignation de son premier projet du mois
+    # (ajouter_ligne_facture_mensuelle la crée à la volée) — sinon des coquilles vides à 0$
+    # s'accumulent pour les clients mensuels inactifs un mois donné (constaté le 2026-07-19).
     scheduler.add_job(
         func=lambda: fermer_factures_ouvertes(app, mail),
-        trigger=CronTrigger(hour=17, minute=0),
+        trigger=CronTrigger(day='25-31', hour=17, minute=0),
         id="fermer_factures",
         name="Fermer factures ouvertes fin de mois",
-        replace_existing=True,
-    )
-
-    scheduler.add_job(
-        func=lambda: creer_factures_mensuelles(app),
-        trigger=CronTrigger(hour=17, minute=1),
-        id="creer_factures_mensuelles",
-        name="Créer factures mensuelles mois suivant",
         replace_existing=True,
     )
 
@@ -395,6 +365,6 @@ def init_scheduler(app, mail):
         )
 
     scheduler.start()
-    print("[SCHEDULER] Démarré — jobs: fermer_factures + creer_factures_mensuelles"
+    print("[SCHEDULER] Démarré — jobs: fermer_factures"
           + (" + sync_gmail_factures" if _gmail_ready else ""))
     return scheduler

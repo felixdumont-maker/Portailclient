@@ -599,6 +599,34 @@ def email_nouveau_post_marketing(titre, date_publication, plateformes, descripti
         cta_url=PORTAIL_URL
     )
 
+def email_corrections_appliquees(nom, lien_site):
+    return _base(
+        titre_hero="Vos corrections sont en ligne !",
+        sous_titre_hero="Voici ce qui a été ajusté sur votre site.",
+        sections=[
+            {
+                "label": "Révision — Site web",
+                "titre": "C'est fait !",
+                "contenu": (
+                    _p(f"Bonjour <strong>{nom}</strong>,") +
+                    _p("Merci pour vos commentaires — voici les corrections apportées à votre site :") +
+                    (
+                        '<ul style="margin:0 0 15px 0;padding:0 0 0 20px;font-family:Montserrat,sans-serif;font-size:14px;line-height:24px;color:#555;">'
+                        "<li style=\"margin:0 0 6px 0;\">Votre nom et votre titre (« une éducatrice spécialisée qui reste présente ») sont maintenant bien séparés dans l'en-tête</li>"
+                        '<li style="margin:0 0 6px 0;">Le mot « interventions » a été remplacé par « outils »</li>'
+                        '<li style="margin:0 0 6px 0;">La page Contact ne parle plus de « projet » — « Discutons ensemble »</li>'
+                        '<li style="margin:0 0 6px 0;">« Soumission » a été remplacé par « appel découverte » partout sur le site</li>'
+                        "<li style=\"margin:0 0 6px 0;\">On en a profité pour revoir le reste du site (page « Mon parcours », section services) afin que tout soit écrit à la première personne, en cohérence avec votre pratique</li>"
+                        '</ul>'
+                    ) +
+                    _p("Pour le logo, on attend simplement la confirmation de votre lien Canva pour pouvoir l'ajuster directement sur le site — ce sera fait dès qu'on l'aura.")
+                )
+            }
+        ],
+        cta_texte="VOIR MON SITE",
+        cta_url=lien_site
+    )
+
 def email_mon_site_disponible(nom, nom_entreprise=None):
     intro_entreprise = f" de <strong>{nom_entreprise}</strong>" if nom_entreprise else ""
     return _base(

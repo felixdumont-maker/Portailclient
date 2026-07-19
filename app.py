@@ -2623,12 +2623,10 @@ def jours_du_mois_filter(mois):
 from flask import jsonify
 from flask_cors import CORS
 
-CORS(app, origins=[
-    "http://192.168.10.10:3001",
-    "http://localhost:3001",
-    "https://portail.cocktailmedia.ca",
-    os.getenv("PORTAIL_URL", ""),
-], supports_credentials=True)
+_cors_origins = ["https://portail.cocktailmedia.ca", os.getenv("PORTAIL_URL", "")]
+if os.getenv("FLASK_ENV", "development") != "production":
+    _cors_origins.append("http://localhost:3001")
+CORS(app, origins=_cors_origins, supports_credentials=True)
 
 @app.route('/api/v1/auth/login', methods=['POST'])
 @limiter.limit("5 per minute")
@@ -3605,6 +3603,31 @@ def api_admin_update_client_statut_relation(client_id):
     conn.commit()
     conn.close()
     return jsonify({'success': True, 'statut_relation': statut_relation})
+
+
+@app.route('/api/v1/admin/client/<int:client_id>/mode-facturation', methods=['PUT'])
+@admin_required
+def api_admin_update_client_mode_facturation(client_id):
+    data = request.get_json(force=True) or {}
+    mode_facturation = data.get('mode_facturation')
+    if mode_facturation not in ('projet', 'mensuel'):
+        return jsonify({'error': 'mode_facturation invalide'}), 400
+
+    conn = get_db_connection()
+    client = conn.execute("SELECT mode_facturation FROM clients WHERE id = ?", (client_id,)).fetchone()
+    if not client:
+        conn.close()
+        return jsonify({'error': 'Client introuvable'}), 404
+
+    ancien = client['mode_facturation'] or 'projet'
+    conn.execute("UPDATE clients SET mode_facturation = ? WHERE id = ?", (mode_facturation, client_id))
+    if ancien != mode_facturation:
+        _lbl = {'projet': 'Par projet', 'mensuel': 'Facture ouverte (mensuel)'}
+        log_activite(conn, client_id, 'statut',
+                     f"Facturation : {_lbl.get(ancien, ancien)} → {_lbl.get(mode_facturation, mode_facturation)}")
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'mode_facturation': mode_facturation})
 
 
 @app.route('/api/v1/admin/client/<int:client_id>/resend-invitation', methods=['POST'])
@@ -16731,11 +16754,21 @@ def api_admin_scan_revenu():
 # App de capture (/capture) — jumelage d'appareil (jeton persistant par appareil,
 # rattaché au compte de l'abonné, indépendant de la session CRM).
 # ───────────────────────────────────────────────────────────
+def _device_cookie_kwargs():
+    """Attributs communs des cookies de jeton d'appareil (PWA Tâches/Capture) —
+    httpOnly pour ne plus exposer le jeton à un script JS (cf. audit sécurité 19/07)."""
+    return dict(httponly=True, secure=True, samesite='Lax', max_age=400 * 24 * 3600, path='/')
+
+
 def _capture_user():
-    """Résout l'appareil via son jeton (header X-Capture-Token, form ou JSON).
-    Retourne {user_id, organisation_id} ou None. Marque last_used_at."""
+    """Résout l'appareil via son jeton (cookie httpOnly en priorité, puis header
+    X-Capture-Token / form / JSON pour compatibilité avec les appareils déjà jumelés
+    avant le passage au cookie). Retourne {user_id, organisation_id, token} ou None.
+    Marque last_used_at."""
     import hashlib
-    token = request.headers.get('X-Capture-Token')
+    token = request.cookies.get('cos_capture_token')
+    if not token:
+        token = request.headers.get('X-Capture-Token')
     if not token and request.form:
         token = request.form.get('token')
     if not token:
@@ -16753,7 +16786,7 @@ def _capture_user():
                      (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), row['id']))
         conn.commit()
     conn.close()
-    return {'user_id': row['user_id'], 'organisation_id': row['organisation_id']} if row else None
+    return {'user_id': row['user_id'], 'organisation_id': row['organisation_id'], 'token': token} if row else None
 
 @app.route('/api/v1/capture/pair', methods=['POST'])
 @admin_required
@@ -16770,7 +16803,9 @@ def api_capture_pair():
     )
     conn.commit()
     conn.close()
-    return jsonify({'success': True, 'token': token})
+    resp = jsonify({'success': True, 'token': token})
+    resp.set_cookie('cos_capture_token', token, **_device_cookie_kwargs())
+    return resp
 
 @app.route('/api/v1/capture/login', methods=['POST'])
 @limiter.limit("5 per minute")
@@ -16809,7 +16844,9 @@ def api_capture_login():
     )
     conn.commit()
     conn.close()
-    return jsonify({'success': True, 'token': token})
+    resp = jsonify({'success': True, 'token': token})
+    resp.set_cookie('cos_capture_token', token, **_device_cookie_kwargs())
+    return resp
 
 @app.route('/api/v1/capture/verify', methods=['POST'])
 def api_capture_verify():
@@ -16820,28 +16857,36 @@ def api_capture_verify():
     row = conn.execute("SELECT nom_complet, email FROM clients WHERE id = ?", (u['user_id'],)).fetchone()
     conn.close()
     compte = (row['nom_complet'] or row['email']) if row else None
-    return jsonify({'success': True, 'compte': compte, 'email': row['email'] if row else None})
+    resp = jsonify({'success': True, 'compte': compte, 'email': row['email'] if row else None})
+    # Ré-émet le cookie httpOnly même si l'appareil s'est authentifié via l'ancien
+    # header/localStorage — bascule les appareils déjà jumelés sans les forcer à se reconnecter.
+    resp.set_cookie('cos_capture_token', u['token'], **_device_cookie_kwargs())
+    return resp
 
 @app.route('/api/v1/capture/logout', methods=['POST'])
 def api_capture_logout():
     """Déconnexion de l'appareil : révoque le jeton (il devient inutilisable)."""
     import hashlib
-    token = request.headers.get('X-Capture-Token') or (request.get_json(silent=True) or {}).get('token')
+    token = request.cookies.get('cos_capture_token') or request.headers.get('X-Capture-Token') or (request.get_json(silent=True) or {}).get('token')
     if token:
         th = hashlib.sha256(token.encode()).hexdigest()
         conn = get_db_connection()
         conn.execute("UPDATE capture_devices SET revoked = 1 WHERE token_hash = ?", (th,))
         conn.commit()
         conn.close()
-    return jsonify({'success': True})
+    resp = jsonify({'success': True})
+    resp.set_cookie('cos_capture_token', '', max_age=0, path='/')
+    return resp
 
 
 def _task_user():
-    """Retourne {'user_id': ...} si le jeton d'appareil de la PWA Tâches (/taches) est
-    valide, sinon None. Même principe que _capture_user, mais un jeton par personne de
-    l'équipe (chacun jumelle son propre appareil avec son propre compte)."""
+    """Retourne {'user_id': ..., 'token': ...} si le jeton d'appareil de la PWA Tâches
+    (/taches) est valide, sinon None. Même principe que _capture_user (cookie httpOnly
+    en priorité, header/JSON en repli pour les appareils déjà jumelés)."""
     import hashlib
-    token = request.headers.get('X-Task-Token')
+    token = request.cookies.get('cos_task_token')
+    if not token:
+        token = request.headers.get('X-Task-Token')
     if not token:
         token = (request.get_json(silent=True) or {}).get('token')
     if not token:
@@ -16857,7 +16902,7 @@ def _task_user():
                      (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), row['id']))
         conn.commit()
     conn.close()
-    return {'user_id': row['user_id']} if row else None
+    return {'user_id': row['user_id'], 'token': token} if row else None
 
 
 @app.route('/api/v1/taches/login', methods=['POST'])
@@ -16896,7 +16941,9 @@ def api_taches_login():
     )
     conn.commit()
     conn.close()
-    return jsonify({'success': True, 'token': token})
+    resp = jsonify({'success': True, 'token': token})
+    resp.set_cookie('cos_task_token', token, **_device_cookie_kwargs())
+    return resp
 
 
 @app.route('/api/v1/taches/verify', methods=['POST'])
@@ -16908,21 +16955,25 @@ def api_taches_verify():
     row = conn.execute("SELECT nom_complet, email FROM clients WHERE id = ?", (u['user_id'],)).fetchone()
     conn.close()
     compte = (row['nom_complet'] or row['email']) if row else None
-    return jsonify({'success': True, 'compte': compte, 'email': row['email'] if row else None})
+    resp = jsonify({'success': True, 'compte': compte, 'email': row['email'] if row else None})
+    resp.set_cookie('cos_task_token', u['token'], **_device_cookie_kwargs())
+    return resp
 
 
 @app.route('/api/v1/taches/logout', methods=['POST'])
 def api_taches_logout():
     """Déconnexion de l'appareil : révoque le jeton (il devient inutilisable)."""
     import hashlib
-    token = request.headers.get('X-Task-Token') or (request.get_json(silent=True) or {}).get('token')
+    token = request.cookies.get('cos_task_token') or request.headers.get('X-Task-Token') or (request.get_json(silent=True) or {}).get('token')
     if token:
         th = hashlib.sha256(token.encode()).hexdigest()
         conn = get_db_connection()
         conn.execute("UPDATE task_devices SET revoked = 1 WHERE token_hash = ?", (th,))
         conn.commit()
         conn.close()
-    return jsonify({'success': True})
+    resp = jsonify({'success': True})
+    resp.set_cookie('cos_task_token', '', max_age=0, path='/')
+    return resp
 
 
 @app.route('/api/v1/taches/todos', methods=['GET'])

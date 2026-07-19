@@ -39,6 +39,26 @@ The `.env` file lives **one directory above** the project root (`../env` relativ
 | `MAIL_SERVER` / `MAIL_USERNAME` / `MAIL_PASSWORD` | Flask-Mail (Gmail SMTP) |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Used only by `creation_base_de_donnees.py` to seed an admin |
 
+### Rotation des secrets
+
+Tous les secrets ci-dessous vivent dans le seul fichier `.env` (root, non versionné) — voir
+l'audit sécurité du 19 juillet 2026. Aucun n'a de rotation programmée aujourd'hui ; ce
+tableau sert de checklist pour la prochaine passe manuelle.
+
+| Secret | Impact si compromis | Cadence recommandée | Comment le régénérer |
+|---|---|---|---|
+| `SECRET_KEY` | Signature des sessions Flask — falsifiable | 12 mois, ou immédiatement si fuite suspectée | Générer une nouvelle valeur (`secrets.token_hex(32)`), déployer — invalide toutes les sessions actives (tout le monde se reconnecte) |
+| `GOOGLE_REFRESH_TOKEN` | Accès complet Drive + Calendar de tous les clients | 12 mois | Refaire le flux OAuth (`GOOGLE_CLIENT_ID`/`SECRET`) avec le compte Google du service, récupérer un nouveau refresh token |
+| `GITHUB_TOKEN` | Écriture sur les repos clients (création de sites vitrine) | 6 mois, portée réduite en fine-grained PAT (voir roadmap sécurité) | Régénérer sur github.com → Developer settings, puis mettre à jour `.env` |
+| `VERCEL_TOKEN` | Déploiement des sites vitrine clients | 6-12 mois | Régénérer sur vercel.com → Account Settings → Tokens |
+| `MAIL_PASSWORD` | Envoi de courriels au nom de Cocktail Média | 12 mois | Mot de passe d'application Gmail — en générer un nouveau, révoquer l'ancien |
+| `GOOGLE_CLIENT_SECRET` | Connexion OAuth "Google" des clients | 12 mois, ou si fuite | Google Cloud Console → Credentials |
+| `VAPID_PRIVATE_KEY` / `VAPID_PUBLIC_KEY` | Notifications push (PWA Tâches) | Statiques depuis la création du projet — rotation casse tous les abonnements push actifs (chacun doit réactiver) ; à planifier hors-pointe uniquement | `web-push generate-vapid-keys` |
+| `SANITY_TOKEN`, `GEMINI_API_KEY` | Accès API tiers | 12 mois | Régénérer dans la console du fournisseur respectif |
+
+Bonnes pratiques à instaurer : ne jamais committer `.env`, ne pas réutiliser un secret
+révoqué, mettre à jour ce tableau à chaque rotation (date + qui l'a fait).
+
 ## Architecture
 
 `app.py` (~4500 lines) is the single-file Flask application. It owns all routes, the schema, the DB helpers, and all business logic. There is no blueprint splitting.
@@ -105,12 +125,12 @@ Clients have `mode_facturation = 'projet' | 'mensuel'`:
 
 - Each client gets a Drive folder (`drive_folder_id`) and a `Factures` sub-folder (`factures_folder_id`) at registration
 - Each project gets a Drive folder under the client folder; a `Dépôt de fichiers` sub-folder is created only if `documents_requis` is true
-- All folders are made public (anyone with link can read)
+- Folders are **privés par défaut** (le code de `create_folder()` ne pose aucune permission publique) — un seul dossier client avait un partage "anyone" resté d'un partage manuel antérieur, retiré le 2026-07-19 (audit sécurité)
 - `drive_service.py` uses a Service Account (`service_account.json`) with full Drive scope
 
 ### API v1 (JSON)
 
-Routes under `/api/v1/` serve a separate Next.js frontend (CORS configured for `192.168.10.10:3001` and `localhost:3001`). They share the same session cookie. The HTML routes and API routes coexist in the same Flask app.
+Routes under `/api/v1/` serve a separate Next.js frontend (CORS configured for `https://portail.cocktailmedia.ca`, `$PORTAIL_URL`, and — hors production seulement — `localhost:3001`). They share the same session cookie. The HTML routes and API routes coexist in the same Flask app.
 
 ### Jinja2 extras
 
