@@ -5096,6 +5096,7 @@ def api_admin_dashboard():
     visuels_a_creer = conn.execute("""
         SELECT id, titre, date_publication FROM marketing_posts
         WHERE strftime('%Y-%m', date_publication) = ? AND todo_felix_done = 0
+          AND linked_roadmap_todo_id IS NULL
         ORDER BY date_publication ASC LIMIT 5
     """, (mois_courant,)).fetchall()
     a_publier = conn.execute("""
