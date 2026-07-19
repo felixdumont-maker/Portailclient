@@ -1091,6 +1091,24 @@ def init_db():
             except sqlite3.OperationalError as e:
                 if 'duplicate column' not in str(e):
                     print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
+        # Migration additive : méthode comptable TPS/TVQ + base de comptabilisation
+        # (plan de match pré-lancement, urgence absolue comptable — 19 juillet 2026).
+        # methode_comptable : reguliere (CTI complets) | rapide (méthode rapide,
+        # remise % du revenu TTC) | non_inscrit (pas de TPS/TVQ du tout). Seule
+        # 'reguliere' est implémentée pour l'instant (confirmé pour Cocktail Média) ;
+        # les deux autres sont posées en infrastructure pour de futures organisations.
+        # base_comptable : caisse (revenu constaté au paiement — déjà le comportement
+        # réel via materialiser_revenu_facture) | exercice (constaté à la facturation,
+        # pas encore implémenté).
+        for col, ddl in [
+            ('methode_comptable', "ALTER TABLE parametres_facturation ADD COLUMN methode_comptable TEXT NOT NULL DEFAULT 'reguliere'"),
+            ('base_comptable', "ALTER TABLE parametres_facturation ADD COLUMN base_comptable TEXT NOT NULL DEFAULT 'caisse'"),
+        ]:
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError as e:
+                if 'duplicate column' not in str(e):
+                    print(f"[MIGRATION] échec inattendu (ALTER TABLE) : {e}")
 
         # Migration additive : type de notification client (pour icône Lucide côté UI)
         try:
@@ -16499,7 +16517,8 @@ def api_admin_get_parametres_facturation():
     if not row:
         return jsonify({
             'charge_taxes': False, 'neq': '', 'numero_tps': '', 'numero_tvq': '',
-            'nom_entreprise': '', 'couleur_marque': '#c0321a'
+            'nom_entreprise': '', 'couleur_marque': '#c0321a',
+            'methode_comptable': 'reguliere', 'base_comptable': 'caisse',
         })
     return jsonify({
         'charge_taxes': bool(row['charge_taxes']),
@@ -16508,6 +16527,8 @@ def api_admin_get_parametres_facturation():
         'numero_tvq': row['numero_tvq'] or '',
         'nom_entreprise': row['nom_entreprise'] or '',
         'couleur_marque': row['couleur_marque'] or '#c0321a',
+        'methode_comptable': row['methode_comptable'] or 'reguliere',
+        'base_comptable': row['base_comptable'] or 'caisse',
     })
 
 @app.route('/api/v1/admin/parametres-facturation', methods=['PUT'])
@@ -16521,17 +16542,32 @@ def api_admin_update_parametres_facturation():
     nom_entreprise = (data.get('nom_entreprise') or '').strip()
     couleur_marque = (data.get('couleur_marque') or '#c0321a').strip()
 
+    methode_comptable = (data.get('methode_comptable') or 'reguliere').strip()
+    if methode_comptable not in ('reguliere', 'rapide', 'non_inscrit'):
+        return jsonify({'error': 'Méthode comptable invalide'}), 400
+    if methode_comptable != 'reguliere':
+        # Logique de calcul non implémentée pour ces deux méthodes — les autoriser en
+        # BD sans le calcul correspondant produirait un profit/des taxes faux sans
+        # avertissement. À lever une fois la méthode rapide / non-inscrit codées.
+        return jsonify({'error': "Seule la méthode régulière est supportée pour l'instant — le calcul pour la méthode rapide et non-inscrit n'est pas encore implémenté."}), 400
+    base_comptable = (data.get('base_comptable') or 'caisse').strip()
+    if base_comptable not in ('caisse', 'exercice'):
+        return jsonify({'error': 'Base comptable invalide'}), 400
+    if base_comptable != 'caisse':
+        return jsonify({'error': "Seule la comptabilité de caisse est supportée pour l'instant — la comptabilité d'exercice n'est pas encore implémentée."}), 400
+
     conn = get_db_connection()
     cur = conn.execute("""
         UPDATE parametres_facturation
-        SET charge_taxes = ?, neq = ?, numero_tps = ?, numero_tvq = ?, nom_entreprise = ?, couleur_marque = ?, updated_at = CURRENT_TIMESTAMP
+        SET charge_taxes = ?, neq = ?, numero_tps = ?, numero_tvq = ?, nom_entreprise = ?, couleur_marque = ?,
+            methode_comptable = ?, base_comptable = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = 1
-    """, (charge_taxes, neq, numero_tps, numero_tvq, nom_entreprise, couleur_marque))
+    """, (charge_taxes, neq, numero_tps, numero_tvq, nom_entreprise, couleur_marque, methode_comptable, base_comptable))
     if cur.rowcount == 0:
         conn.execute("""
-            INSERT INTO parametres_facturation (id, charge_taxes, neq, numero_tps, numero_tvq, nom_entreprise, couleur_marque)
-            VALUES (1, ?, ?, ?, ?, ?, ?)
-        """, (charge_taxes, neq, numero_tps, numero_tvq, nom_entreprise, couleur_marque))
+            INSERT INTO parametres_facturation (id, charge_taxes, neq, numero_tps, numero_tvq, nom_entreprise, couleur_marque, methode_comptable, base_comptable)
+            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (charge_taxes, neq, numero_tps, numero_tvq, nom_entreprise, couleur_marque, methode_comptable, base_comptable))
     conn.commit()
     conn.close()
     return jsonify({
@@ -16542,11 +16578,31 @@ def api_admin_update_parametres_facturation():
         'numero_tvq': numero_tvq,
         'nom_entreprise': nom_entreprise,
         'couleur_marque': couleur_marque,
+        'methode_comptable': methode_comptable,
+        'base_comptable': base_comptable,
     })
 
 
 # Catégories de dépenses + lignes fiscales (T2125 / TP-80) : voir LIGNES_FISCALES
 # et CATEGORIES_DEPENSES définis en haut du fichier (avant init_db).
+
+def _split_taxes_from_payload(data, montant_total):
+    """Retourne (avant_taxes, tps, tvq) à partir du payload JSON. Si l'appelant fournit
+    déjà les trois valeurs (scan Gemini, ou calcul fait côté frontend avec les taux
+    standards TPS 5 % / TVQ 9,975 %), on les prend telles quelles. Sinon repli sûr :
+    tout le montant est traité comme avant taxes, sans taxe inventée — jamais 0, ce qui
+    ferait disparaître la dépense/le revenu du calcul de profit (bug corrigé le 19
+    juillet 2026 — audit sécurité, item comptable urgence absolue)."""
+    try:
+        avant_taxes = data.get('montant_avant_taxes')
+        tps = data.get('montant_tps')
+        tvq = data.get('montant_tvq')
+        if avant_taxes is not None and tps is not None and tvq is not None:
+            return round(float(avant_taxes), 2), round(float(tps), 2), round(float(tvq), 2)
+    except (ValueError, TypeError):
+        pass
+    return montant_total, 0.0, 0.0
+
 
 @app.route('/api/v1/admin/depenses', methods=['POST'])
 @admin_required
@@ -16577,6 +16633,7 @@ def api_admin_create_depense():
     ligne_t2125 = lignes['t2125']
     ligne_tp80 = lignes['tp80']
     piece_jointe = (data.get('piece_jointe') or '').strip() or None
+    avant_taxes, tps, tvq = _split_taxes_from_payload(data, montant_total)
 
     conn = get_db_connection()
     cur = conn.execute("""
@@ -16584,8 +16641,8 @@ def api_admin_create_depense():
             (type, date_transaction, description, categorie,
              montant_avant_taxes, montant_tps, montant_tvq, montant_total, source,
              ligne_t2125, ligne_tp80, piece_jointe)
-        VALUES ('depense', ?, ?, ?, 0, 0, 0, ?, 'manuel', ?, ?, ?)
-    """, (date_transaction, description, categorie, montant_total, ligne_t2125, ligne_tp80, piece_jointe))
+        VALUES ('depense', ?, ?, ?, ?, ?, ?, ?, 'manuel', ?, ?, ?)
+    """, (date_transaction, description, categorie, avant_taxes, tps, tvq, montant_total, ligne_t2125, ligne_tp80, piece_jointe))
     conn.commit()
     new_id = cur.lastrowid
     conn.close()
@@ -16725,14 +16782,15 @@ def api_admin_create_revenu():
 
     lg = LIGNES_FISCALES_REVENUS[categorie]
     piece_jointe = (data.get('piece_jointe') or '').strip() or None
+    avant_taxes, tps, tvq = _split_taxes_from_payload(data, montant_total)
     conn = get_db_connection()
     cur = conn.execute("""
         INSERT INTO transactions
             (type, date_transaction, description, categorie,
              montant_avant_taxes, montant_tps, montant_tvq, montant_total,
              source, ligne_t2125, ligne_tp80, piece_jointe)
-        VALUES ('revenu', ?, ?, ?, 0, 0, 0, ?, 'manuel', ?, ?, ?)
-    """, (date_transaction, description, categorie, montant_total, lg['t2125'], lg['tp80'], piece_jointe))
+        VALUES ('revenu', ?, ?, ?, ?, ?, ?, ?, 'manuel', ?, ?, ?)
+    """, (date_transaction, description, categorie, avant_taxes, tps, tvq, montant_total, lg['t2125'], lg['tp80'], piece_jointe))
     conn.commit()
     row = conn.execute("""
         SELECT id, date_transaction, description, categorie,
@@ -16764,13 +16822,17 @@ def api_admin_import_revenus():
             if cat not in CATEGORIES_REVENUS:
                 cat = 'Ventes et honoraires professionnels'
             lg = LIGNES_FISCALES_REVENUS[cat]
+            # Import en lot (revenus antérieurs) : pas de détail de taxes ligne par ligne
+            # dans ce format — traité comme montant avant taxes, jamais 0 (cf. bug du 19
+            # juillet 2026). À corriger manuellement ensuite si une ligne était taxable.
+            avant_taxes, tps, tvq = _split_taxes_from_payload(l, montant)
             conn.execute("""
                 INSERT INTO transactions
                     (type, date_transaction, description, categorie,
                      montant_avant_taxes, montant_tps, montant_tvq, montant_total,
                      source, ligne_t2125, ligne_tp80)
-                VALUES ('revenu', ?, ?, ?, 0, 0, 0, ?, 'manuel', ?, ?)
-            """, (d, desc, cat, montant, lg['t2125'], lg['tp80']))
+                VALUES ('revenu', ?, ?, ?, ?, ?, ?, ?, 'manuel', ?, ?)
+            """, (d, desc, cat, avant_taxes, tps, tvq, montant, lg['t2125'], lg['tp80']))
             inserted += 1
         except Exception as e:
             erreurs.append(f"Ligne {i + 1} : {e}")
@@ -17653,11 +17715,14 @@ def _calculer_bilan(annee, mois):
         }
 
     def _par_categorie(type_tx):
+        # Montant avant taxes — les lignes T2125/TP-80 (revenu ou dépense) se déclarent
+        # hors TPS/TVQ ; la taxe perçue/payée est remise/récupérée séparément, jamais
+        # comptée comme du revenu ou une dépense (audit sécurité du 19 juillet 2026).
         rows = conn.execute(f"""
             SELECT
                 COALESCE(categorie,'Autre') AS categorie,
                 ligne_t2125, ligne_tp80,
-                COALESCE(SUM(montant_total),0) AS total,
+                COALESCE(SUM(montant_avant_taxes),0) AS total,
                 COUNT(*) AS nb
             FROM transactions
             WHERE type = ? AND {where_date}
@@ -17680,7 +17745,10 @@ def _calculer_bilan(annee, mois):
     parametres_row = conn.execute("SELECT * FROM parametres_facturation WHERE id = 1").fetchone()
     conn.close()
 
-    profit_net = round(revenus['total'] - depenses['total'], 2)
+    # Profit net = revenus moins dépenses AVANT taxes (méthode régulière : la TPS/TVQ
+    # perçue et payée n'est jamais du revenu/une dépense réelle — voir tps_a_remettre/
+    # tvq_a_remettre ci-dessous, qui net déjà la taxe payée comme crédit sur intrants).
+    profit_net = round(revenus['avant_taxes'] - depenses['avant_taxes'], 2)
     tps_a_remettre = round(revenus['tps'] - depenses['tps'], 2)
     tvq_a_remettre = round(revenus['tvq'] - depenses['tvq'], 2)
 
@@ -17706,7 +17774,7 @@ def _calculer_bilan(annee, mois):
     }
 
 # ───────────────────────────────────────────────────────────
-# Comptabilité — Bilan (agrégation lecture seule)
+# Comptabilité — État des résultats (agrégation lecture seule)
 # ───────────────────────────────────────────────────────────
 @app.route('/api/v1/admin/bilan', methods=['GET'])
 @admin_required
@@ -17743,12 +17811,15 @@ def api_admin_bilan_export():
     entreprise = _nom_fichier_propre(data['nom_entreprise'])
     periode_label = data['periode']
 
+    # 'bilan' reste l'identifiant interne (?rapport=bilan) — seul le libellé affiché
+    # change (un bilan est un instantané d'actif/passif, ce que ce rapport n'a jamais
+    # été ; c'est un état des résultats : revenus − dépenses = profit sur une période).
     noms_rapport = {
-        'bilan': 'Bilan',
+        'bilan': 'État des résultats',
         'revenus': 'Revenus',
         'depenses': 'Dépenses',
     }
-    nom_rapport = noms_rapport.get(rapport, 'Bilan')
+    nom_rapport = noms_rapport.get(rapport, 'État des résultats')
     if mois:
         nom_periode = f"{nom_rapport} - {periode_label.replace('/', '-')}"
     else:
@@ -17758,10 +17829,10 @@ def api_admin_bilan_export():
 
     if rapport == 'revenus':
         lignes = data['revenus_par_categorie']
-        total = data['revenus']['total']
+        total = data['revenus']['avant_taxes']
     elif rapport == 'depenses':
         lignes = data['depenses_par_categorie']
-        total = data['depenses']['total']
+        total = data['depenses']['avant_taxes']
     else:
         lignes = None
         total = None
@@ -17775,8 +17846,8 @@ def api_admin_bilan_export():
             writer.writerow(['Rapport', nom_rapport])
             writer.writerow(['Période', periode_label])
             writer.writerow([])
-            writer.writerow(['Revenus totaux', f"{data['revenus']['total']:.2f}"])
-            writer.writerow(['Dépenses totales', f"{data['depenses']['total']:.2f}"])
+            writer.writerow(['Revenus totaux (avant taxes)', f"{data['revenus']['avant_taxes']:.2f}"])
+            writer.writerow(['Dépenses totales (avant taxes)', f"{data['depenses']['avant_taxes']:.2f}"])
             writer.writerow(['Profit net', f"{data['profit_net']:.2f}"])
             writer.writerow([])
             writer.writerow(['TPS perçue', f"{data['taxes']['tps_percue']:.2f}"])
@@ -17808,8 +17879,8 @@ def api_admin_bilan_export():
             ws.append([nom_rapport, periode_label])
             ws['A1'].font = Font(bold=True, size=14)
             ws.append([])
-            ws.append(['Revenus totaux', data['revenus']['total']])
-            ws.append(['Dépenses totales', data['depenses']['total']])
+            ws.append(['Revenus totaux (avant taxes)', data['revenus']['avant_taxes']])
+            ws.append(['Dépenses totales (avant taxes)', data['depenses']['avant_taxes']])
             ws.append(['Profit net', data['profit_net']])
             ws.append([])
             ws.append(['TPS perçue', data['taxes']['tps_percue']])
@@ -17871,8 +17942,8 @@ def api_admin_bilan_export():
 
         if rapport == 'bilan':
             table_data = [
-                ['Revenus totaux', f"{data['revenus']['total']:.2f} $"],
-                ['Dépenses totales', f"{data['depenses']['total']:.2f} $"],
+                ['Revenus totaux (avant taxes)', f"{data['revenus']['avant_taxes']:.2f} $"],
+                ['Dépenses totales (avant taxes)', f"{data['depenses']['avant_taxes']:.2f} $"],
                 ['Profit net', f"{data['profit_net']:.2f} $"],
             ]
             t = Table(table_data, colWidths=[3.5*inch, 2*inch])
