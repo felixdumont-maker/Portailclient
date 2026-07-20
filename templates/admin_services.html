@@ -102,6 +102,7 @@
     transition: opacity var(--t-fast);
   }
   .action-btn:hover { opacity: .8; text-decoration: none; }
+  button.action-btn { border: none; cursor: pointer; font: inherit; }
   .btn-delete       { color: var(--couleur-danger); background: #fdecea; }
   .btn-small-delete { color: var(--couleur-danger); background: transparent; font-size: 1rem; padding: .2rem .4rem; flex-shrink: 0; }
 </style>
@@ -229,9 +230,11 @@
       <h3>{{ s_data['service']['nom_service'] }}</h3>
       <div style="display:flex;gap:.5rem;align-items:center;">
         <button onclick="document.getElementById('edit-service-{{ sid }}').style.display=document.getElementById('edit-service-{{ sid }}').style.display=='none'?'block':'none'" class="action-btn btn-edit">Modifier</button>
-        <a href="{{ url_for('delete_service', service_id=sid) }}"
-           class="action-btn btn-delete"
-           onclick="return confirm('Supprimer ce service ?');">Supprimer</a>
+        <form action="{{ url_for('delete_service', service_id=sid) }}" method="post" style="display:inline;"
+              onsubmit="return confirm('Supprimer ce service ?');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="action-btn btn-delete">Supprimer</button>
+        </form>
       </div>
     </header>
 
@@ -351,9 +354,11 @@
                   {% if item['is_required'] %}<span class="badge must">Obligatoire</span>{% endif %}
                 </div>
               </div>
-              <a href="{{ url_for('delete_checklist_item', item_id=item['id']) }}"
-                 class="action-btn btn-small-delete"
-                 onclick="return confirm('Supprimer ?');">✖</a>
+              <form action="{{ url_for('delete_checklist_item', item_id=item['id']) }}" method="post" style="display:inline;"
+                    onsubmit="return confirm('Supprimer ?');">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="action-btn btn-small-delete">✖</button>
+              </form>
             </div>
           {% endfor %}
         </div>
@@ -403,9 +408,11 @@
                 <span class="badge type-revision">🟡 Révision</span>
                 <strong>{{ item['nom_item'] }}</strong>
               </div>
-              <a href="{{ url_for('delete_checklist_item', item_id=item['id']) }}"
-                 class="action-btn btn-small-delete"
-                 onclick="return confirm('Supprimer ?');">✖</a>
+              <form action="{{ url_for('delete_checklist_item', item_id=item['id']) }}" method="post" style="display:inline;"
+                    onsubmit="return confirm('Supprimer ?');">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="action-btn btn-small-delete">✖</button>
+              </form>
             </div>
           {% endfor %}
         </div>

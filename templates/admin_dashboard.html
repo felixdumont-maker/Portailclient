@@ -18,6 +18,7 @@
     text-decoration: none; transition: opacity var(--t-fast);
   }
   .action-btn:hover { opacity: .8; text-decoration: none; }
+  button.action-btn { border: none; cursor: pointer; font: inherit; }
   .btn-edit { color: var(--couleur-info); background: #e8f0ff; }
   .btn-delete { color: var(--couleur-danger); background: #fdecea; margin-left: .35rem; }
 
@@ -345,8 +346,11 @@ function toggleTodoMkt(cb) {
           </td>
           <td>
             <a href="{{ url_for('edit_project', project_id=row.p['id']) }}" class="action-btn btn-edit">Modifier</a>
-            <a href="{{ url_for('delete_project', project_id=row.p['id']) }}" class="action-btn btn-delete"
-               onclick="return confirm('Supprimer ce projet ?');">Supprimer</a>
+            <form action="{{ url_for('delete_project', project_id=row.p['id']) }}" method="post" style="display:inline;"
+                  onsubmit="return confirm('Supprimer ce projet ?');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="action-btn btn-delete">Supprimer</button>
+            </form>
           </td>
         </tr>
       {% else %}
@@ -371,8 +375,11 @@ function toggleTodoMkt(cb) {
           <td>{{ client['nom_entreprise'] or 'N/A' }}</td>
           <td>
             <a href="{{ url_for('edit_client', client_id=client['id']) }}" class="action-btn btn-edit">Modifier</a>
-            <a href="{{ url_for('delete_client', client_id=client['id']) }}" class="action-btn btn-delete"
-               onclick="return confirm('Supprimer ce client ?');">Supprimer</a>
+            <form action="{{ url_for('delete_client', client_id=client['id']) }}" method="post" style="display:inline;"
+                  onsubmit="return confirm('Supprimer ce client ?');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="action-btn btn-delete">Supprimer</button>
+            </form>
             {% if client['drive_folder_id'] %}
             <a href="https://drive.google.com/drive/folders/{{ client['drive_folder_id'] }}"
                target="_blank" rel="noopener" title="Dossier Drive" class="action-btn" style="padding:.3rem .5rem;">

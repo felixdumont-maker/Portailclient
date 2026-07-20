@@ -269,6 +269,7 @@ def oauth_google_callback():
     session['is_admin'] = bool(user['is_admin'])
     session['has_outils'] = bool(user['has_outils']) if 'has_outils' in user.keys() else False
     session['has_entrainement'] = bool(user['has_entrainement']) if 'has_entrainement' in user.keys() else False
+    session['organisation_id'] = ORG_ID_DEFAUT
 
     flash("Connexion Google réussie!", "success")
     return redirect(url_for('admin_dashboard' if session['is_admin'] else 'dashboard'))
@@ -283,6 +284,14 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
+
+# Mono-tenant aujourd'hui : aucune table `organisations` n'existe encore, `clients` n'a pas
+# de colonne organisation_id — tout le monde est implicitement Cocktail Média. La vraie
+# refonte multi-tenant (table organisations, RLS Postgres, organisation_id sur clients)
+# est prévue à la Phase B2/D du plan de match, pas ici (audit sécurité round 2, 2026-07-20 :
+# filtrage minimal pour que les requêtes sur transactions/integrations/factures_a_valider/
+# capture_devices ne soient plus silencieusement ignorées, sans faire la vraie migration).
+ORG_ID_DEFAUT = 1
 
 # ───────────────────────────────────────────────────────────
 # Comptabilité — Catégories de dépenses (travailleur autonome QC)
@@ -373,6 +382,50 @@ def supprimer_revenu_facture(conn, facture_id):
     conn.execute(
         "DELETE FROM transactions WHERE type='revenu' AND source='facture' AND id_facture = ?",
         (facture_id,)
+    )
+
+def materialiser_depense_pigiste(conn, facture_pigiste_id, date_paiement=None):
+    """Crée ou met à jour la ligne de dépense du grand livre liée à une facture pigiste payée.
+    Idempotent : une facture pigiste = au plus une ligne dépense (source='facture_pigiste')."""
+    f = conn.execute("SELECT * FROM factures_pigiste WHERE id = ?", (facture_pigiste_id,)).fetchone()
+    if not f:
+        return
+    pig = conn.execute(
+        "SELECT nom_complet FROM pigistes WHERE id = ?", (f['id_pigiste'],)
+    ).fetchone()
+    nom_pigiste = (pig['nom_complet'] if pig else '').strip()
+    date_dep = date_paiement or datetime.now().strftime('%Y-%m-%d')
+    description = f"Facture pigiste {f['numero']}" + (f" — {nom_pigiste}" if nom_pigiste else '')
+    cat = 'Honoraires professionnels'
+    lg = LIGNES_FISCALES[cat]
+    source_ref = str(facture_pigiste_id)
+    existing = conn.execute(
+        "SELECT id FROM transactions WHERE type='depense' AND source='facture_pigiste' AND source_ref = ?",
+        (source_ref,)
+    ).fetchone()
+    if existing:
+        conn.execute("""
+            UPDATE transactions SET date_transaction=?, description=?, categorie=?,
+                montant_avant_taxes=?, montant_tps=?, montant_tvq=?, montant_total=?,
+                ligne_t2125=?, ligne_tp80=?
+            WHERE id=?
+        """, (date_dep, description, cat, f['montant_ht'] or 0, f['tps'] or 0,
+              f['tvq'] or 0, f['montant_total'] or 0, lg['t2125'], lg['tp80'], existing['id']))
+    else:
+        conn.execute("""
+            INSERT INTO transactions
+                (type, date_transaction, description, categorie,
+                 montant_avant_taxes, montant_tps, montant_tvq, montant_total,
+                 source, source_ref, ligne_t2125, ligne_tp80)
+            VALUES ('depense', ?, ?, ?, ?, ?, ?, ?, 'facture_pigiste', ?, ?, ?)
+        """, (date_dep, description, cat, f['montant_ht'] or 0, f['tps'] or 0,
+              f['tvq'] or 0, f['montant_total'] or 0, source_ref, lg['t2125'], lg['tp80']))
+
+def supprimer_depense_pigiste(conn, facture_pigiste_id):
+    """Retire la ligne dépense liée à une facture pigiste (dépayée, annulée ou supprimée)."""
+    conn.execute(
+        "DELETE FROM transactions WHERE type='depense' AND source='facture_pigiste' AND source_ref = ?",
+        (str(facture_pigiste_id),)
     )
 
 # ───────────────────────────────────────────────────────────
@@ -1584,16 +1637,16 @@ def init_db():
                 admin_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
                 PRIMARY KEY (todo_id, admin_id)
             )''')
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[MIGRATION] échec inattendu (ligne ~1640) : {e}")
         try:
             conn.execute('''CREATE TABLE IF NOT EXISTS roadmap_todo_assignees (
                 roadmap_todo_id INTEGER NOT NULL REFERENCES roadmap_todos(id) ON DELETE CASCADE,
                 admin_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
                 PRIMARY KEY (roadmap_todo_id, admin_id)
             )''')
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[MIGRATION] échec inattendu (ligne ~1648) : {e}")
         # Migration: 5e silo de tâches identifié lors de l'audit du module Tâches
         # (2026-07-16) — les todos des phases de la roadmap produit CocktailOS
         # (page /admin/roadmaps, onglet CocktailOS) vivaient uniquement en
@@ -1611,8 +1664,8 @@ def init_db():
                 position INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )''')
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[MIGRATION] échec inattendu (ligne ~1667) : {e}")
         # Backfill unique : copie assigne_admin_id existant vers les tables de jonction
         # (idempotent — INSERT OR IGNORE sur la PK composite)
         try:
@@ -1638,8 +1691,8 @@ def init_db():
                 uploaded_by INTEGER,
                 created_at TEXT DEFAULT (datetime('now'))
             )''')
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[MIGRATION] échec inattendu (ligne ~1694) : {e}")
         # Migration: content_key — déclare explicitement quel champ Sanity (ou sentinel
         # "membre[]") un item de checklist doit alimenter, pour remplacer la correspondance
         # de libellés devinée par le prefill de création de site.
@@ -1771,8 +1824,8 @@ def init_db():
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_todos_todoist "
                 "ON todos_perso(todoist_task_id) WHERE todoist_task_id IS NOT NULL"
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[MIGRATION] échec inattendu (ligne ~1827) : {e}")
         # Migration: livrables logo(s) vectorisé(s) — déposés par l'admin, fournis au client à la livraison
         conn.execute('''CREATE TABLE IF NOT EXISTS projet_logo_fichiers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1848,8 +1901,8 @@ def init_db():
                     ALTER TABLE iv_logos_new RENAME TO iv_logos;
                     PRAGMA foreign_keys = ON;
                 """)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[MIGRATION] échec inattendu (ligne ~1904) : {e}")
         # Trigger SQLite — maintient statut_updated_at automatiquement à chaque changement de statut
         conn.execute("""
             CREATE TRIGGER IF NOT EXISTS trg_statut_updated_at
@@ -1861,83 +1914,100 @@ def init_db():
         # Migration: type_prestation et quantite sur mandats
         try:
             conn.execute("ALTER TABLE mandats ADD COLUMN type_prestation TEXT")
-        except Exception:
-            pass
+        except Exception as e:
+            if "duplicate column" not in str(e):
+                print(f"[MIGRATION] échec inattendu (ligne ~1917) : {e}")
         try:
             conn.execute("ALTER TABLE mandats ADD COLUMN quantite INTEGER DEFAULT 1")
-        except Exception:
-            pass
+        except Exception as e:
+            if "duplicate column" not in str(e):
+                print(f"[MIGRATION] échec inattendu (ligne ~1921) : {e}")
         # Migration: confirm_token sur clients (token à usage unique — protection scanners)
         try:
             conn.execute("ALTER TABLE clients ADD COLUMN confirm_token TEXT")
-        except Exception:
-            pass
+        except Exception as e:
+            if "duplicate column" not in str(e):
+                print(f"[MIGRATION] échec inattendu (ligne ~1926) : {e}")
         # Migration: must_change_password (mot de passe temporaire admin)
         try:
             conn.execute("ALTER TABLE clients ADD COLUMN must_change_password INTEGER DEFAULT 0")
-        except Exception:
-            pass
+        except Exception as e:
+            if "duplicate column" not in str(e):
+                print(f"[MIGRATION] échec inattendu (ligne ~1931) : {e}")
         # Migration: thème (police + couleurs) sur sites
         try:
             conn.execute("ALTER TABLE sites ADD COLUMN theme_font_pair TEXT")
             conn.execute("ALTER TABLE sites ADD COLUMN theme_accent_color TEXT")
             conn.execute("ALTER TABLE sites ADD COLUMN theme_bg_color TEXT")
-        except Exception:
-            pass
+        except Exception as e:
+            if "duplicate column" not in str(e):
+                print(f"[MIGRATION] échec inattendu (ligne ~1938) : {e}")
         # Migration: gabarit visuel nommé (refonte design, ex. "1a") sur sites
         # — colonne conservée mais inerte, système abandonné le 2026-07-07, voir `direction` ci-dessous
         try:
             conn.execute("ALTER TABLE sites ADD COLUMN style_variant TEXT")
-        except Exception:
-            pass
+        except Exception as e:
+            if "duplicate column" not in str(e):
+                print(f"[MIGRATION] échec inattendu (ligne ~1944) : {e}")
         # Migration: direction artistique Baseline (ex. "editorial") sur sites — template "vitrine"
         try:
             conn.execute("ALTER TABLE sites ADD COLUMN direction TEXT")
-        except Exception:
-            pass
+        except Exception as e:
+            if "duplicate column" not in str(e):
+                print(f"[MIGRATION] échec inattendu (ligne ~1949) : {e}")
         # Migration: colonnes facturation/Drive sur clients — déjà utilisées dans le code
         # mais jamais créées via migration (ajoutées hors-bande sur la DB de prod à l'origine)
         try:
             conn.execute("ALTER TABLE clients ADD COLUMN mode_facturation TEXT DEFAULT 'projet'")
-        except Exception:
-            pass
+        except Exception as e:
+            if "duplicate column" not in str(e):
+                print(f"[MIGRATION] échec inattendu (ligne ~1955) : {e}")
         try:
             conn.execute("ALTER TABLE clients ADD COLUMN adresse_facturation TEXT")
-        except Exception:
-            pass
+        except Exception as e:
+            if "duplicate column" not in str(e):
+                print(f"[MIGRATION] échec inattendu (ligne ~1959) : {e}")
         try:
             conn.execute("ALTER TABLE clients ADD COLUMN ville_facturation TEXT")
-        except Exception:
-            pass
+        except Exception as e:
+            if "duplicate column" not in str(e):
+                print(f"[MIGRATION] échec inattendu (ligne ~1963) : {e}")
         try:
             conn.execute("ALTER TABLE clients ADD COLUMN province_facturation TEXT DEFAULT 'Québec'")
-        except Exception:
-            pass
+        except Exception as e:
+            if "duplicate column" not in str(e):
+                print(f"[MIGRATION] échec inattendu (ligne ~1967) : {e}")
         try:
             conn.execute("ALTER TABLE clients ADD COLUMN code_postal_facturation TEXT")
-        except Exception:
-            pass
+        except Exception as e:
+            if "duplicate column" not in str(e):
+                print(f"[MIGRATION] échec inattendu (ligne ~1971) : {e}")
         try:
             conn.execute("ALTER TABLE clients ADD COLUMN pays_facturation TEXT DEFAULT 'Canada'")
-        except Exception:
-            pass
+        except Exception as e:
+            if "duplicate column" not in str(e):
+                print(f"[MIGRATION] échec inattendu (ligne ~1975) : {e}")
         try:
             conn.execute("ALTER TABLE clients ADD COLUMN drive_folder_id TEXT")
-        except Exception:
-            pass
+        except Exception as e:
+            if "duplicate column" not in str(e):
+                print(f"[MIGRATION] échec inattendu (ligne ~1979) : {e}")
         try:
             conn.execute("ALTER TABLE clients ADD COLUMN factures_folder_id TEXT")
-        except Exception:
-            pass
+        except Exception as e:
+            if "duplicate column" not in str(e):
+                print(f"[MIGRATION] échec inattendu (ligne ~1983) : {e}")
         # Migration: pipeline CRM — statut de relation prospect→client sur clients
         try:
             conn.execute("ALTER TABLE clients ADD COLUMN statut_relation TEXT NOT NULL DEFAULT 'actif'")
-        except Exception:
-            pass
+        except Exception as e:
+            if "duplicate column" not in str(e):
+                print(f"[MIGRATION] échec inattendu (ligne ~1988) : {e}")
         try:
             conn.execute("ALTER TABLE clients ADD COLUMN prochain_suivi TEXT")
-        except Exception:
-            pass
+        except Exception as e:
+            if "duplicate column" not in str(e):
+                print(f"[MIGRATION] échec inattendu (ligne ~1992) : {e}")
         # Migration: champs fiche client CRM (onglet Aperçu — infos étendues)
         for _col in (
             "source_acquisition TEXT",
@@ -1950,8 +2020,9 @@ def init_db():
         ):
             try:
                 conn.execute(f"ALTER TABLE clients ADD COLUMN {_col}")
-            except Exception:
-                pass
+            except Exception as e:
+                if "duplicate column" not in str(e):
+                    print(f"[MIGRATION] échec inattendu (ligne ~2006) : {e}")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS client_notes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2006,14 +2077,14 @@ def init_db():
                 "ON transactions(id_facture) "
                 "WHERE type='revenu' AND source='facture' AND id_facture IS NOT NULL"
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[MIGRATION] échec inattendu (ligne ~2062) : {e}")
         # Backfill : matérialiser le revenu des factures déjà payées
         try:
             for _f in conn.execute("SELECT id FROM factures WHERE statut='payee'").fetchall():
                 materialiser_revenu_facture(conn, _f['id'])
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[MIGRATION] échec inattendu (ligne ~2068) : {e}")
         # Phase 2 — Intégrations externes (Square, Shopify) : jetons OAuth par organisation
         conn.execute("""
             CREATE TABLE IF NOT EXISTS integrations (
@@ -2037,16 +2108,16 @@ def init_db():
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_integrations_provider_org "
                 "ON integrations(provider, COALESCE(organisation_id, 0))"
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[MIGRATION] échec inattendu (ligne ~2093) : {e}")
         # Idempotence des revenus externes : un paiement source = une seule ligne
         try:
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_source_ref "
                 "ON transactions(source, source_ref) WHERE source_ref IS NOT NULL"
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[MIGRATION] échec inattendu (ligne ~2101) : {e}")
         # Appareils jumelés pour l'app de capture (/capture) : jeton par appareil,
         # rattaché au compte de l'abonné (user_id) — indépendant de la session CRM.
         conn.execute("""
@@ -2107,8 +2178,8 @@ def init_db():
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_avalider_source_ref "
                 "ON factures_a_valider(source, source_ref) WHERE source_ref IS NOT NULL"
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[MIGRATION] échec inattendu (ligne ~2163) : {e}")
         conn.commit()
     finally:
         conn.close()
@@ -2354,6 +2425,30 @@ def pigiste_required(f):
         if not session.get('pigiste_id'):
             return jsonify({'error': 'Non authentifié'}), 401
         return f(*args, **kwargs)
+    return wrap
+
+def outils_read_required(f):
+    """Lecture de la médiathèque/gabarits partagés (/api/v1/tools/*) : admin et pigiste
+    ont accès de par leur rôle (comme avant), un client doit avoir has_outils (accès payant)."""
+    @wraps(f)
+    def wrap(*args, **kwargs):
+        if not session.get('user_id') and not session.get('pigiste_id'):
+            return jsonify({'error': 'Non authentifié'}), 401
+        if session.get('is_admin') or session.get('pigiste_id') or session.get('has_outils'):
+            return f(*args, **kwargs)
+        return jsonify({'error': 'Accès Outils requis'}), 403
+    return wrap
+
+def outils_write_required(f):
+    """Écriture sur la médiathèque/gabarits partagés — réservée à user_id (admin ou client
+    avec has_outils), comme avant ; pigiste jamais autorisé à écrire ici (inchangé)."""
+    @wraps(f)
+    def wrap(*args, **kwargs):
+        if not session.get('user_id'):
+            return jsonify({'error': 'Non authentifié'}), 401
+        if session.get('is_admin') or session.get('has_outils'):
+            return f(*args, **kwargs)
+        return jsonify({'error': 'Accès Outils requis'}), 403
     return wrap
 
 import redis as _redis_mod
@@ -2736,6 +2831,7 @@ def api_login():
             session['is_admin'] = bool(user['is_admin'])
             session['has_outils'] = bool(user['has_outils'])
             session['has_entrainement'] = bool(user['has_entrainement']) if 'has_entrainement' in user.keys() else False
+            session['organisation_id'] = ORG_ID_DEFAUT
             force_pw = bool(user['must_change_password']) if 'must_change_password' in user.keys() else False
             return jsonify({
                 "success": True,
@@ -2760,6 +2856,7 @@ def api_login():
         session['pigiste_id'] = pigiste['id']
         session['pigiste_nom'] = pigiste['nom_complet']
         session['role'] = 'pigiste'
+        session['organisation_id'] = ORG_ID_DEFAUT
         return jsonify({
             "success": True,
             "user": {
@@ -2937,8 +3034,8 @@ def api_register():
                 html_confirm = _base_confirm(u['nom_complet'] if u else '', confirm_url)
                 send_email(email, "Confirmez votre compte — Cocktail Média",
                            f"Confirmez votre compte : {confirm_url}", html=html_confirm)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[MAIL] Renvoi confirmation échoué ({email}): {e}")
             return jsonify({"error": "Si cette adresse n'est pas encore utilisée, un courriel de confirmation vous sera envoyé.", "unconfirmed": True}), 400
         return jsonify({"error": "Si cette adresse n'est pas encore utilisée, un courriel de confirmation vous sera envoyé."}), 400
 
@@ -3023,8 +3120,8 @@ def api_dashboard():
             for row in iv_folders:
                 try:
                     share_folder_with_user(row['iv_folder_id'], client_row['email'])
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[DRIVE] Partage dossier IV échoué (client {user_id}, dossier {row['iv_folder_id']}): {e}")
         except Exception as _e:
             print(f"[DASHBOARD] Drive folder check/share échoué: {_e}")
 
@@ -3498,8 +3595,8 @@ def api_admin_delete_projet_logo(project_id, file_id):
     try:
         if row['filepath'] and os.path.exists(row['filepath']):
             os.remove(row['filepath'])
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[FICHIER] Suppression logo échouée ({row['filepath']}): {e}")
     return jsonify({'success': True})
 
 @app.route('/api/v1/projet/<int:project_id>/logo/<int:file_id>', methods=['GET'])
@@ -5091,8 +5188,10 @@ def api_admin_get_projets():
             GROUP BY ck.id_projet
         """).fetchall():
             chk[row['pid']] = (row['done'] or 0, row['total'] or 0)
-    except Exception:
-        pass
+    except Exception as e:
+        # Si cette agrégation échoue, toutes les barres de progression retombent à 0/0
+        # silencieusement (masque une régression de schéma) — audit sécurité 2026-07-20.
+        print(f"[CHECKLIST] Agrégation progression échouée : {e}")
     conn.close()
 
     # Progression : ratio de checklist si dispo, sinon repli sur le statut (PHASE_CONFIG)
@@ -6257,6 +6356,7 @@ def api_accept_invitation():
     session['is_admin'] = bool(user['is_admin'])
     session['has_outils'] = bool(user['has_outils']) if 'has_outils' in user.keys() else False
     session['has_entrainement'] = bool(user['has_entrainement']) if 'has_entrainement' in user.keys() else False
+    session['organisation_id'] = ORG_ID_DEFAUT
 
     # Emails bienvenue + notif admin : non-bloquants
     _nom = user['nom_complet']
@@ -6423,8 +6523,10 @@ def api_profile_upload_asset():
     if client and client['email']:
         try:
             share_folder_with_user(drive_folder_id, client['email'])
-        except Exception:
-            pass
+        except Exception as e:
+            # Si ce partage échoue, le client peut ne jamais recevoir accès à son propre
+            # dossier Drive sans que personne ne le sache — audit sécurité 2026-07-20.
+            print(f"[DRIVE] Partage dossier client échoué (client {user_id}): {e}")
 
     try:
         import tempfile
@@ -6638,6 +6740,7 @@ def login():
             session['user_id'] = user['id']
             session['user_name'] = user['nom_complet']
             session['is_admin'] = bool(user['is_admin'])
+            session['organisation_id'] = ORG_ID_DEFAUT
             return redirect(url_for('admin_dashboard' if session['is_admin'] else 'dashboard'))
 
         flash("Email ou mot de passe incorrect.", "error")
@@ -8007,7 +8110,7 @@ def edit_client(client_id):
         return redirect(url_for('admin_dashboard'))
     return render_template('edit_client.html', client=client)
 
-@app.route('/admin/delete_client/<int:client_id>')
+@app.route('/admin/delete_client/<int:client_id>', methods=['POST'])
 @admin_required
 def delete_client(client_id):
     conn = get_db_connection()
@@ -8086,7 +8189,7 @@ def edit_project(project_id):
         return redirect(url_for('admin_dashboard'))
     return render_template('edit_project.html', projet=projet, clients=clients)
 
-@app.route('/admin/delete_project/<int:project_id>')
+@app.route('/admin/delete_project/<int:project_id>', methods=['POST'])
 @admin_required
 def delete_project(project_id):
     conn = get_db_connection()
@@ -8147,7 +8250,7 @@ def add_service():
         conn.close()
     return redirect(url_for('admin_services'))
 
-@app.route('/admin/delete_service/<int:service_id>')
+@app.route('/admin/delete_service/<int:service_id>', methods=['POST'])
 @admin_required
 def delete_service(service_id):
     conn = get_db_connection()
@@ -8188,7 +8291,7 @@ def add_checklist_item(service_id):
     conn.close()
     return redirect(url_for('admin_services'))
 
-@app.route('/admin/delete_checklist_item/<int:item_id>')
+@app.route('/admin/delete_checklist_item/<int:item_id>', methods=['POST'])
 @admin_required
 def delete_checklist_item(item_id):
     conn = get_db_connection()
@@ -10626,8 +10729,8 @@ def api_admin_identite_logo(projet_id):
             if projet and projet['email']:
                 try:
                     share_folder_with_user(iv_folder_id, projet['email'])
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[DRIVE] Partage dossier IV échoué (projet {projet_id}): {e}")
         safe_name = f"logo_{variante}.{ext}"
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}')
         fichier.save(tmp.name)
@@ -12865,6 +12968,8 @@ def api_admin_facture_pigiste_detail(facture_id):
 def api_admin_facture_pigiste_payer(facture_id):
     conn = get_db_connection()
     conn.execute("UPDATE factures_pigiste SET statut='payée' WHERE id=?", (facture_id,))
+    # Facture pigiste payée → entre dans les dépenses (grand livre)
+    materialiser_depense_pigiste(conn, facture_id)
     conn.commit()
     conn.close()
     return jsonify({'ok': True})
@@ -13189,6 +13294,8 @@ def api_admin_factures_pigistes_payer(facture_id):
         conn.close()
         return jsonify({'error': 'Introuvable'}), 404
     conn.execute("UPDATE factures_pigiste SET statut='payée' WHERE id=?", (facture_id,))
+    # Facture pigiste payée → entre dans les dépenses (grand livre)
+    materialiser_depense_pigiste(conn, facture_id)
     conn.commit()
     conn.close()
     return jsonify({'ok': True, 'statut': 'payée'})
@@ -13218,9 +13325,8 @@ def _media_cat_folder(root_id, category):
     return create_folder(category, parent_id=root_id)
 
 @app.route('/api/v1/tools/assets', methods=['GET'])
+@outils_read_required
 def api_tools_assets():
-    if 'user_id' not in session and 'pigiste_id' not in session:
-        return jsonify({'error': 'Non authentifié'}), 401
     try:
         cat_filter = request.args.get('category')
         root_id = _mediatheque_root()
@@ -13243,9 +13349,8 @@ def api_tools_assets():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/v1/tools/upload', methods=['POST'])
+@outils_write_required
 def api_tools_upload():
-    if 'user_id' not in session:
-        return jsonify({'error': 'Non authentifié'}), 401
     try:
         file = request.files.get('file')
         category = request.form.get('category', 'photos')
@@ -13267,9 +13372,8 @@ def api_tools_upload():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/v1/tools/delete', methods=['DELETE'])
+@outils_write_required
 def api_tools_delete():
-    if 'user_id' not in session:
-        return jsonify({'error': 'Non authentifié'}), 401
     try:
         data = request.get_json(force=True)
         file_id = data.get('id')
@@ -13281,9 +13385,8 @@ def api_tools_delete():
         return jsonify({'error': str(e)}), 400
 
 @app.route('/api/v1/tools/file/<file_id>')
+@outils_read_required
 def api_tools_serve_file(file_id):
-    if 'user_id' not in session and 'pigiste_id' not in session:
-        return jsonify({'error': 'Non authentifié'}), 401
     try:
         meta    = get_file_meta(file_id)
         content = get_file_bytes(file_id)
@@ -14085,8 +14188,8 @@ def mediatech_admin_set_preview(gabarit_id):
         if row['preview_drive_id']:
             try:
                 delete_drive_file(row['preview_drive_id'])
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[DRIVE] Suppression ancienne preview échouée (gabarit {gabarit_id}): {e}")
         content = f.read()
         mimetype = f.content_type or 'image/jpeg'
         uploaded = upload_bytes(folder_id, f'_preview_{secure_filename(f.filename)}', content, mimetype)
@@ -14127,8 +14230,8 @@ def mediatech_dossier(gabarit_id):
                     'size': int(f.get('size') or 0),
                     'is_preview': f['id'] == row['preview_drive_id'],
                 })
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[DRIVE] Listage fichiers gabarit échoué (gabarit {gabarit_id}): {e}")
     return render_template('mediatech_dossier.html', gabarit=dict(row), fichiers=fichiers)
 
 @app.route('/gabarits/telecharger/<file_id>/<path:filename>')
@@ -14151,9 +14254,8 @@ def _gabarits_root():
     return create_folder('Gabarits', parent_id=_mediatheque_root())
 
 @app.route('/api/v1/tools/gabarits', methods=['GET'])
+@outils_read_required
 def api_gabarits_list():
-    if 'user_id' not in session and 'pigiste_id' not in session:
-        return jsonify({'error': 'Non authentifié'}), 401
     conn = get_db_connection()
     rows = conn.execute("SELECT * FROM mediatech_gabarits ORDER BY id ASC").fetchall()
     conn.close()
@@ -14169,16 +14271,16 @@ def api_gabarits_list():
     return jsonify({'gabarits': result})
 
 @app.route('/api/v1/tools/gabarits', methods=['POST'])
+@outils_write_required
 def api_gabarits_create():
-    if not session.get('user_id'):
-        return jsonify({'error': 'Non authentifié'}), 401
     nom = request.form.get('nom', '').strip()
     description = request.form.get('description', '').strip()
     if not nom:
         return jsonify({'error': 'Le nom est requis'}), 400
     try:
         drive_folder_id = create_folder(nom, parent_id=_gabarits_root())
-    except Exception:
+    except Exception as e:
+        print(f"[DRIVE] Création dossier gabarit échouée ({nom}): {e}")
         drive_folder_id = None
     conn = get_db_connection()
     conn.execute(
@@ -14199,16 +14301,15 @@ def api_gabarits_create():
                 conn.execute("UPDATE mediatech_gabarits SET preview_drive_id = ? WHERE id = ?",
                              (preview_drive_id, gabarit_id))
                 conn.commit()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[DRIVE] Upload preview gabarit échoué (gabarit {gabarit_id}): {e}")
     conn.close()
     return jsonify({'ok': True, 'id': gabarit_id, 'nom': nom,
                     'preview_url': f'/api/v1/tools/file/{preview_drive_id}' if preview_drive_id else None})
 
 @app.route('/api/v1/tools/gabarits/<int:gabarit_id>', methods=['DELETE'])
+@outils_write_required
 def api_gabarits_delete(gabarit_id):
-    if not session.get('user_id'):
-        return jsonify({'error': 'Non authentifié'}), 401
     conn = get_db_connection()
     conn.execute("DELETE FROM mediatech_gabarits WHERE id = ?", (gabarit_id,))
     conn.commit()
@@ -14216,9 +14317,8 @@ def api_gabarits_delete(gabarit_id):
     return jsonify({'ok': True})
 
 @app.route('/api/v1/tools/gabarits/<int:gabarit_id>/files', methods=['GET'])
+@outils_read_required
 def api_gabarits_files(gabarit_id):
-    if 'user_id' not in session and 'pigiste_id' not in session:
-        return jsonify({'error': 'Non authentifié'}), 401
     conn = get_db_connection()
     row = conn.execute("SELECT * FROM mediatech_gabarits WHERE id = ?", (gabarit_id,)).fetchone()
     conn.close()
@@ -14244,9 +14344,8 @@ def api_gabarits_files(gabarit_id):
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/v1/tools/gabarits/<int:gabarit_id>/files', methods=['POST'])
+@outils_write_required
 def api_gabarits_upload_file(gabarit_id):
-    if not session.get('user_id'):
-        return jsonify({'error': 'Non authentifié'}), 401
     conn = get_db_connection()
     row = conn.execute("SELECT * FROM mediatech_gabarits WHERE id = ?", (gabarit_id,)).fetchone()
     conn.close()
@@ -14272,9 +14371,8 @@ def api_gabarits_upload_file(gabarit_id):
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/v1/tools/gabarits/<int:gabarit_id>/files/<file_id>', methods=['DELETE'])
+@outils_write_required
 def api_gabarits_delete_file(gabarit_id, file_id):
-    if not session.get('user_id'):
-        return jsonify({'error': 'Non authentifié'}), 401
     try:
         delete_drive_file(file_id)
         conn = get_db_connection()
@@ -14288,9 +14386,8 @@ def api_gabarits_delete_file(gabarit_id, file_id):
         return jsonify({'error': str(e)}), 400
 
 @app.route('/api/v1/tools/gabarits/<int:gabarit_id>/preview', methods=['POST'])
+@outils_write_required
 def api_gabarits_set_preview(gabarit_id):
-    if not session.get('user_id'):
-        return jsonify({'error': 'Non authentifié'}), 401
     conn = get_db_connection()
     row = conn.execute("SELECT * FROM mediatech_gabarits WHERE id = ?", (gabarit_id,)).fetchone()
     conn.close()
@@ -14321,8 +14418,8 @@ def api_gabarits_set_preview(gabarit_id):
         if row['preview_drive_id']:
             try:
                 delete_drive_file(row['preview_drive_id'])
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[DRIVE] Suppression ancienne preview échouée (gabarit {gabarit_id}): {e}")
         content = file.read()
         mimetype = file.content_type or 'image/jpeg'
         uploaded = upload_bytes(folder_id, f'_preview_{secure_filename(file.filename)}', content, mimetype)
@@ -14372,10 +14469,9 @@ def api_tools_config():
     return jsonify({'error': 'Non authentifié'}), 401
 
 @app.route('/api/v1/admin/pigistes/<int:pigiste_id>/tools', methods=['GET'])
+@admin_required
 def api_admin_get_pigiste_tools(pigiste_id):
     import json as _json
-    if not session.get('user_id'):
-        return jsonify({'error': 'Non autorisé'}), 403
     conn = get_db_connection()
     row = conn.execute("SELECT tools_config FROM pigistes WHERE id = ?", (pigiste_id,)).fetchone()
     conn.close()
@@ -14390,10 +14486,9 @@ def api_admin_get_pigiste_tools(pigiste_id):
     return jsonify({'social': cfg.get('social', None), 'pdf': cfg.get('pdf', None)})
 
 @app.route('/api/v1/admin/pigistes/<int:pigiste_id>/tools', methods=['PUT'])
+@admin_required
 def api_admin_pigiste_tools(pigiste_id):
     import json as _json
-    if not session.get('user_id'):
-        return jsonify({'error': 'Non autorisé'}), 403
     data = request.get_json(force=True) or {}
     conn = get_db_connection()
     conn.execute("UPDATE pigistes SET tools_config = ? WHERE id = ?",
@@ -14404,13 +14499,21 @@ def api_admin_pigiste_tools(pigiste_id):
 
 
 def _current_doc_actor():
-    """Return (type, id, folder_id) for the current session user."""
+    """Return (type, id, folder_id) for the current session user, or (None, None, None)
+    si non autorisé. Un client non-admin doit avoir has_outils — sinon 'user_id' seul le
+    faisait passer pour 'admin' et lui donnait accès en lecture aux docs de tous les
+    pigistes (voir api_list_documents ci-dessous)."""
     if not session.get('user_id') and not session.get('pigiste_id'):
         return None, None, None
     root = os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID')
     gen_root = create_folder('Générateur de documents', parent_id=root)
     if session.get('user_id'):
-        return 'admin', session['user_id'], create_folder('admin', parent_id=gen_root)
+        if session.get('is_admin'):
+            return 'admin', session['user_id'], create_folder('admin', parent_id=gen_root)
+        if session.get('has_outils'):
+            cli_root = create_folder('clients', parent_id=gen_root)
+            return 'client', session['user_id'], create_folder(str(session['user_id']), parent_id=cli_root)
+        return None, None, None
     pid = session['pigiste_id']
     pig_root = create_folder('pigistes', parent_id=gen_root)
     return 'pigiste', pid, create_folder(str(pid), parent_id=pig_root)
@@ -16096,8 +16199,8 @@ def api_client_get_soumission(soumission_id):
                 conn.execute("UPDATE soumissions SET statut='expiree', updated_at=CURRENT_TIMESTAMP WHERE id=?", (soumission_id,))
                 conn.commit()
                 statut = 'expiree'
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[SOUMISSION] Vérification expiration échouée (id {soumission_id}): {e}")
 
     opts = conn.execute(
         "SELECT * FROM soumission_options WHERE id_soumission=? ORDER BY ordre, id",
@@ -16254,8 +16357,8 @@ def api_client_list_soumissions():
                 if exp < _dt.utcnow().date():
                     conn.execute("UPDATE soumissions SET statut='expiree', updated_at=CURRENT_TIMESTAMP WHERE id=?", (r['id'],))
                     row['statut'] = 'expiree'
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[SOUMISSION] Vérification expiration échouée (id {r['id']}): {e}")
         result.append(row)
     if any(r['statut'] == 'expiree' for r in result):
         conn.commit()
@@ -16663,6 +16766,7 @@ def api_admin_create_depense():
 @admin_required
 def api_admin_list_depenses():
     annee = request.args.get('annee', '').strip()
+    org_id = session.get('organisation_id', ORG_ID_DEFAUT)
     conn = get_db_connection()
     if annee:
         rows = conn.execute("""
@@ -16671,17 +16775,18 @@ def api_admin_list_depenses():
                    ligne_t2125, ligne_tp80
             FROM transactions
             WHERE type = 'depense' AND strftime('%Y', date_transaction) = ?
+              AND COALESCE(organisation_id, ?) = ?
             ORDER BY date_transaction DESC, id DESC
-        """, (annee,)).fetchall()
+        """, (annee, ORG_ID_DEFAUT, org_id)).fetchall()
     else:
         rows = conn.execute("""
             SELECT id, type, date_transaction, description, categorie,
                    montant_avant_taxes, montant_tps, montant_tvq, montant_total, source, created_at,
                    ligne_t2125, ligne_tp80
             FROM transactions
-            WHERE type = 'depense'
+            WHERE type = 'depense' AND COALESCE(organisation_id, ?) = ?
             ORDER BY date_transaction DESC, id DESC
-        """).fetchall()
+        """, (ORG_ID_DEFAUT, org_id)).fetchall()
     conn.close()
     return jsonify([{
         'id': r['id'],
@@ -16719,6 +16824,7 @@ def _row_revenu(r):
 @admin_required
 def api_admin_list_revenus():
     annee = request.args.get('annee', '').strip()
+    org_id = session.get('organisation_id', ORG_ID_DEFAUT)
     conn = get_db_connection()
     if annee:
         rows = conn.execute("""
@@ -16727,8 +16833,9 @@ def api_admin_list_revenus():
                    source, source_ref, id_facture, ligne_t2125, ligne_tp80
             FROM transactions
             WHERE type = 'revenu' AND strftime('%Y', date_transaction) = ?
+              AND COALESCE(organisation_id, ?) = ?
             ORDER BY date_transaction DESC, id DESC
-        """, (annee,)).fetchall()
+        """, (annee, ORG_ID_DEFAUT, org_id)).fetchall()
         attente = conn.execute("""
             SELECT COALESCE(SUM(f.total), 0) t, COUNT(*) n FROM factures f
             JOIN clients c ON c.id = f.id_client
@@ -16741,9 +16848,9 @@ def api_admin_list_revenus():
                    montant_avant_taxes, montant_tps, montant_tvq, montant_total,
                    source, source_ref, id_facture, ligne_t2125, ligne_tp80
             FROM transactions
-            WHERE type = 'revenu'
+            WHERE type = 'revenu' AND COALESCE(organisation_id, ?) = ?
             ORDER BY date_transaction DESC, id DESC
-        """).fetchall()
+        """, (ORG_ID_DEFAUT, org_id)).fetchall()
         attente = conn.execute("""
             SELECT COALESCE(SUM(f.total), 0) t, COUNT(*) n FROM factures f
             JOIN clients c ON c.id = f.id_client
@@ -17416,23 +17523,28 @@ def deposer_facture_a_valider(fields, source, source_ref=None, expediteur=None, 
 @app.route('/api/v1/admin/factures-a-valider', methods=['GET'])
 @admin_required
 def api_admin_list_a_valider():
+    org_id = session.get('organisation_id', ORG_ID_DEFAUT)
     conn = get_db_connection()
     rows = conn.execute("""
         SELECT id, source, source_ref, sens, expediteur, date_transaction, fournisseur,
                description, categorie, montant_avant_taxes, montant_tps, montant_tvq,
                montant_total, piece_jointe, confiance, note, created_at
         FROM factures_a_valider
-        WHERE statut = 'en_attente'
+        WHERE statut = 'en_attente' AND COALESCE(organisation_id, ?) = ?
         ORDER BY created_at DESC, id DESC
-    """).fetchall()
+    """, (ORG_ID_DEFAUT, org_id)).fetchall()
     conn.close()
     return jsonify({'items': [dict(r) for r in rows], 'count': len(rows)})
 
 @app.route('/api/v1/admin/factures-a-valider/count', methods=['GET'])
 @admin_required
 def api_admin_count_a_valider():
+    org_id = session.get('organisation_id', ORG_ID_DEFAUT)
     conn = get_db_connection()
-    n = conn.execute("SELECT COUNT(*) FROM factures_a_valider WHERE statut = 'en_attente'").fetchone()[0]
+    n = conn.execute(
+        "SELECT COUNT(*) FROM factures_a_valider WHERE statut = 'en_attente' AND COALESCE(organisation_id, ?) = ?",
+        (ORG_ID_DEFAUT, org_id)
+    ).fetchone()[0]
     conn.close()
     return jsonify({'count': n})
 
@@ -17507,7 +17619,9 @@ def api_gmail_status():
     conn = get_db_connection()
     row = conn.execute(
         "SELECT merchant_id, last_sync_at FROM integrations "
-        "WHERE provider = 'gmail' AND statut = 'actif' ORDER BY id DESC LIMIT 1"
+        "WHERE provider = 'gmail' AND statut = 'actif' AND COALESCE(organisation_id, ?) = ? "
+        "ORDER BY id DESC LIMIT 1",
+        (ORG_ID_DEFAUT, session.get('organisation_id', ORG_ID_DEFAUT))
     ).fetchone()
     conn.close()
     return jsonify({
@@ -17554,20 +17668,26 @@ def api_gmail_callback():
         refresh = tok.get('refresh_token')
         if not refresh:
             return redirect(f"{PORTAIL_URL}/admin/comptabilite/a-valider?gmail=sansjeton")
-        # Adresse de la boîte connectée (pour affichage + exclusion des propres envois)
+        # Adresse de la boîte connectée (pour affichage + exclusion des propres envois —
+        # si cet appel échoue, le garde-fou anti-boucle de sync_gmail_factures est dégradé).
         email_compte = ''
         try:
             import gmail_service
             email_compte = gmail_service.profil_email(gmail_service.build_gmail(refresh))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[GMAIL] Récupération email du compte échouée : {e}")
         conn = get_db_connection()
-        # une seule intégration Gmail active par organisation (ici org NULL = compte actuel)
-        conn.execute("UPDATE integrations SET statut = 'revoque' WHERE provider = 'gmail' AND COALESCE(organisation_id,0) = 0")
+        org_id = session.get('organisation_id', ORG_ID_DEFAUT)
+        # une seule intégration Gmail active par organisation
+        conn.execute(
+            "UPDATE integrations SET statut = 'revoque' "
+            "WHERE provider = 'gmail' AND COALESCE(organisation_id, ?) = ?",
+            (ORG_ID_DEFAUT, org_id)
+        )
         conn.execute(
             "INSERT INTO integrations (organisation_id, provider, merchant_id, refresh_token, scopes, statut) "
             "VALUES (?, 'gmail', ?, ?, ?, 'actif')",
-            (session.get('organisation_id'), email_compte, refresh, GMAIL_OAUTH_SCOPE)
+            (org_id, email_compte, refresh, GMAIL_OAUTH_SCOPE)
         )
         conn.commit()
         conn.close()
@@ -17580,7 +17700,11 @@ def api_gmail_callback():
 @admin_required
 def api_gmail_disconnect():
     conn = get_db_connection()
-    conn.execute("UPDATE integrations SET statut = 'revoque' WHERE provider = 'gmail' AND statut = 'actif'")
+    conn.execute(
+        "UPDATE integrations SET statut = 'revoque' "
+        "WHERE provider = 'gmail' AND statut = 'actif' AND COALESCE(organisation_id, ?) = ?",
+        (ORG_ID_DEFAUT, session.get('organisation_id', ORG_ID_DEFAUT))
+    )
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -17604,8 +17728,11 @@ def sync_gmail_factures(app_ref=None):
     except Exception as e:
         return {'error': f"Module Gmail indisponible : {e}"}
     conn = get_db_connection()
+    # Hors contexte de requête (job planifié) : pas de session, ORG_ID_DEFAUT directement.
     integ = conn.execute(
-        "SELECT * FROM integrations WHERE provider = 'gmail' AND statut = 'actif' ORDER BY id DESC LIMIT 1"
+        "SELECT * FROM integrations WHERE provider = 'gmail' AND statut = 'actif' "
+        "AND COALESCE(organisation_id, ?) = ? ORDER BY id DESC LIMIT 1",
+        (ORG_ID_DEFAUT, ORG_ID_DEFAUT)
     ).fetchone()
     if not integ:
         conn.close()
@@ -17682,7 +17809,9 @@ def sync_gmail_factures(app_ref=None):
     print(f"[GMAIL] sync: +{ajoutes} à valider, {doublons} doublons, {ignores} ignorés, {erreurs} erreurs")
     return {'ajoutes': ajoutes, 'doublons': doublons, 'ignores': ignores, 'erreurs': erreurs}
 
-def _calculer_bilan(annee, mois):
+def _calculer_bilan(annee, mois, org_id=None):
+    if org_id is None:
+        org_id = session.get('organisation_id', ORG_ID_DEFAUT)
     if mois:
         like_periode = f"{annee}-{mois.zfill(2)}"
         where_date = "strftime('%Y-%m', date_transaction) = ?"
@@ -17704,8 +17833,8 @@ def _calculer_bilan(annee, mois):
                 COALESCE(SUM(montant_total),0)       AS total,
                 COUNT(*)                             AS nb
             FROM transactions
-            WHERE type = ? AND {where_date}
-        """, (type_tx, param_date)).fetchone()
+            WHERE type = ? AND {where_date} AND COALESCE(organisation_id, ?) = ?
+        """, (type_tx, param_date, ORG_ID_DEFAUT, org_id)).fetchone()
         return {
             'avant_taxes': round(row['avant_taxes'], 2),
             'tps': round(row['tps'], 2),
@@ -17725,10 +17854,10 @@ def _calculer_bilan(annee, mois):
                 COALESCE(SUM(montant_avant_taxes),0) AS total,
                 COUNT(*) AS nb
             FROM transactions
-            WHERE type = ? AND {where_date}
+            WHERE type = ? AND {where_date} AND COALESCE(organisation_id, ?) = ?
             GROUP BY categorie
             ORDER BY total DESC
-        """, (type_tx, param_date)).fetchall()
+        """, (type_tx, param_date, ORG_ID_DEFAUT, org_id)).fetchall()
         return [{
             'categorie': r['categorie'],
             'ligne_t2125': r['ligne_t2125'] or '',
@@ -18296,7 +18425,14 @@ def api_mon_site_collection_item(doc_type, doc_id):
     return jsonify({'success': True})
 
 # Exempter toutes les routes /api/v1/ du CSRF — endpoints JSON appelés par Next.js,
-# protégés par la politique CORS (origins restreintes) et non par formulaires HTML.
+# sans formulaire HTML donc sans jeton csrf_token() disponible côté client.
+# La vraie protection contre le CSRF ici vient de SESSION_COOKIE_SAMESITE="Lax" (voir plus
+# haut) : un navigateur n'envoie pas le cookie de session sur une requête cross-site.
+# ATTENTION : CORS (origins restreintes) ne protège PAS contre le CSRF — CORS bloque la
+# LECTURE cross-site d'une réponse en JS, jamais l'ENVOI d'une requête authentifiée par
+# cookie. Ne pas ajouter de route POST/PUT/DELETE à effet de bord sous /api/v1/ sans
+# vérifier que SameSite=Lax suffit encore (ex. si un client web tiers doit un jour appeler
+# ces routes en cross-site, il faudra un vrai jeton CSRF ou un Bearer token).
 for _rule in app.url_map.iter_rules():
     if _rule.rule.startswith('/api/v1/'):
         _view = app.view_functions.get(_rule.endpoint)
