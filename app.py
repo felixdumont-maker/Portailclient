@@ -4,6 +4,31 @@ import re
 import math
 import json
 import sqlite3
+import psycopg
+
+
+class _HybridRow(dict):
+    """Row psycopg qui supporte l'accès positionnel (row[0]) ET par nom (row['col']),
+    comme sqlite3.Row — le code existant utilise les deux styles partout (21+ sites
+    connus rien que pour .fetchone()[0]), corriger site par site serait plus risqué
+    que de reproduire fidèlement le comportement dont le code a été écrit."""
+    __slots__ = ('_values',)
+
+    def __init__(self, names, values):
+        super().__init__(zip(names, values))
+        self._values = values
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._values[key]
+        return super().__getitem__(key)
+
+
+def _hybrid_row_factory(cursor):
+    def make_row(values):
+        names = [c.name for c in cursor.description]
+        return _HybridRow(names, values)
+    return make_row
 import pathlib
 import uuid
 import secrets
@@ -155,6 +180,11 @@ class Config:
     MAIL_USERNAME = os.getenv("MAIL_USERNAME", "")
     MAIL_PASSWORD = os.getenv("MAIL_PASSWORD", "")
     MAIL_DEFAULT_SENDER = os.getenv("MAIL_DEFAULT_SENDER", os.getenv("MAIL_USERNAME", ""))
+    # ── Copie de test étape 5/7 (migration Postgres) — suppression réelle par défaut,
+    # levée UNIQUEMENT si MAIL_SUPPRESS_SEND=false est explicitement dans l'.env (VPS,
+    # test étape 7 autorisé le 2026-07-20). Même si levée, ENVOI_TEST_ALLOWLIST plus
+    # bas dans send_email() bloque tout destinataire autre que felixrbk@gmail.com.
+    MAIL_SUPPRESS_SEND = os.getenv("MAIL_SUPPRESS_SEND", "true").strip().lower() != "false"
 
     GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
     GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
@@ -186,7 +216,7 @@ limiter = Limiter(
     get_remote_address,
     app=app,
     default_limits=[],
-    storage_uri="redis://redis:6379",
+    storage_uri=os.getenv("REDIS_URL", "redis://127.0.0.1:6380"),
 )
 
 @app.errorhandler(429)
@@ -248,19 +278,19 @@ def oauth_google_callback():
         return redirect(url_for("accueil"))
 
     conn = get_db_connection()
-    user = conn.execute("SELECT * FROM clients WHERE email = ?", (email,)).fetchone()
+    user = conn.execute("SELECT * FROM clients WHERE email = %s", (email,)).fetchone()
     if not user:
         conn.execute("""
             INSERT INTO clients (nom_complet, email, auth_provider, is_email_confirmed, is_admin)
-            VALUES (?, ?, 'google', 1, 0)
-        """, (nom or email.split("@")[0], email))
+            VALUES (%s, %s, 'google', 1, 0)
+         RETURNING id""", (nom or email.split("@")[0], email))
         conn.commit()
-        user = conn.execute("SELECT * FROM clients WHERE email = ?", (email,)).fetchone()
+        user = conn.execute("SELECT * FROM clients WHERE email = %s", (email,)).fetchone()
     elif not int(user['is_email_confirmed'] or 0):
         # Google a vérifié l'email — on peut confirmer le compte
-        conn.execute("UPDATE clients SET is_email_confirmed = 1 WHERE id = ?", (user['id'],))
+        conn.execute("UPDATE clients SET is_email_confirmed = 1 WHERE id = %s", (user['id'],))
         conn.commit()
-        user = conn.execute("SELECT * FROM clients WHERE id = ?", (user['id'],)).fetchone()
+        user = conn.execute("SELECT * FROM clients WHERE id = %s", (user['id'],)).fetchone()
     conn.close()
 
     session.permanent = True
@@ -278,11 +308,33 @@ def oauth_google_callback():
 # ───────────────────────────────────────────────────────────
 # DB helpers
 # ───────────────────────────────────────────────────────────
+# Configurable par environnement (ThinkCentre pg-dev vs VPS) — jamais de chemin/port
+# codé en dur, sinon le même code casse silencieusement d'un environnement à l'autre.
+PG_DSN = os.getenv("DATABASE_URL") or (
+    f"host={os.getenv('PGHOST', '127.0.0.1')} "
+    f"port={os.getenv('PGPORT', '5433')} "
+    f"dbname={os.getenv('PGDATABASE', 'cocktailos_dev')} "
+    f"user={os.getenv('PGUSER', 'cocktailos_app')} "
+    f"password={os.getenv('PGPASSWORD', '')}"
+)
+if not os.getenv("PGPASSWORD") and not os.getenv("DATABASE_URL"):
+    # Repli développement local (ThinkCentre) : mot de passe pg-dev déjà généré sur
+    # cette machine, jamais présent sur le VPS (qui doit fournir PGPASSWORD/.env).
+    with open("/root/.pg_cocktailos_app_password") as _f:
+        PG_DSN += _f.read().strip()
+
 def get_db_connection():
-    # isolation_level=None = autocommit — conn.commit() est no-op, chaque stmt s'auto-commit
-    conn = sqlite3.connect(app.config["DB_PATH"], timeout=10, isolation_level=None)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON;")
+    """Étape 5 (test) — Postgres au lieu de SQLite. autocommit=True pour préserver
+    exactement le comportement SQLite existant (isolation_level=None : chaque
+    instruction s'auto-commit, les conn.commit() du reste du code sont des no-op).
+    Connexion neuve par appel (pas de pool) — même pattern que sqlite3.connect() ici,
+    conn.close() ferme réellement (pas de vrai pool à gérer, risque minimal)."""
+    conn = psycopg.connect(PG_DSN, autocommit=True, row_factory=_hybrid_row_factory)
+    from flask import has_request_context
+    org_id = session.get('organisation_id', ORG_ID_DEFAUT) if has_request_context() else ORG_ID_DEFAUT
+    # SET ne prend pas de paramètre lié en Postgres ("syntax error near $1") — set_config()
+    # est la fonction équivalente qui, elle, accepte un vrai paramètre.
+    conn.execute("SELECT set_config('app.org_id', %s, false)", (str(org_id),))
     return conn
 
 # Mono-tenant aujourd'hui : aucune table `organisations` n'existe encore, `clients` n'a pas
@@ -336,16 +388,16 @@ CATEGORIES_REVENUS = list(LIGNES_FISCALES_REVENUS.keys())
 def materialiser_revenu_facture(conn, facture_id, date_paiement=None):
     """Crée ou met à jour la ligne de revenu du grand livre liée à une facture payée.
     Idempotent : une facture = au plus une ligne revenu (source='facture')."""
-    f = conn.execute("SELECT * FROM factures WHERE id = ?", (facture_id,)).fetchone()
+    f = conn.execute("SELECT * FROM factures WHERE id = %s", (facture_id,)).fetchone()
     if not f:
         return
     cli = conn.execute(
-        "SELECT nom_entreprise, nom_complet, is_test_client FROM clients WHERE id = ?", (f['id_client'],)
+        "SELECT nom_entreprise, nom_complet, is_test_client FROM clients WHERE id = %s", (f['id_client'],)
     ).fetchone()
     if cli and int(cli['is_test_client'] or 0):
         # Client de test : jamais comptabilisé dans le grand livre (revenus/bilan/taxes).
         conn.execute(
-            "DELETE FROM transactions WHERE type='revenu' AND source='facture' AND id_facture = ?",
+            "DELETE FROM transactions WHERE type='revenu' AND source='facture' AND id_facture = %s",
             (facture_id,)
         )
         return
@@ -356,15 +408,15 @@ def materialiser_revenu_facture(conn, facture_id, date_paiement=None):
     cat = 'Ventes et honoraires professionnels'
     lg = LIGNES_FISCALES_REVENUS[cat]
     existing = conn.execute(
-        "SELECT id FROM transactions WHERE type='revenu' AND source='facture' AND id_facture = ?",
+        "SELECT id FROM transactions WHERE type='revenu' AND source='facture' AND id_facture = %s",
         (facture_id,)
     ).fetchone()
     if existing:
         conn.execute("""
-            UPDATE transactions SET date_transaction=?, description=?, categorie=?,
-                montant_avant_taxes=?, montant_tps=?, montant_tvq=?, montant_total=?,
-                ligne_t2125=?, ligne_tp80=?
-            WHERE id=?
+            UPDATE transactions SET date_transaction=%s, description=%s, categorie=%s,
+                montant_avant_taxes=%s, montant_tps=%s, montant_tvq=%s, montant_total=%s,
+                ligne_t2125=%s, ligne_tp80=%s
+            WHERE id=%s
         """, (date_rev, description, cat, f['sous_total'] or 0, f['tps'] or 0,
               f['tvq'] or 0, f['total'] or 0, lg['t2125'], lg['tp80'], existing['id']))
     else:
@@ -373,25 +425,25 @@ def materialiser_revenu_facture(conn, facture_id, date_paiement=None):
                 (type, date_transaction, description, categorie,
                  montant_avant_taxes, montant_tps, montant_tvq, montant_total,
                  source, id_facture, ligne_t2125, ligne_tp80)
-            VALUES ('revenu', ?, ?, ?, ?, ?, ?, ?, 'facture', ?, ?, ?)
-        """, (date_rev, description, cat, f['sous_total'] or 0, f['tps'] or 0,
+            VALUES ('revenu', %s, %s, %s, %s, %s, %s, %s, 'facture', %s, %s, %s)
+         RETURNING id""", (date_rev, description, cat, f['sous_total'] or 0, f['tps'] or 0,
               f['tvq'] or 0, f['total'] or 0, facture_id, lg['t2125'], lg['tp80']))
 
 def supprimer_revenu_facture(conn, facture_id):
     """Retire la ligne revenu liée à une facture (décochée payée, annulée ou supprimée)."""
     conn.execute(
-        "DELETE FROM transactions WHERE type='revenu' AND source='facture' AND id_facture = ?",
+        "DELETE FROM transactions WHERE type='revenu' AND source='facture' AND id_facture = %s",
         (facture_id,)
     )
 
 def materialiser_depense_pigiste(conn, facture_pigiste_id, date_paiement=None):
     """Crée ou met à jour la ligne de dépense du grand livre liée à une facture pigiste payée.
     Idempotent : une facture pigiste = au plus une ligne dépense (source='facture_pigiste')."""
-    f = conn.execute("SELECT * FROM factures_pigiste WHERE id = ?", (facture_pigiste_id,)).fetchone()
+    f = conn.execute("SELECT * FROM factures_pigiste WHERE id = %s", (facture_pigiste_id,)).fetchone()
     if not f:
         return
     pig = conn.execute(
-        "SELECT nom_complet FROM pigistes WHERE id = ?", (f['id_pigiste'],)
+        "SELECT nom_complet FROM pigistes WHERE id = %s", (f['id_pigiste'],)
     ).fetchone()
     nom_pigiste = (pig['nom_complet'] if pig else '').strip()
     date_dep = date_paiement or datetime.now().strftime('%Y-%m-%d')
@@ -400,15 +452,15 @@ def materialiser_depense_pigiste(conn, facture_pigiste_id, date_paiement=None):
     lg = LIGNES_FISCALES[cat]
     source_ref = str(facture_pigiste_id)
     existing = conn.execute(
-        "SELECT id FROM transactions WHERE type='depense' AND source='facture_pigiste' AND source_ref = ?",
+        "SELECT id FROM transactions WHERE type='depense' AND source='facture_pigiste' AND source_ref = %s",
         (source_ref,)
     ).fetchone()
     if existing:
         conn.execute("""
-            UPDATE transactions SET date_transaction=?, description=?, categorie=?,
-                montant_avant_taxes=?, montant_tps=?, montant_tvq=?, montant_total=?,
-                ligne_t2125=?, ligne_tp80=?
-            WHERE id=?
+            UPDATE transactions SET date_transaction=%s, description=%s, categorie=%s,
+                montant_avant_taxes=%s, montant_tps=%s, montant_tvq=%s, montant_total=%s,
+                ligne_t2125=%s, ligne_tp80=%s
+            WHERE id=%s
         """, (date_dep, description, cat, f['montant_ht'] or 0, f['tps'] or 0,
               f['tvq'] or 0, f['montant_total'] or 0, lg['t2125'], lg['tp80'], existing['id']))
     else:
@@ -417,14 +469,14 @@ def materialiser_depense_pigiste(conn, facture_pigiste_id, date_paiement=None):
                 (type, date_transaction, description, categorie,
                  montant_avant_taxes, montant_tps, montant_tvq, montant_total,
                  source, source_ref, ligne_t2125, ligne_tp80)
-            VALUES ('depense', ?, ?, ?, ?, ?, ?, ?, 'facture_pigiste', ?, ?, ?)
-        """, (date_dep, description, cat, f['montant_ht'] or 0, f['tps'] or 0,
+            VALUES ('depense', %s, %s, %s, %s, %s, %s, %s, 'facture_pigiste', %s, %s, %s)
+         RETURNING id""", (date_dep, description, cat, f['montant_ht'] or 0, f['tps'] or 0,
               f['tvq'] or 0, f['montant_total'] or 0, source_ref, lg['t2125'], lg['tp80']))
 
 def supprimer_depense_pigiste(conn, facture_pigiste_id):
     """Retire la ligne dépense liée à une facture pigiste (dépayée, annulée ou supprimée)."""
     conn.execute(
-        "DELETE FROM transactions WHERE type='depense' AND source='facture_pigiste' AND source_ref = ?",
+        "DELETE FROM transactions WHERE type='depense' AND source='facture_pigiste' AND source_ref = %s",
         (str(facture_pigiste_id),)
     )
 
@@ -469,15 +521,15 @@ def enregistrer_revenu_square(conn, payment, order=None, organisation_id=None):
     description = f"Vente Square {pid[-8:]}"
     lg = LIGNES_FISCALES_REVENUS['Ventes et honoraires professionnels']
     existing = conn.execute(
-        "SELECT id FROM transactions WHERE type='revenu' AND source='square' AND source_ref = ?",
+        "SELECT id FROM transactions WHERE type='revenu' AND source='square' AND source_ref = %s",
         (pid,)
     ).fetchone()
     if existing:
         conn.execute("""
-            UPDATE transactions SET date_transaction=?, description=?,
-                montant_avant_taxes=?, montant_tps=?, montant_tvq=?, montant_total=?,
-                organisation_id=?, ligne_t2125=?, ligne_tp80=?
-            WHERE id=?
+            UPDATE transactions SET date_transaction=%s, description=%s,
+                montant_avant_taxes=%s, montant_tps=%s, montant_tvq=%s, montant_total=%s,
+                organisation_id=%s, ligne_t2125=%s, ligne_tp80=%s
+            WHERE id=%s
         """, (date_rev, description, avant, tps, tvq, total, organisation_id,
               lg['t2125'], lg['tp80'], existing['id']))
         return existing['id']
@@ -486,11 +538,11 @@ def enregistrer_revenu_square(conn, payment, order=None, organisation_id=None):
             (organisation_id, type, date_transaction, description, categorie,
              montant_avant_taxes, montant_tps, montant_tvq, montant_total,
              source, source_ref, ligne_t2125, ligne_tp80)
-        VALUES (?, 'revenu', ?, ?, 'Ventes et honoraires professionnels',
-                ?, ?, ?, ?, 'square', ?, ?, ?)
-    """, (organisation_id, date_rev, description, avant, tps, tvq, total,
+        VALUES (%s, 'revenu', %s, %s, 'Ventes et honoraires professionnels',
+                %s, %s, %s, %s, 'square', %s, %s, %s)
+     RETURNING id""", (organisation_id, date_rev, description, avant, tps, tvq, total,
           pid, lg['t2125'], lg['tp80']))
-    return cur.lastrowid
+    return cur.fetchone()['id']
 
 # ───────────────────────────────────────────────────────────
 # Analyse de reçus par photo (LLM vision) — extraction + classement.
@@ -1126,14 +1178,14 @@ def init_db():
             conn.execute("""
                 INSERT INTO notification_settings (id, admin_emails, client_updates, admin_updates)
                 VALUES (1, '', 1, 1)
-            """)
+             RETURNING id""")
         # Seed défaut parametres_facturation (id=1) si absent
         row_param = conn.execute("SELECT 1 FROM parametres_facturation WHERE id = 1").fetchone()
         if not row_param:
             conn.execute("""
                 INSERT INTO parametres_facturation (id, charge_taxes, neq, numero_tps, numero_tvq)
                 VALUES (1, 0, '', '', '')
-            """)
+             RETURNING id""")
         # Migration additive : branding (nom entreprise + couleur) sur parametres_facturation
         for col, ddl in [
             ('nom_entreprise', "ALTER TABLE parametres_facturation ADD COLUMN nom_entreprise TEXT DEFAULT ''"),
@@ -1513,7 +1565,7 @@ def init_db():
         ]
         for _svc in _SERVICES_SEED:
             _existing = conn.execute(
-                "SELECT 1 FROM services WHERE lower(nom_service) = lower(?)", (_svc['nom_service'],)
+                "SELECT 1 FROM services WHERE lower(nom_service) = lower(%s)", (_svc['nom_service'],)
             ).fetchone()
             if _existing:
                 continue
@@ -1523,19 +1575,19 @@ def init_db():
                     appel_exploratoire_requis, decision_board_requis, duree_seance_minutes,
                     duree_tournage_minutes, duree_production_minutes, duree_finalisation_minutes,
                     slug, categorie, actif, duree_affichee)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1, %s) RETURNING id""",
                 (_svc['nom_service'], _svc['description'], _svc['icon'], _svc['prix'],
                  _svc['localisation_requise'], _svc['documents_requis'], _svc['appel_exploratoire_requis'],
                  _svc['decision_board_requis'], _svc['duree_seance_minutes'], _svc['duree_tournage_minutes'],
                  _svc['duree_production_minutes'], _svc['duree_finalisation_minutes'], _svc['slug'],
                  _svc['categorie'], _svc['duree_affichee']),
             )
-            _service_id = _cur.lastrowid
+            _service_id = _cur.fetchone()['id']
             for _idx, _item in enumerate(_svc['items']):
                 conn.execute(
                     """INSERT INTO checklist_model_items
                        (id_service, nom_item, requires_file, is_required, item_type, file_category, field_type, position)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
                     (_service_id, _item['nom_item'], _item['requires_file'], _item['is_required'],
                      _item['item_type'], _item['file_category'], _item['field_type'], _idx),
                 )
@@ -1667,15 +1719,17 @@ def init_db():
         except Exception as e:
             print(f"[MIGRATION] échec inattendu (ligne ~1667) : {e}")
         # Backfill unique : copie assigne_admin_id existant vers les tables de jonction
-        # (idempotent — INSERT OR IGNORE sur la PK composite)
+        # (idempotent — ON CONFLICT DO NOTHING sur la PK composite)
         try:
             conn.execute("""
-                INSERT OR IGNORE INTO todo_assignees (todo_id, admin_id)
+                INSERT INTO todo_assignees (todo_id, admin_id)
                 SELECT id, assigne_admin_id FROM todos_perso WHERE assigne_admin_id IS NOT NULL
+                ON CONFLICT (todo_id, admin_id) DO NOTHING
             """)
             conn.execute("""
-                INSERT OR IGNORE INTO roadmap_todo_assignees (roadmap_todo_id, admin_id)
+                INSERT INTO roadmap_todo_assignees (roadmap_todo_id, admin_id)
                 SELECT id, assigne_admin_id FROM roadmap_todos WHERE assigne_admin_id IS NOT NULL
+                ON CONFLICT (roadmap_todo_id, admin_id) DO NOTHING
             """)
             conn.commit()
         except Exception as e:
@@ -1742,7 +1796,7 @@ def init_db():
                 _vid = _vitrine_svc['id']
                 # Items morts : aucun slot d'asset ne les consomme (confirmé sur des projets réels)
                 conn.execute(
-                    "DELETE FROM checklist_model_items WHERE id_service = ? AND nom_item IN ('Logo 2', 'Logo 2-2')",
+                    "DELETE FROM checklist_model_items WHERE id_service = %s AND nom_item IN ('Logo 2', 'Logo 2-2')",
                     (_vid,)
                 )
                 # content_key sur les items existants — gabarit (checklist_model_items) ET
@@ -1766,24 +1820,24 @@ def init_db():
                 }
                 for _nom, _key in _CONTENT_KEY_MAP.items():
                     conn.execute(
-                        "UPDATE checklist_model_items SET content_key = ? WHERE id_service = ? AND nom_item = ?",
+                        "UPDATE checklist_model_items SET content_key = %s WHERE id_service = %s AND nom_item = %s",
                         (_key, _vid, _nom)
                     )
                     conn.execute(
-                        """UPDATE checklist_items SET content_key = ?
-                           WHERE nom_item = ? AND id_checklist IN (
+                        """UPDATE checklist_items SET content_key = %s
+                           WHERE nom_item = %s AND id_checklist IN (
                                SELECT ck.id FROM checklistes ck JOIN projets p ON p.id = ck.id_projet
-                               WHERE p.id_service = ?
+                               WHERE p.id_service = %s
                            )""",
                         (_key, _nom, _vid)
                     )
                 # Nouveaux items réseaux sociaux — absents jusqu'ici, alors que le prefill de
                 # création de site essaie déjà de les lire depuis la checklist.
                 _existing_names = {r['nom_item'] for r in conn.execute(
-                    "SELECT nom_item FROM checklist_model_items WHERE id_service = ?", (_vid,)
+                    "SELECT nom_item FROM checklist_model_items WHERE id_service = %s", (_vid,)
                 ).fetchall()}
                 _pos = conn.execute(
-                    "SELECT COALESCE(MAX(position), 0) AS m FROM checklist_model_items WHERE id_service = ?", (_vid,)
+                    "SELECT COALESCE(MAX(position), 0) AS m FROM checklist_model_items WHERE id_service = %s", (_vid,)
                 ).fetchone()['m']
                 for _label, _key in (
                     ('Instagram', 'siteSettings.instagram'),
@@ -1795,7 +1849,7 @@ def init_db():
                         conn.execute(
                             """INSERT INTO checklist_model_items
                                (id_service, nom_item, requires_file, is_required, item_type, file_category, field_type, position, content_key)
-                               VALUES (?, ?, 0, 0, 'document', 'donnees', 'text', ?, ?)""",
+                               VALUES (%s, %s, 0, 0, 'document', 'donnees', 'text', %s, %s) RETURNING id""",
                             (_vid, _label, _pos, _key)
                         )
         except Exception:
@@ -2054,8 +2108,8 @@ def init_db():
         # Backfill des dépenses existantes selon leur catégorie
         for _cat, _lignes in LIGNES_FISCALES.items():
             conn.execute(
-                "UPDATE transactions SET ligne_t2125 = ?, ligne_tp80 = ? "
-                "WHERE type = 'depense' AND categorie = ? "
+                "UPDATE transactions SET ligne_t2125 = %s, ligne_tp80 = %s "
+                "WHERE type = 'depense' AND categorie = %s "
                 "AND (ligne_t2125 IS NULL OR ligne_tp80 IS NULL)",
                 (_lignes['t2125'], _lignes['tp80'], _cat)
             )
@@ -2185,7 +2239,10 @@ def init_db():
         conn.close()
 
 # Initialisation DB au démarrage du processus (Flask 3.x n'a plus before_first_request)
-init_db()
+# Copie de test étape 5 (Postgres) : schéma déjà créé et testé via migration_postgres.sql
+# + rls_setup.sql sur pg-dev — init_db() est un bootstrapping SQLite (DDL, PRAGMA,
+# datetime('now')) qui ne s'applique plus, on ne l'appelle pas ici.
+# init_db()
 
 
 def log_activite(conn, client_id, type_, titre, meta=None):
@@ -2193,7 +2250,7 @@ def log_activite(conn, client_id, type_, titre, meta=None):
     N'échoue jamais le flux appelant : encapsulé en try/except."""
     try:
         conn.execute(
-            "INSERT INTO client_activite (id_client, type, titre, meta) VALUES (?,?,?,?)",
+            "INSERT INTO client_activite (id_client, type, titre, meta) VALUES (%s,%s,%s,%s) RETURNING id",
             (client_id, type_, titre, meta),
         )
     except Exception as e:
@@ -2221,7 +2278,7 @@ def create_short_link(url, expires_in=3600):
     expires_at = (datetime.utcnow() + timedelta(seconds=expires_in)).isoformat()
     conn = get_db_connection()
     conn.execute(
-        "INSERT INTO short_links (code, url, expires_at) VALUES (?, ?, ?)",
+        "INSERT INTO short_links (code, url, expires_at) VALUES (%s, %s, %s) RETURNING id",
         (code, url, expires_at)
     )
     conn.commit()
@@ -2232,7 +2289,7 @@ def create_short_link(url, expires_in=3600):
 def short_redirect(code):
     conn = get_db_connection()
     row = conn.execute(
-        "SELECT url, expires_at FROM short_links WHERE code = ?", (code,)
+        "SELECT url, expires_at FROM short_links WHERE code = %s", (code,)
     ).fetchone()
     conn.close()
     if not row or datetime.utcnow().isoformat() > row['expires_at']:
@@ -2276,11 +2333,24 @@ def find_matching_company(nom_entreprise: str, conn: sqlite3.Connection, seuil: 
             return row
     return None
 
+# ── Liste blanche de test VPS (étape 7, autorisation explicite 2026-07-20) ──
+# Aucun envoi réel ne doit jamais atteindre un vrai client pendant les tests VPS.
+# Filtre au niveau le plus bas (send_email, pas send_email_client) pour couvrir
+# tous les appelants sans exception. Retirer cette liste + ENVOI_TEST_ALLOWLIST
+# seulement quand le VPS est prêt pour du vrai trafic (bascule DNS, étape 8).
+ENVOI_TEST_ALLOWLIST = {"felixrbk@gmail.com"}
+
+
 def send_email(to_list, subject, body, html=None, cc=None, attachments=None):
     if not to_list:
         return
     if isinstance(to_list, str):
         to_list = [to_list]
+    to_list = [addr for addr in to_list if addr.lower() in ENVOI_TEST_ALLOWLIST]
+    cc = [addr for addr in (cc or []) if addr.lower() in ENVOI_TEST_ALLOWLIST]
+    if not to_list:
+        print(f"[MAIL] Bloqué (hors liste blanche de test VPS) : {subject}")
+        return
     subject = subject.replace('\r', '').replace('\n', '')
     try:
         msg = Message(
@@ -2302,7 +2372,7 @@ def send_email_client(client_id_or_row, subject, body, html=None, attachments=No
     """Envoie un email à un client SEULEMENT si son compte est confirmé."""
     conn = get_db_connection()
     if isinstance(client_id_or_row, int):
-        client = conn.execute("SELECT email, is_email_confirmed FROM clients WHERE id=?", (client_id_or_row,)).fetchone()
+        client = conn.execute("SELECT email, is_email_confirmed FROM clients WHERE id=%s", (client_id_or_row,)).fetchone()
     else:
         client = client_id_or_row
     conn.close()
@@ -2317,7 +2387,7 @@ def push_notification(conn, id_client, id_projet, message, type='info'):
     """Insère une notification in-app pour un client."""
     try:
         conn.execute(
-            "INSERT INTO notifications (id_client, id_projet, message, type) VALUES (?, ?, ?, ?)",
+            "INSERT INTO notifications (id_client, id_projet, message, type) VALUES (%s, %s, %s, %s) RETURNING id",
             (id_client, id_projet, message, type)
         )
     except Exception as e:
@@ -2328,7 +2398,7 @@ def push_admin_notif(conn, titre, message='', type='info', lien=None, destinatai
        destinataire = email admin ciblé, ou None = visible par tous les admins."""
     try:
         conn.execute(
-            "INSERT INTO admin_notifications (destinataire, type, titre, message, lien) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO admin_notifications (destinataire, type, titre, message, lien) VALUES (%s, %s, %s, %s, %s) RETURNING id",
             (destinataire or None, type, titre, message or '', lien or None)
         )
     except Exception as e:
@@ -2345,6 +2415,7 @@ VAPID_SUBJECT     = os.getenv('VAPID_SUBJECT', 'mailto:felix.dumont@cocktailmedi
 
 def send_web_push_to_admins(conn, titre, message, lien, destinataire=None):
     """Envoie une notif Web Push aux abonnements admin. Nettoie les abonnements expirés (404/410)."""
+    return  # copie de test étape 5 — jamais de vraie notif push, garanti au niveau code
     if not VAPID_PRIVATE_KEY:
         return
     try:
@@ -2354,7 +2425,7 @@ def send_web_push_to_admins(conn, titre, message, lien, destinataire=None):
     import json as _json
     # destinataire None/'' = tous les abonnements ; sinon seulement celui ciblé
     if destinataire:
-        subs = conn.execute("SELECT * FROM push_subscriptions WHERE email=? OR email IS NULL", (destinataire,)).fetchall()
+        subs = conn.execute("SELECT * FROM push_subscriptions WHERE email=%s OR email IS NULL", (destinataire,)).fetchall()
     else:
         subs = conn.execute("SELECT * FROM push_subscriptions").fetchall()
     payload = _json.dumps({'title': titre, 'body': message, 'url': lien})
@@ -2369,7 +2440,7 @@ def send_web_push_to_admins(conn, titre, message, lien, destinataire=None):
         except WebPushException as e:
             code = getattr(e.response, 'status_code', None)
             if code in (404, 410):
-                conn.execute("DELETE FROM push_subscriptions WHERE id=?", (s['id'],))
+                conn.execute("DELETE FROM push_subscriptions WHERE id=%s", (s['id'],))
                 print(f"[WEBPUSH] abonnement expiré supprimé ({code})")
             else:
                 print(f"[WEBPUSH] échec envoi: {e}")
@@ -2452,7 +2523,7 @@ def outils_write_required(f):
     return wrap
 
 import redis as _redis_mod
-_redis_client = _redis_mod.from_url("redis://redis:6379", decode_responses=True)
+_redis_client = _redis_mod.from_url(os.getenv("REDIS_URL", "redis://127.0.0.1:6380"), decode_responses=True)
 
 def _redis_rate_limit(key: str, ttl_seconds: int) -> bool:
     """Retourne True si l'action est autorisée, False si elle est limitée."""
@@ -2501,15 +2572,15 @@ def get_notification_settings() -> dict:
 # ───────────────────────────────────────────────────────────
 # Readiness / Pastille
 # ───────────────────────────────────────────────────────────
-def table_has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+def table_has_column(conn, table: str, column: str) -> bool:
     try:
-        info = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    except sqlite3.Error:
+        row = conn.execute(
+            "SELECT 1 FROM information_schema.columns WHERE table_name = %s AND column_name = %s",
+            (table, column)
+        ).fetchone()
+    except Exception:
         return False
-    return any(
-        (row["name"] if hasattr(row, "keys") else row[1]) == column
-        for row in info
-    )
+    return row is not None
 
 def compute_checklist_readiness(project_id: int) -> Tuple[bool, int, int]:
     """
@@ -2520,7 +2591,7 @@ def compute_checklist_readiness(project_id: int) -> Tuple[bool, int, int]:
     conn = get_db_connection()
     row = conn.execute("""
         SELECT ch.id AS id_checklist
-        FROM checklistes ch WHERE ch.id_projet = ?
+        FROM checklistes ch WHERE ch.id_projet = %s
     """, (project_id,)).fetchone()
 
     if not row:
@@ -2538,7 +2609,7 @@ def compute_checklist_readiness(project_id: int) -> Tuple[bool, int, int]:
         f"""
         SELECT {select_columns}
         FROM checklist_items
-        WHERE id_checklist = ?
+        WHERE id_checklist = %s
     """,
         (id_checklist,),
     ).fetchall()
@@ -2565,7 +2636,7 @@ def _notify_checklist_complete(conn, projet):
     """Courriel interne à Félix quand la checklist de documents d'un projet passe au
     complet (statut 'Documents à donner' -> 'Documents reçus')."""
     try:
-        client = conn.execute("SELECT nom_complet FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
+        client = conn.execute("SELECT nom_complet FROM clients WHERE id=%s", (projet['id_client'],)).fetchone()
         corps = (
             f"La checklist de documents est complète pour « {projet['nom_projet']} »"
             f" ({client['nom_complet'] if client else 'client inconnu'}).\n\n"
@@ -2583,12 +2654,12 @@ def compute_revision_readiness(project_id: int) -> Tuple[bool, bool]:
        le même champ que le reste du checklist) — pas dans la colonne commentaire, qui n'est
        jamais alimentée par l'UI actuelle."""
     conn = get_db_connection()
-    row = conn.execute("SELECT id FROM checklistes WHERE id_projet = ?", (project_id,)).fetchone()
+    row = conn.execute("SELECT id FROM checklistes WHERE id_projet = %s", (project_id,)).fetchone()
     if not row:
         conn.close()
         return (False, False)
     items = conn.execute(
-        "SELECT est_coche, text_value FROM checklist_items WHERE id_checklist = ? AND is_revision = 1",
+        "SELECT est_coche, text_value FROM checklist_items WHERE id_checklist = %s AND is_revision = 1",
         (row['id'],)
     ).fetchall()
     conn.close()
@@ -2807,7 +2878,7 @@ def api_login():
         return jsonify({"error": "Trop de tentatives. Compte temporairement verrouillé (15 min)."}), 429
 
     conn = get_db_connection()
-    user = conn.execute("SELECT * FROM clients WHERE email = ?", (email,)).fetchone()
+    user = conn.execute("SELECT * FROM clients WHERE email = %s", (email,)).fetchone()
 
     if user and user['auth_provider'] == 'password':
         if not user['mot_de_passe_hash']:
@@ -2847,7 +2918,7 @@ def api_login():
             })
 
     # Fallback: check pigistes table
-    pigiste = conn.execute("SELECT * FROM pigistes WHERE email = ? AND is_active = 1", (email,)).fetchone()
+    pigiste = conn.execute("SELECT * FROM pigistes WHERE email = %s AND is_active = 1", (email,)).fetchone()
     conn.close()
     if pigiste and pigiste['mot_de_passe_hash'] and bcrypt.check_password_hash(pigiste['mot_de_passe_hash'], password):
         _redis_login_reset(email)
@@ -2889,7 +2960,7 @@ def api_me():
     # Repli DB pour les sessions ouvertes avant l'ajout des flags (évite une reconnexion forcée)
     if 'has_entrainement' not in session or 'entrainement_only' not in session:
         conn = get_db_connection()
-        row = conn.execute("SELECT has_entrainement, entrainement_only FROM clients WHERE id = ?", (session['user_id'],)).fetchone()
+        row = conn.execute("SELECT has_entrainement, entrainement_only FROM clients WHERE id = %s", (session['user_id'],)).fetchone()
         conn.close()
         session['has_entrainement'] = bool(row['has_entrainement']) if row and row['has_entrainement'] is not None else False
         session['entrainement_only'] = bool(row['entrainement_only']) if row and row['entrainement_only'] is not None else False
@@ -2917,7 +2988,7 @@ def api_entrainement_me():
     plan = conn.execute(
         """SELECT id, titre, note, contenu_json, created_at
              FROM entrainement_plans
-            WHERE client_id = ? AND actif = 1
+            WHERE client_id = %s AND actif = 1
             ORDER BY created_at DESC, id DESC
             LIMIT 1""",
         (client_id,)
@@ -2949,14 +3020,14 @@ def api_entrainement_progress_get():
     conn = get_db_connection()
     # Vérifie que le plan appartient bien au client
     owns = conn.execute(
-        "SELECT 1 FROM entrainement_plans WHERE id = ? AND client_id = ?", (plan_id, client_id)
+        "SELECT 1 FROM entrainement_plans WHERE id = %s AND client_id = %s", (plan_id, client_id)
     ).fetchone()
     if not owns:
         conn.close()
         return jsonify({"error": "Introuvable"}), 404
     rows = conn.execute(
         """SELECT exercice_key, date FROM entrainement_progress
-            WHERE client_id = ? AND plan_id = ? AND done = 1""",
+            WHERE client_id = %s AND plan_id = %s AND done = 1""",
         (client_id, plan_id)
     ).fetchall()
     conn.close()
@@ -2977,7 +3048,7 @@ def api_entrainement_progress_post():
         return jsonify({"error": "plan_id, exercice_key et date requis"}), 400
     conn = get_db_connection()
     owns = conn.execute(
-        "SELECT 1 FROM entrainement_plans WHERE id = ? AND client_id = ?", (plan_id, client_id)
+        "SELECT 1 FROM entrainement_plans WHERE id = %s AND client_id = %s", (plan_id, client_id)
     ).fetchone()
     if not owns:
         conn.close()
@@ -2985,14 +3056,14 @@ def api_entrainement_progress_post():
     if done:
         conn.execute(
             """INSERT INTO entrainement_progress (client_id, plan_id, exercice_key, date, done)
-                    VALUES (?, ?, ?, ?, 1)
+                    VALUES (%s, %s, %s, %s, 1)
                ON CONFLICT(client_id, plan_id, exercice_key, date)
-                    DO UPDATE SET done = 1""",
+                    DO UPDATE SET done = 1 RETURNING id""",
             (client_id, plan_id, exercice_key, date)
         )
     else:
         conn.execute(
-            "DELETE FROM entrainement_progress WHERE client_id = ? AND plan_id = ? AND exercice_key = ? AND date = ?",
+            "DELETE FROM entrainement_progress WHERE client_id = %s AND plan_id = %s AND exercice_key = %s AND date = %s",
             (client_id, plan_id, exercice_key, date)
         )
     conn.close()
@@ -3018,7 +3089,7 @@ def api_register():
         return jsonify({"error": "Mot de passe trop faible — min. 8 caractères, majuscule, minuscule, chiffre et caractère spécial"}), 400
 
     conn = get_db_connection()
-    exists = conn.execute("SELECT is_email_confirmed FROM clients WHERE email = ?", (email,)).fetchone()
+    exists = conn.execute("SELECT is_email_confirmed FROM clients WHERE email = %s", (email,)).fetchone()
     if exists:
         conn.close()
         if not int(exists['is_email_confirmed'] or 0):
@@ -3027,8 +3098,8 @@ def api_register():
                 new_token = s.dumps(email, salt='email-confirm-salt')
                 confirm_url = f"{PORTAIL_URL}/confirm-email?token={new_token}"
                 conn2 = get_db_connection()
-                u = conn2.execute("SELECT nom_complet FROM clients WHERE email = ?", (email,)).fetchone()
-                conn2.execute("UPDATE clients SET confirm_token = ? WHERE email = ?", (new_token, email))
+                u = conn2.execute("SELECT nom_complet FROM clients WHERE email = %s", (email,)).fetchone()
+                conn2.execute("UPDATE clients SET confirm_token = %s WHERE email = %s", (new_token, email))
                 conn2.commit()
                 conn2.close()
                 html_confirm = _base_confirm(u['nom_complet'] if u else '', confirm_url)
@@ -3044,8 +3115,8 @@ def api_register():
     confirm_token = s.dumps(email, salt='email-confirm-salt')
     conn.execute("""
         INSERT INTO clients (nom_complet, email, nom_entreprise, telephone, mot_de_passe_hash, auth_provider, is_email_confirmed, is_admin, confirm_token)
-        VALUES (?, ?, ?, ?, ?, 'password', 0, 0, ?)
-    """, (nom, email, nom_entreprise, telephone, hashed, confirm_token))
+        VALUES (%s, %s, %s, %s, %s, 'password', 0, 0, %s)
+     RETURNING id""", (nom, email, nom_entreprise, telephone, hashed, confirm_token))
     conn.commit()
     conn.close()
 
@@ -3062,7 +3133,7 @@ def api_register():
                 new_folder_id = create_folder(nom_entreprise, parent_id=os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID'))
                 factures_folder_id = create_folder("Factures", parent_id=new_folder_id)
                 c = get_db_connection()
-                c.execute("UPDATE clients SET drive_folder_id = ?, factures_folder_id = ? WHERE email = ?",
+                c.execute("UPDATE clients SET drive_folder_id = %s, factures_folder_id = %s WHERE email = %s",
                           (new_folder_id, factures_folder_id, email))
                 c.close()
             except Exception as e:
@@ -3084,7 +3155,7 @@ def api_dashboard():
     user_id = session['user_id']
     conn = get_db_connection()
     client_row = conn.execute(
-        "SELECT email, nom_entreprise, nom_complet, drive_folder_id FROM clients WHERE id = ?", (user_id,)
+        "SELECT email, nom_entreprise, nom_complet, drive_folder_id FROM clients WHERE id = %s", (user_id,)
     ).fetchone()
     drive_folder_id = client_row['drive_folder_id'] if client_row else None
 
@@ -3105,7 +3176,7 @@ def api_dashboard():
                 drive_folder_id = create_folder(nom_dossier, parent_id=os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID'))
                 create_folder("Factures", parent_id=drive_folder_id)
                 conn.execute(
-                    "UPDATE clients SET drive_folder_id = ? WHERE id = ?", (drive_folder_id, user_id)
+                    "UPDATE clients SET drive_folder_id = %s WHERE id = %s", (drive_folder_id, user_id)
                 )
                 conn.commit()
 
@@ -3115,7 +3186,7 @@ def api_dashboard():
             iv_folders = conn.execute("""
                 SELECT iv.iv_folder_id FROM identite_visuelle iv
                 JOIN projets p ON p.id = iv.id_projet
-                WHERE p.id_client = ? AND iv.iv_folder_id IS NOT NULL
+                WHERE p.id_client = %s AND iv.iv_folder_id IS NOT NULL
             """, (user_id,)).fetchall()
             for row in iv_folders:
                 try:
@@ -3129,14 +3200,14 @@ def api_dashboard():
         SELECT p.*, s.icon as service_icon, s.nom_service as service_nom
         FROM projets p
         LEFT JOIN services s ON s.id = p.id_service
-        WHERE p.id_client = ? AND (p.is_archived = 0 OR p.is_archived IS NULL)
+        WHERE p.id_client = %s AND (p.is_archived = 0 OR p.is_archived IS NULL)
         ORDER BY p.created_at DESC
     """, (user_id,)).fetchall()
     projets_archives = conn.execute("""
         SELECT p.*, s.icon as service_icon, s.nom_service as service_nom
         FROM projets p
         LEFT JOIN services s ON s.id = p.id_service
-        WHERE p.id_client = ? AND p.is_archived = 1
+        WHERE p.id_client = %s AND p.is_archived = 1
         ORDER BY p.created_at DESC
     """, (user_id,)).fetchall()
     conn.close()
@@ -3177,7 +3248,7 @@ def _provision_client_drive_folder(conn, client_id, dossier_nom):
     try:
         drive_folder_id = create_folder(dossier_nom, parent_id=os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID'))
         factures_folder_id = create_folder("Factures", parent_id=drive_folder_id)
-        conn.execute("UPDATE clients SET drive_folder_id=?, factures_folder_id=? WHERE id=?",
+        conn.execute("UPDATE clients SET drive_folder_id=%s, factures_folder_id=%s WHERE id=%s",
                      (drive_folder_id, factures_folder_id, client_id))
         conn.commit()
     except Exception as e:
@@ -3189,7 +3260,7 @@ def _provision_client_drive_folder(conn, client_id, dossier_nom):
 def api_admin_get_client(client_id):
     conn = get_db_connection()
     client = conn.execute(
-        'SELECT * FROM clients WHERE id = ?', (client_id,)
+        'SELECT * FROM clients WHERE id = %s', (client_id,)
     ).fetchone()
     conn.close()
     if not client:
@@ -3227,7 +3298,7 @@ def api_admin_client_factures(client_id):
     conn = get_db_connection()
     rows = conn.execute(
         "SELECT id, numero, statut, total, date_emission, date_echeance, stripe_payment_url "
-        "FROM factures WHERE id_client = ? AND statut != 'annulee' ORDER BY date_emission DESC",
+        "FROM factures WHERE id_client = %s AND statut != 'annulee' ORDER BY date_emission DESC",
         (client_id,)
     ).fetchall()
     conn.close()
@@ -3265,7 +3336,7 @@ def api_admin_client_activite(client_id):
     """Timeline d'activité : événements dérivés des tables existantes
     (création, notes, factures, RDV) + événements loggés (changements de statut)."""
     conn = get_db_connection()
-    client = conn.execute("SELECT created_at FROM clients WHERE id = ?", (client_id,)).fetchone()
+    client = conn.execute("SELECT created_at FROM clients WHERE id = %s", (client_id,)).fetchone()
     if not client:
         conn.close()
         return jsonify({'error': 'Client introuvable'}), 404
@@ -3318,7 +3389,7 @@ def api_admin_update_client(client_id):
 
     if statut_relation == 'actif':
         existing = conn.execute(
-            "SELECT drive_folder_id, nom_entreprise, nom_complet FROM clients WHERE id = ?", (client_id,)
+            "SELECT drive_folder_id, nom_entreprise, nom_complet FROM clients WHERE id = %s", (client_id,)
         ).fetchone()
         if existing and not existing['drive_folder_id']:
             dossier_nom = existing['nom_entreprise'] or data.get('nom_entreprise') or existing['nom_complet']
@@ -3326,26 +3397,26 @@ def api_admin_update_client(client_id):
 
     conn.execute("""
         UPDATE clients SET
-            nom_complet = ?,
-            email = ?,
-            nom_entreprise = ?,
-            telephone = ?,
-            mode_facturation = ?,
-            adresse_facturation = ?,
-            ville_facturation = ?,
-            province_facturation = ?,
-            code_postal_facturation = ?,
-            pays_facturation = ?,
-            statut_relation = ?,
-            prochain_suivi = ?,
-            source_acquisition = ?,
-            site_web = ?,
-            adresse = ?,
-            ville = ?,
-            contact_secondaire_nom = ?,
-            contact_secondaire_role = ?,
-            contact_secondaire_email = ?
-        WHERE id = ?
+            nom_complet = %s,
+            email = %s,
+            nom_entreprise = %s,
+            telephone = %s,
+            mode_facturation = %s,
+            adresse_facturation = %s,
+            ville_facturation = %s,
+            province_facturation = %s,
+            code_postal_facturation = %s,
+            pays_facturation = %s,
+            statut_relation = %s,
+            prochain_suivi = %s,
+            source_acquisition = %s,
+            site_web = %s,
+            adresse = %s,
+            ville = %s,
+            contact_secondaire_nom = %s,
+            contact_secondaire_role = %s,
+            contact_secondaire_email = %s
+        WHERE id = %s
     """, (
         data.get('nom_complet'),
         (data.get('email') or '').strip().lower() or None,
@@ -3372,7 +3443,7 @@ def api_admin_update_client(client_id):
     # Même raison que sur /adresse-facturation : sans ça, les PDF déjà générés gardent
     # l'ancien nom/courriel/adresse jusqu'à la prochaine modif de ligne sur chaque facture.
     factures_existantes = conn.execute(
-        "SELECT id FROM factures WHERE id_client = ? AND pdf_path IS NOT NULL", (client_id,)
+        "SELECT id FROM factures WHERE id_client = %s AND pdf_path IS NOT NULL", (client_id,)
     ).fetchall()
     for f in factures_existantes:
         try:
@@ -3386,7 +3457,7 @@ def api_admin_update_client(client_id):
 @admin_required
 def api_admin_delete_client(client_id):
     conn = get_db_connection()
-    conn.execute('DELETE FROM clients WHERE id = ?', (client_id,))
+    conn.execute('DELETE FROM clients WHERE id = %s', (client_id,))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -3408,13 +3479,13 @@ def api_admin_get_projet(projet_id):
         FROM projets p
         LEFT JOIN clients c ON c.id = p.id_client
         LEFT JOIN services s ON s.id = p.id_service
-        WHERE p.id = ?
+        WHERE p.id = %s
     """, (projet_id,)).fetchone()
     if not p:
         conn.close()
         return jsonify({'error': 'Projet introuvable'}), 404
     logo_fichiers = conn.execute(
-        "SELECT id, filename FROM projet_logo_fichiers WHERE id_projet=? ORDER BY created_at", (projet_id,)
+        "SELECT id, filename FROM projet_logo_fichiers WHERE id_projet=%s ORDER BY created_at", (projet_id,)
     ).fetchall()
     conn.close()
     pipeline_steps = pipeline_for_service({
@@ -3454,7 +3525,7 @@ def api_admin_get_projet(projet_id):
 def api_admin_update_projet(projet_id):
     data = request.get_json() or {}
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id=?", (projet_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id=%s", (projet_id,)).fetchone()
     if not projet:
         conn.close()
         return jsonify({'error': 'Projet introuvable'}), 404
@@ -3465,16 +3536,16 @@ def api_admin_update_projet(projet_id):
 
     conn.execute("""
         UPDATE projets SET
-            nom_projet = ?,
-            titre_affiche = ?,
-            statut = ?,
-            localisation = ?,
-            date_livraison_estimee = ?,
-            lien_gdrive = ?,
-            lien_site_test = ?,
-            id_client = ?,
-            facturation_mode = ?
-        WHERE id = ?
+            nom_projet = %s,
+            titre_affiche = %s,
+            statut = %s,
+            localisation = %s,
+            date_livraison_estimee = %s,
+            lien_gdrive = %s,
+            lien_site_test = %s,
+            id_client = %s,
+            facturation_mode = %s
+        WHERE id = %s
     """, (
         data.get('nom_projet'),
         (data.get('titre_affiche') or '').strip() or None,
@@ -3500,14 +3571,14 @@ def api_admin_update_projet(projet_id):
                 SELECT f.id, f.numero, f.statut
                 FROM factures f
                 JOIN facture_lignes fl ON fl.id_facture = f.id
-                WHERE fl.id_projet = ?
+                WHERE fl.id_projet = %s
                 ORDER BY f.id DESC LIMIT 1
             """, (projet_id,)).fetchone()
 
             if ancien_facturer and not nouveau_facturer:
                 # facturer → ne pas facturer : annuler la facture existante (sauf payée / déjà annulée)
                 if fact and fact['statut'] not in ('annulee', 'payee'):
-                    conn.execute("UPDATE factures SET statut='annulee' WHERE id=?", (fact['id'],))
+                    conn.execute("UPDATE factures SET statut='annulee' WHERE id=%s", (fact['id'],))
                     conn.commit()
                     facture_action = {'type': 'annulee', 'numero': fact['numero']}
             else:
@@ -3516,7 +3587,7 @@ def api_admin_update_projet(projet_id):
                     from datetime import date as _d, timedelta as _td
                     today = _d.today()
                     conn.execute(
-                        "UPDATE factures SET statut='envoyee', date_emission=?, date_echeance=? WHERE id=?",
+                        "UPDATE factures SET statut='envoyee', date_emission=%s, date_echeance=%s WHERE id=%s",
                         (today.strftime('%Y-%m-%d'), (today + _td(days=15)).strftime('%Y-%m-%d'), fact['id'])
                     )
                     conn.commit()
@@ -3538,7 +3609,7 @@ def api_admin_upload_projet_logo(project_id):
     if not files:
         return jsonify({'error': 'Aucun fichier reçu'}), 400
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id=%s", (project_id,)).fetchone()
     if not projet:
         conn.close()
         return jsonify({'error': 'Projet introuvable'}), 404
@@ -3571,10 +3642,10 @@ def api_admin_upload_projet_logo(project_id):
         except Exception as e:
             print(f"[DRIVE] Upload logo échoué: {e}")
         cur = conn.execute(
-            "INSERT INTO projet_logo_fichiers (id_projet, filename, filepath, drive_file_id) VALUES (?, ?, ?, ?)",
+            "INSERT INTO projet_logo_fichiers (id_projet, filename, filepath, drive_file_id) VALUES (%s, %s, %s, %s) RETURNING id",
             (project_id, original_name, save_path, drive_file_id)
         )
-        uploaded.append({'id': cur.lastrowid, 'filename': original_name})
+        uploaded.append({'id': cur.fetchone()['id'], 'filename': original_name})
     conn.commit()
     conn.close()
     if not uploaded:
@@ -3585,11 +3656,11 @@ def api_admin_upload_projet_logo(project_id):
 @admin_required
 def api_admin_delete_projet_logo(project_id, file_id):
     conn = get_db_connection()
-    row = conn.execute("SELECT * FROM projet_logo_fichiers WHERE id=? AND id_projet=?", (file_id, project_id)).fetchone()
+    row = conn.execute("SELECT * FROM projet_logo_fichiers WHERE id=%s AND id_projet=%s", (file_id, project_id)).fetchone()
     if not row:
         conn.close()
         return jsonify({'error': 'Fichier introuvable'}), 404
-    conn.execute("DELETE FROM projet_logo_fichiers WHERE id=?", (file_id,))
+    conn.execute("DELETE FROM projet_logo_fichiers WHERE id=%s", (file_id,))
     conn.commit()
     conn.close()
     try:
@@ -3603,8 +3674,8 @@ def api_admin_delete_projet_logo(project_id, file_id):
 @login_required
 def api_projet_download_logo(project_id, file_id):
     conn = get_db_connection()
-    projet = conn.execute("SELECT id_client FROM projets WHERE id=?", (project_id,)).fetchone()
-    fichier = conn.execute("SELECT * FROM projet_logo_fichiers WHERE id=? AND id_projet=?", (file_id, project_id)).fetchone()
+    projet = conn.execute("SELECT id_client FROM projets WHERE id=%s", (project_id,)).fetchone()
+    fichier = conn.execute("SELECT * FROM projet_logo_fichiers WHERE id=%s AND id_projet=%s", (file_id, project_id)).fetchone()
     conn.close()
     if not projet or not fichier:
         return jsonify({'error': 'Logo introuvable'}), 404
@@ -3618,7 +3689,7 @@ def api_projet_download_logo(project_id, file_id):
 @admin_required
 def api_admin_delete_projet(projet_id):
     conn = get_db_connection()
-    conn.execute('DELETE FROM projets WHERE id = ?', (projet_id,))
+    conn.execute('DELETE FROM projets WHERE id = %s', (projet_id,))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -3651,10 +3722,10 @@ def api_admin_create_client():
         conn.execute("""
             INSERT INTO clients (nom_complet, email, nom_entreprise, telephone, mot_de_passe_hash, auth_provider, is_email_confirmed, is_admin, confirm_token, statut_relation,
                 adresse_facturation, ville_facturation, province_facturation, code_postal_facturation)
-            VALUES (?, ?, ?, ?, NULL, 'password', 0, 0, ?, ?, ?, ?, ?, ?)
-        """, (nom, email, entreprise, telephone, token, statut_relation,
+            VALUES (%s, %s, %s, %s, NULL, 'password', 0, 0, %s, %s, %s, %s, %s, %s)
+         RETURNING id""", (nom, email, entreprise, telephone, token, statut_relation,
               adresse_facturation, ville_facturation, province_facturation, code_postal_facturation))
-        client_id = conn.execute("SELECT id FROM clients WHERE email=?", (email,)).fetchone()['id']
+        client_id = conn.execute("SELECT id FROM clients WHERE email=%s", (email,)).fetchone()['id']
         conn.commit()
 
         # Un prospect n'a pas encore besoin d'un dossier Drive ni d'un accès portail —
@@ -3700,18 +3771,18 @@ def api_admin_update_client_adresse_facturation(client_id):
         return jsonify({'error': 'Le courriel est obligatoire.'}), 400
     conn = get_db_connection()
     try:
-        client = conn.execute("SELECT id FROM clients WHERE id=?", (client_id,)).fetchone()
+        client = conn.execute("SELECT id FROM clients WHERE id=%s", (client_id,)).fetchone()
         if not client:
             return jsonify({'error': 'Client introuvable.'}), 404
         conn.execute("""
             UPDATE clients SET
-                nom_complet = ?,
-                email = ?,
-                adresse_facturation = ?,
-                ville_facturation = ?,
-                province_facturation = ?,
-                code_postal_facturation = ?
-            WHERE id = ?
+                nom_complet = %s,
+                email = %s,
+                adresse_facturation = %s,
+                ville_facturation = %s,
+                province_facturation = %s,
+                code_postal_facturation = %s
+            WHERE id = %s
         """, (
             nom_complet,
             email,
@@ -3725,7 +3796,7 @@ def api_admin_update_client_adresse_facturation(client_id):
         # Régénère le PDF de toutes les factures déjà émises pour ce client — sinon le PDF
         # déjà sur disque garde l'ancien nom/courriel/adresse jusqu'à la prochaine modif de ligne.
         factures_existantes = conn.execute(
-            "SELECT id FROM factures WHERE id_client = ? AND pdf_path IS NOT NULL", (client_id,)
+            "SELECT id FROM factures WHERE id_client = %s AND pdf_path IS NOT NULL", (client_id,)
         ).fetchall()
         for f in factures_existantes:
             try:
@@ -3755,7 +3826,7 @@ def api_admin_update_client_statut_relation(client_id):
 
     conn = get_db_connection()
     client = conn.execute(
-        "SELECT drive_folder_id, nom_entreprise, nom_complet, statut_relation FROM clients WHERE id = ?", (client_id,)
+        "SELECT drive_folder_id, nom_entreprise, nom_complet, statut_relation FROM clients WHERE id = %s", (client_id,)
     ).fetchone()
     if not client:
         conn.close()
@@ -3765,7 +3836,7 @@ def api_admin_update_client_statut_relation(client_id):
         _provision_client_drive_folder(conn, client_id, client['nom_entreprise'] or client['nom_complet'])
 
     ancien = client['statut_relation'] or 'actif'
-    conn.execute("UPDATE clients SET statut_relation = ? WHERE id = ?", (statut_relation, client_id))
+    conn.execute("UPDATE clients SET statut_relation = %s WHERE id = %s", (statut_relation, client_id))
     if ancien != statut_relation:
         _lbl = {'prospect': 'Prospect', 'contacte': 'Contacté', 'devis_envoye': 'Devis envoyé', 'actif': 'Actif', 'inactif': 'Inactif'}
         log_activite(conn, client_id, 'statut',
@@ -3784,13 +3855,13 @@ def api_admin_update_client_mode_facturation(client_id):
         return jsonify({'error': 'mode_facturation invalide'}), 400
 
     conn = get_db_connection()
-    client = conn.execute("SELECT mode_facturation FROM clients WHERE id = ?", (client_id,)).fetchone()
+    client = conn.execute("SELECT mode_facturation FROM clients WHERE id = %s", (client_id,)).fetchone()
     if not client:
         conn.close()
         return jsonify({'error': 'Client introuvable'}), 404
 
     ancien = client['mode_facturation'] or 'projet'
-    conn.execute("UPDATE clients SET mode_facturation = ? WHERE id = ?", (mode_facturation, client_id))
+    conn.execute("UPDATE clients SET mode_facturation = %s WHERE id = %s", (mode_facturation, client_id))
     if ancien != mode_facturation:
         _lbl = {'projet': 'Par projet', 'mensuel': 'Facture ouverte (mensuel)'}
         log_activite(conn, client_id, 'statut',
@@ -3804,7 +3875,7 @@ def api_admin_update_client_mode_facturation(client_id):
 @admin_required
 def api_admin_resend_invitation(client_id):
     conn = get_db_connection()
-    user = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
+    user = conn.execute("SELECT * FROM clients WHERE id = %s", (client_id,)).fetchone()
     conn.close()
     if not user:
         return jsonify({'error': 'Client introuvable'}), 404
@@ -3813,7 +3884,7 @@ def api_admin_resend_invitation(client_id):
         return jsonify({'error': 'Ce client a déjà activé son compte'}), 409
     conn2 = get_db_connection()
     token = s.dumps(user['email'], salt='invitation-client-salt')
-    conn2.execute("UPDATE clients SET is_email_confirmed = 0, confirm_token = ? WHERE id = ?", (token, client_id))
+    conn2.execute("UPDATE clients SET is_email_confirmed = 0, confirm_token = %s WHERE id = %s", (token, client_id))
     conn2.close()
     try:
         long_invite_url = f"{PORTAIL_URL}/invitation/{token}"
@@ -3848,7 +3919,7 @@ def _get_busy_combined(debut_fenetre: datetime, fin_fenetre: datetime) -> list:
 
     conn = get_db_connection()
     db_rows = conn.execute(
-        "SELECT start_utc, end_utc FROM rendez_vous WHERE start_utc < ? AND end_utc > ?",
+        "SELECT start_utc, end_utc FROM rendez_vous WHERE start_utc < %s AND end_utc > %s",
         (fin_fenetre.isoformat(), debut_fenetre.isoformat())
     ).fetchall()
     conn.close()
@@ -3904,7 +3975,7 @@ def _toronto_offset_now() -> timedelta:
 def api_admin_envoyer_agenda(client_id):
     from email_templates import email_agenda_rendez_vous
     conn = get_db_connection()
-    client = conn.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+    client = conn.execute("SELECT * FROM clients WHERE id=%s", (client_id,)).fetchone()
     conn.close()
     if not client:
         return jsonify({'error': 'Client introuvable'}), 404
@@ -3980,7 +4051,7 @@ def api_admin_envoyer_agenda_jour(client_id):
         return jsonify({'error': 'Format de date invalide'}), 400
 
     conn = get_db_connection()
-    client = conn.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+    client = conn.execute("SELECT * FROM clients WHERE id=%s", (client_id,)).fetchone()
     conn.close()
     if not client:
         return jsonify({'error': 'Client introuvable'}), 404
@@ -4060,7 +4131,7 @@ def api_admin_envoyer_agenda_plage(client_id):
         return jsonify({'error': 'Maximum 14 jours à la fois'}), 400
 
     conn = get_db_connection()
-    client = conn.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+    client = conn.execute("SELECT * FROM clients WHERE id=%s", (client_id,)).fetchone()
     conn.close()
     if not client:
         return jsonify({'error': 'Client introuvable'}), 404
@@ -4135,7 +4206,7 @@ def api_booking_confirm():
         return jsonify({'error': 'Données de réservation incomplètes'}), 400
 
     conn = get_db_connection()
-    client = conn.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+    client = conn.execute("SELECT * FROM clients WHERE id=%s", (client_id,)).fetchone()
     conn.close()
     if not client:
         return jsonify({'error': 'Client introuvable'}), 404
@@ -4147,7 +4218,7 @@ def api_booking_confirm():
     # Idempotence — évite les doublons si le client clique le lien plusieurs fois
     conn = get_db_connection()
     existing = conn.execute(
-        "SELECT id, meet_link, label_fr FROM rendez_vous WHERE id_client=? AND start_utc=?",
+        "SELECT id, meet_link, label_fr FROM rendez_vous WHERE id_client=%s AND start_utc=%s",
         (client_id, start_utc)
     ).fetchone()
     conn.close()
@@ -4169,10 +4240,10 @@ def api_booking_confirm():
         label = format_slot_fr(start_dt)
         conn = get_db_connection()
         cur = conn.execute(
-            "INSERT INTO rendez_vous (id_client, calendar_event_id, start_utc, end_utc, meet_link, label_fr) VALUES (?,?,?,?,?,?)",
+            "INSERT INTO rendez_vous (id_client, calendar_event_id, start_utc, end_utc, meet_link, label_fr) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
             (client_id, event_id, start_utc, end_utc, meet_link, label)
         )
-        rdv_id = cur.lastrowid
+        rdv_id = cur.fetchone()['id']
         conn.commit()
         conn.close()
         _lier_rendez_vous_au_projet(client_id, rdv_id)
@@ -4253,14 +4324,14 @@ def _creer_tache_depuis_booking(client_row, texte, date_echeance, id_projet=None
         gestion_id = _admin_id_for_role(conn, 'gestion')
         cur = conn.execute(
             "INSERT INTO todos_perso (texte, priorite, date_echeance, is_titre, projet_id, projet_nom, client_id) "
-            "VALUES (?, 'normale', ?, 0, ?, ?, ?)",
+            "VALUES (%s, 'normale', %s, 0, %s, %s, %s) RETURNING id",
             (texte, date_echeance, id_projet, projet_nom, client_row['id'])
         )
-        todo_id = cur.lastrowid
+        todo_id = cur.fetchone()['id']
         destinataire = None
         if gestion_id:
-            conn.execute("INSERT OR IGNORE INTO todo_assignees (todo_id, admin_id) VALUES (?, ?)", (todo_id, gestion_id))
-            row = conn.execute("SELECT email FROM clients WHERE id=?", (gestion_id,)).fetchone()
+            conn.execute("INSERT INTO todo_assignees (todo_id, admin_id) VALUES (%s, %s)", (todo_id, gestion_id))
+            row = conn.execute("SELECT email FROM clients WHERE id=%s", (gestion_id,)).fetchone()
             destinataire = row['email'] if row else None
         conn.commit()
         push_admin_notif(conn, "Nouvelle réservation", texte, type='todo', lien=lien, destinataire=destinataire)
@@ -4275,8 +4346,8 @@ def _creer_projet_depuis_booking(id_client: int, id_service: int, date_seance: s
     (dossier Drive, checklist, événement de séance, courriel) — retourne (id_projet, nom_projet)."""
     conn = get_db_connection()
     try:
-        service_row = conn.execute("SELECT * FROM services WHERE id=?", (id_service,)).fetchone()
-        client_row = conn.execute("SELECT * FROM clients WHERE id=?", (id_client,)).fetchone()
+        service_row = conn.execute("SELECT * FROM services WHERE id=%s", (id_service,)).fetchone()
+        client_row = conn.execute("SELECT * FROM clients WHERE id=%s", (id_client,)).fetchone()
         if not service_row or not client_row:
             return None, None
 
@@ -4289,22 +4360,22 @@ def _creer_projet_depuis_booking(id_client: int, id_service: int, date_seance: s
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO projets (nom_projet, heure_seance, duree_seance_minutes, statut, id_client, localisation, id_service)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (nom_projet, heure_seance, duree_seance_minutes, statut, id_client, localisation, id_service))
-        id_projet = cur.lastrowid
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+         RETURNING id""", (nom_projet, heure_seance, duree_seance_minutes, statut, id_client, localisation, id_service))
+        id_projet = cur.fetchone()['id']
 
-        cur.execute("INSERT INTO checklistes (id_projet) VALUES (?)", (id_projet,))
-        id_checklist = cur.lastrowid
+        cur.execute("INSERT INTO checklistes (id_projet) VALUES (%s) RETURNING id", (id_projet,))
+        id_checklist = cur.fetchone()['id']
         items_modele = conn.execute("""
             SELECT nom_item, requires_file, is_required, item_type, video_url, is_revision_item, file_category, field_type
-            FROM checklist_model_items WHERE id_service = ?
+            FROM checklist_model_items WHERE id_service = %s
         """, (id_service,)).fetchall()
         for m in items_modele:
             if not int(m['is_revision_item'] or 0):
                 cur.execute("""
                     INSERT INTO checklist_items (id_checklist, nom_item, requires_file, is_required, item_type, video_url, is_revision, file_category, field_type)
-                    VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
-                """, (id_checklist, m['nom_item'], int(m['requires_file'] or 0), int(m['is_required'] or 1), m['item_type'] or 'document', m['video_url'], m['file_category'] or 'autre', m['field_type'] or 'check'))
+                    VALUES (%s, %s, %s, %s, %s, %s, 0, %s, %s)
+                 RETURNING id""", (id_checklist, m['nom_item'], int(m['requires_file'] or 0), int(m['is_required'] or 1), m['item_type'] or 'document', m['video_url'], m['file_category'] or 'autre', m['field_type'] or 'check'))
 
         conn.commit()
 
@@ -4317,7 +4388,7 @@ def _creer_projet_depuis_booking(id_client: int, id_service: int, date_seance: s
                 depot_folder_id = create_folder("Dépôt de fichiers", parent_id=projet_folder_id)
                 make_folder_public(depot_folder_id)
             lien_gdrive = get_folder_link(projet_folder_id)
-            conn.execute("UPDATE projets SET lien_gdrive=?, drive_folder_id=?, depot_folder_id=? WHERE id=?",
+            conn.execute("UPDATE projets SET lien_gdrive=%s, drive_folder_id=%s, depot_folder_id=%s WHERE id=%s",
                          (lien_gdrive, projet_folder_id, depot_folder_id, id_projet))
             if service_row['drive_subfolders']:
                 for nom_sf in service_row['drive_subfolders'].split('|'):
@@ -4367,8 +4438,8 @@ def api_admin_service_envoyer_dispo(service_id):
         return jsonify({'error': 'Client requis'}), 400
 
     conn = get_db_connection()
-    service_row = conn.execute("SELECT * FROM services WHERE id=?", (service_id,)).fetchone()
-    client = conn.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+    service_row = conn.execute("SELECT * FROM services WHERE id=%s", (service_id,)).fetchone()
+    client = conn.execute("SELECT * FROM clients WHERE id=%s", (client_id,)).fetchone()
     conn.close()
     if not service_row:
         return jsonify({'error': 'Service introuvable'}), 404
@@ -4440,10 +4511,10 @@ def api_booking_confirm_service():
         return jsonify({'error': 'Données de réservation incomplètes'}), 400
 
     conn = get_db_connection()
-    client = conn.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
-    service_row = conn.execute("SELECT nom_service FROM services WHERE id=?", (service_id,)).fetchone()
+    client = conn.execute("SELECT * FROM clients WHERE id=%s", (client_id,)).fetchone()
+    service_row = conn.execute("SELECT nom_service FROM services WHERE id=%s", (service_id,)).fetchone()
     existing = conn.execute(
-        "SELECT id, label_fr FROM rendez_vous WHERE id_client=? AND start_utc=?",
+        "SELECT id, label_fr FROM rendez_vous WHERE id_client=%s AND start_utc=%s",
         (client_id, bloc_debut_str)
     ).fetchone()
     conn.close()
@@ -4507,9 +4578,9 @@ def api_booking_confirm_service_finaliser():
     label = format_slot_fr(seance_debut)
 
     conn = get_db_connection()
-    client = conn.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+    client = conn.execute("SELECT * FROM clients WHERE id=%s", (client_id,)).fetchone()
     existing = conn.execute(
-        "SELECT id, meet_link, label_fr FROM rendez_vous WHERE id_client=? AND start_utc=?",
+        "SELECT id, meet_link, label_fr FROM rendez_vous WHERE id_client=%s AND start_utc=%s",
         (client_id, bloc_debut_str)
     ).fetchone()
     conn.close()
@@ -4529,10 +4600,10 @@ def api_booking_confirm_service_finaliser():
         event_id, meet_link = create_meeting_event(bloc_debut, bloc_fin, client['nom_complet'], client['email'])
         conn = get_db_connection()
         cur = conn.execute(
-            "INSERT INTO rendez_vous (id_client, calendar_event_id, start_utc, end_utc, meet_link, label_fr) VALUES (?,?,?,?,?,?)",
+            "INSERT INTO rendez_vous (id_client, calendar_event_id, start_utc, end_utc, meet_link, label_fr) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
             (client_id, event_id, bloc_debut_str, bloc_fin_str, meet_link, label)
         )
-        rdv_id = cur.lastrowid
+        rdv_id = cur.fetchone()['id']
         conn.commit()
         conn.close()
     except Exception as e:
@@ -4599,7 +4670,7 @@ def api_webhook_calendar():
                 continue
 
             event_id = event.get('id', '')
-            if conn.execute("SELECT id FROM rendez_vous WHERE calendar_event_id=?", (event_id,)).fetchone():
+            if conn.execute("SELECT id FROM rendez_vous WHERE calendar_event_id=%s", (event_id,)).fetchone():
                 continue
 
             # Email du client (attendee != organisateur)
@@ -4612,7 +4683,7 @@ def api_webhook_calendar():
                 continue
 
             client = conn.execute(
-                "SELECT * FROM clients WHERE LOWER(email)=LOWER(?)", (client_email,)
+                "SELECT * FROM clients WHERE LOWER(email)=LOWER(%s)", (client_email,)
             ).fetchone()
             if not client:
                 print(f"[WEBHOOK] Booking ignoré — email inconnu: {client_email}")
@@ -4631,10 +4702,10 @@ def api_webhook_calendar():
 
             cur = conn.execute(
                 "INSERT INTO rendez_vous (id_client, calendar_event_id, start_utc, end_utc, meet_link, label_fr)"
-                " VALUES (?,?,?,?,?,?)",
+                " VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
                 (client['id'], event_id, start_dt.isoformat(), end_dt.isoformat(), meet_link, label)
             )
-            rdv_id = cur.lastrowid
+            rdv_id = cur.fetchone()['id']
             conn.commit()
             _lier_rendez_vous_au_projet(client['id'], rdv_id)
 
@@ -4707,7 +4778,7 @@ def api_admin_creer_rendez_vous(client_id):
         return jsonify({'error': 'Date et heure requises'}), 400
 
     conn = get_db_connection()
-    client = conn.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+    client = conn.execute("SELECT * FROM clients WHERE id=%s", (client_id,)).fetchone()
     conn.close()
     if not client:
         return jsonify({'error': 'Client introuvable'}), 404
@@ -4727,10 +4798,10 @@ def api_admin_creer_rendez_vous(client_id):
 
         conn = get_db_connection()
         cur = conn.execute(
-            "INSERT INTO rendez_vous (id_client, calendar_event_id, start_utc, end_utc, meet_link, label_fr) VALUES (?,?,?,?,?,?)",
+            "INSERT INTO rendez_vous (id_client, calendar_event_id, start_utc, end_utc, meet_link, label_fr) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
             (client_id, event_id, start_utc.isoformat(), end_utc.isoformat(), meet_link, label)
         )
-        rdv_id = cur.lastrowid
+        rdv_id = cur.fetchone()['id']
         conn.commit()
         conn.close()
         _lier_rendez_vous_au_projet(client_id, rdv_id)
@@ -4777,7 +4848,7 @@ def _build_calendar_urls(start_utc, end_utc, meet_link: str, rdv_id: int) -> tup
 @app.route('/api/v1/rendez-vous/<int:rdv_id>/ics', methods=['GET'])
 def api_rendez_vous_ics(rdv_id):
     conn = get_db_connection()
-    rdv = conn.execute("SELECT * FROM rendez_vous WHERE id=?", (rdv_id,)).fetchone()
+    rdv = conn.execute("SELECT * FROM rendez_vous WHERE id=%s", (rdv_id,)).fetchone()
     conn.close()
     if not rdv:
         return jsonify({'error': 'Introuvable'}), 404
@@ -4807,18 +4878,18 @@ def api_rendez_vous_ics(rdv_id):
 def api_client_annuler_rdv(rdv_id):
     client_id = session['user_id']
     conn = get_db_connection()
-    rdv = conn.execute("SELECT * FROM rendez_vous WHERE id=? AND id_client=?", (rdv_id, client_id)).fetchone()
+    rdv = conn.execute("SELECT * FROM rendez_vous WHERE id=%s AND id_client=%s", (rdv_id, client_id)).fetchone()
     if not rdv:
         conn.close()
         return jsonify({'error': 'Rendez-vous introuvable'}), 404
-    client = conn.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+    client = conn.execute("SELECT * FROM clients WHERE id=%s", (client_id,)).fetchone()
     conn.close()
     try:
         from calendar_service import delete_calendar_event
         if rdv['calendar_event_id']:
             delete_calendar_event(rdv['calendar_event_id'])
         conn = get_db_connection()
-        conn.execute("DELETE FROM rendez_vous WHERE id=?", (rdv_id,))
+        conn.execute("DELETE FROM rendez_vous WHERE id=%s", (rdv_id,))
         conn.commit()
         conn.close()
         send_email(
@@ -4859,12 +4930,12 @@ def api_client_modifier_rdv(rdv_id):
         return jsonify({'error': 'Créneau requis'}), 400
 
     conn = get_db_connection()
-    rdv = conn.execute("SELECT * FROM rendez_vous WHERE id=? AND id_client=?", (rdv_id, client_id)).fetchone()
+    rdv = conn.execute("SELECT * FROM rendez_vous WHERE id=%s AND id_client=%s", (rdv_id, client_id)).fetchone()
     if not rdv:
         conn.close()
         return jsonify({'error': 'Rendez-vous introuvable'}), 404
 
-    client = conn.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+    client = conn.execute("SELECT * FROM clients WHERE id=%s", (client_id,)).fetchone()
     conn.close()
 
     try:
@@ -4880,7 +4951,7 @@ def api_client_modifier_rdv(rdv_id):
 
         conn = get_db_connection()
         conn.execute(
-            "UPDATE rendez_vous SET calendar_event_id=?, start_utc=?, end_utc=?, meet_link=?, label_fr=? WHERE id=?",
+            "UPDATE rendez_vous SET calendar_event_id=%s, start_utc=%s, end_utc=%s, meet_link=%s, label_fr=%s WHERE id=%s",
             (event_id, start_utc_str, end_utc_str, meet_link, label, rdv_id)
         )
         conn.commit()
@@ -4914,7 +4985,7 @@ def api_client_rendez_vous():
     client_id = session['user_id']
     conn = get_db_connection()
     rdvs = conn.execute(
-        "SELECT * FROM rendez_vous WHERE id_client=? AND start_utc >= datetime('now','-1 hour') ORDER BY start_utc",
+        "SELECT * FROM rendez_vous WHERE id_client=%s AND start_utc >= datetime('now','-1 hour') ORDER BY start_utc",
         (client_id,)
     ).fetchall()
     conn.close()
@@ -4959,7 +5030,7 @@ def api_admin_get_clients():
 def api_admin_get_client_notes(client_id):
     conn = get_db_connection()
     notes = conn.execute(
-        "SELECT * FROM client_notes WHERE id_client = ? ORDER BY created_at DESC", (client_id,)
+        "SELECT * FROM client_notes WHERE id_client = %s ORDER BY created_at DESC", (client_id,)
     ).fetchall()
     conn.close()
     return jsonify([{'id': n['id'], 'contenu': n['contenu'], 'created_at': n['created_at']} for n in notes])
@@ -4974,10 +5045,10 @@ def api_admin_add_client_note(client_id):
         return jsonify({'error': 'Le contenu de la note est obligatoire.'}), 400
     conn = get_db_connection()
     cur = conn.execute(
-        "INSERT INTO client_notes (id_client, contenu) VALUES (?, ?)", (client_id, contenu)
+        "INSERT INTO client_notes (id_client, contenu) VALUES (%s, %s) RETURNING id", (client_id, contenu)
     )
     note = conn.execute(
-        "SELECT * FROM client_notes WHERE id = ?", (cur.lastrowid,)
+        "SELECT * FROM client_notes WHERE id = %s", (cur.fetchone()['id'],)
     ).fetchone()
     conn.commit()
     conn.close()
@@ -4988,7 +5059,7 @@ def api_admin_add_client_note(client_id):
 @admin_required
 def api_admin_delete_client_note(client_id, note_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM client_notes WHERE id = ? AND id_client = ?", (note_id, client_id))
+    conn.execute("DELETE FROM client_notes WHERE id = %s AND id_client = %s", (note_id, client_id))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -5001,7 +5072,7 @@ def api_admin_get_client_projets(client_id):
         SELECT p.*, s.nom_service
         FROM projets p
         LEFT JOIN services s ON s.id = p.id_service
-        WHERE p.id_client = ?
+        WHERE p.id_client = %s
         ORDER BY p.created_at DESC
     """, (client_id,)).fetchall()
     conn.close()
@@ -5042,7 +5113,7 @@ def api_admin_create_projet():
 
     conn = get_db_connection()
     try:
-        service_row = conn.execute("SELECT * FROM services WHERE id=?", (id_service,)).fetchone()
+        service_row = conn.execute("SELECT * FROM services WHERE id=%s", (id_service,)).fetchone()
         if not service_row:
             return jsonify({'error': 'Service introuvable.'}), 400
 
@@ -5072,9 +5143,9 @@ def api_admin_create_projet():
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO projets (nom_projet, titre_projet, heure_seance, lien_reunion, duree_seance_minutes, statut, lien_gdrive, id_client, localisation, id_service, facturation_mode)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (nom_projet, titre_projet, heure_seance, lien_reunion, duree_seance_minutes, statut, lien_gdrive, id_client, localisation, id_service, facturation_mode))
-        id_projet = cur.lastrowid
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+         RETURNING id""", (nom_projet, titre_projet, heure_seance, lien_reunion, duree_seance_minutes, statut, lien_gdrive, id_client, localisation, id_service, facturation_mode))
+        id_projet = cur.fetchone()['id']
 
         for extra in extras:
             nom_extra = (extra.get('nom') or '').strip()
@@ -5082,27 +5153,27 @@ def api_admin_create_projet():
             km_extra = int(extra.get('km', 0) or 0)
             if nom_extra:
                 cur.execute(
-                    "INSERT INTO projet_extras (id_projet, nom, prix, km) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO projet_extras (id_projet, nom, prix, km) VALUES (%s, %s, %s, %s) RETURNING id",
                     (id_projet, nom_extra, prix_extra, km_extra)
                 )
 
-        cur.execute("INSERT INTO checklistes (id_projet) VALUES (?)", (id_projet,))
-        id_checklist = cur.lastrowid
+        cur.execute("INSERT INTO checklistes (id_projet) VALUES (%s) RETURNING id", (id_projet,))
+        id_checklist = cur.fetchone()['id']
         items_modele = conn.execute("""
             SELECT nom_item, requires_file, is_required, item_type, video_url, is_revision_item, file_category, field_type
-            FROM checklist_model_items WHERE id_service = ?
+            FROM checklist_model_items WHERE id_service = %s
         """, (id_service,)).fetchall()
         for m in items_modele:
             if not int(m['is_revision_item'] or 0):
                 cur.execute("""
                     INSERT INTO checklist_items (id_checklist, nom_item, requires_file, is_required, item_type, video_url, is_revision, file_category, field_type)
-                    VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
-                """, (id_checklist, m['nom_item'], int(m['requires_file'] or 0), int(m['is_required'] or 1), m['item_type'] or 'document', m['video_url'], m['file_category'] or 'autre', m['field_type'] or 'check'))
+                    VALUES (%s, %s, %s, %s, %s, %s, 0, %s, %s)
+                 RETURNING id""", (id_checklist, m['nom_item'], int(m['requires_file'] or 0), int(m['is_required'] or 1), m['item_type'] or 'document', m['video_url'], m['file_category'] or 'autre', m['field_type'] or 'check'))
 
         conn.commit()
 
         try:
-            client_row = conn.execute("SELECT * FROM clients WHERE id=?", (id_client,)).fetchone()
+            client_row = conn.execute("SELECT * FROM clients WHERE id=%s", (id_client,)).fetchone()
             parent = client_row['drive_folder_id'] if client_row and client_row['drive_folder_id'] else os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID')
             projet_folder_id = create_folder(nom_projet, parent_id=parent)
             make_folder_public(projet_folder_id)
@@ -5111,7 +5182,7 @@ def api_admin_create_projet():
                 depot_folder_id = create_folder("Dépôt de fichiers", parent_id=projet_folder_id)
                 make_folder_public(depot_folder_id)
             lien_gdrive_new = get_folder_link(projet_folder_id)
-            conn.execute("UPDATE projets SET lien_gdrive=?, drive_folder_id=?, depot_folder_id=? WHERE id=?",
+            conn.execute("UPDATE projets SET lien_gdrive=%s, drive_folder_id=%s, depot_folder_id=%s WHERE id=%s",
                          (lien_gdrive_new, projet_folder_id, depot_folder_id, id_projet))
             if service_row['drive_subfolders']:
                 for nom_sf in service_row['drive_subfolders'].split('|'):
@@ -5126,13 +5197,13 @@ def api_admin_create_projet():
         if heure_seance and localisation:
             try:
                 from calendar_service import create_seance_event
-                client_row2 = conn.execute("SELECT * FROM clients WHERE id=?", (id_client,)).fetchone()
+                client_row2 = conn.execute("SELECT * FROM clients WHERE id=%s", (id_client,)).fetchone()
                 create_seance_event(nom_projet, date_seance, heure_seance, duree_seance_minutes, localisation, client_row2['email'])
             except Exception as e:
                 print(f"[CALENDAR] Invitation séance échouée: {e}")
 
         try:
-            client_notif = conn.execute("SELECT * FROM clients WHERE id=?", (id_client,)).fetchone()
+            client_notif = conn.execute("SELECT * FROM clients WHERE id=%s", (id_client,)).fetchone()
             if client_notif and client_notif['email']:
                 lien_projet = url_for('project_detail', project_id=id_projet, _external=True)
                 send_email_client(client_notif,
@@ -5149,8 +5220,8 @@ def api_admin_create_projet():
         # « Démarrer les travaux » reste disponible ensuite pour relancer/confirmer au besoin.
         if statut == 'Travaux en cours':
             try:
-                projet_frais = conn.execute("SELECT * FROM projets WHERE id=?", (id_projet,)).fetchone()
-                client_frais = conn.execute("SELECT * FROM clients WHERE id=?", (id_client,)).fetchone()
+                projet_frais = conn.execute("SELECT * FROM projets WHERE id=%s", (id_projet,)).fetchone()
+                client_frais = conn.execute("SELECT * FROM clients WHERE id=%s", (id_client,)).fetchone()
                 _do_start_travaux(conn, projet_frais, client_frais)
             except Exception as e:
                 print(f"[START] Auto-start à la création échoué: {e}")
@@ -5230,11 +5301,11 @@ def api_admin_get_services():
     result = []
     for s in services:
         items = conn.execute(
-            'SELECT * FROM checklist_model_items WHERE id_service = ? ORDER BY position',
+            'SELECT * FROM checklist_model_items WHERE id_service = %s ORDER BY position',
             (s['id'],)
         ).fetchall()
         extras = conn.execute(
-            'SELECT * FROM service_extras WHERE id_service = ? ORDER BY position, id',
+            'SELECT * FROM service_extras WHERE id_service = %s ORDER BY position, id',
             (s['id'],)
         ).fetchall()
         result.append({
@@ -5300,13 +5371,13 @@ def api_admin_dashboard():
     mois_courant = datetime.now().strftime('%Y-%m')
     visuels_a_creer = conn.execute("""
         SELECT id, titre, date_publication FROM marketing_posts
-        WHERE strftime('%Y-%m', date_publication) = ? AND todo_felix_done = 0
+        WHERE LEFT(date_publication, 7) = %s AND todo_felix_done = 0
           AND linked_roadmap_todo_id IS NULL
         ORDER BY date_publication ASC LIMIT 5
     """, (mois_courant,)).fetchall()
     a_publier = conn.execute("""
         SELECT id, titre, date_publication FROM marketing_posts
-        WHERE strftime('%Y-%m', date_publication) = ? AND statut = 'visuels prêts'
+        WHERE LEFT(date_publication, 7) = %s AND statut = 'visuels prêts'
         ORDER BY date_publication ASC LIMIT 5
     """, (mois_courant,)).fetchall()
     conn.close()
@@ -5397,13 +5468,13 @@ def api_admin_changelog_post():
 def api_admin_get_checklist(projet_id):
     conn = get_db_connection()
     checklist = conn.execute(
-        'SELECT * FROM checklistes WHERE id_projet = ?', (projet_id,)
+        'SELECT * FROM checklistes WHERE id_projet = %s', (projet_id,)
     ).fetchone()
     if not checklist:
         conn.close()
         return jsonify([])
     items = conn.execute(
-        'SELECT * FROM checklist_items WHERE id_checklist = ? ORDER BY position',
+        'SELECT * FROM checklist_items WHERE id_checklist = %s ORDER BY position',
         (checklist['id'],)
     ).fetchall()
     conn.close()
@@ -5428,7 +5499,7 @@ def api_admin_get_checklist(projet_id):
 @admin_required
 def api_admin_serve_item_file(item_id):
     conn = get_db_connection()
-    item = conn.execute("SELECT * FROM checklist_items WHERE id = ?", (item_id,)).fetchone()
+    item = conn.execute("SELECT * FROM checklist_items WHERE id = %s", (item_id,)).fetchone()
     conn.close()
     if not item or not item['file_path']:
         return jsonify({'error': 'Fichier introuvable'}), 404
@@ -5455,19 +5526,19 @@ def _lier_rendez_vous_au_projet(id_client, rdv_id):
     conn = get_db_connection()
     try:
         candidats = conn.execute(
-            "SELECT * FROM projets WHERE id_client=? AND statut='En attente de rendez-vous'",
+            "SELECT * FROM projets WHERE id_client=%s AND statut='En attente de rendez-vous'",
             (id_client,)
         ).fetchall()
         if len(candidats) != 1:
             return
         projet = candidats[0]
-        conn.execute("UPDATE rendez_vous SET id_projet=? WHERE id=?", (projet['id'], rdv_id))
+        conn.execute("UPDATE rendez_vous SET id_projet=%s WHERE id=%s", (projet['id'], rdv_id))
         conn.commit()
-        service_row = conn.execute("SELECT * FROM services WHERE id=?", (projet['id_service'],)).fetchone() if projet['id_service'] else None
+        service_row = conn.execute("SELECT * FROM services WHERE id=%s", (projet['id_service'],)).fetchone() if projet['id_service'] else None
         documents_requis = bool(service_row['documents_requis']) if service_row else True
-        client = conn.execute("SELECT * FROM clients WHERE id=?", (id_client,)).fetchone()
+        client = conn.execute("SELECT * FROM clients WHERE id=%s", (id_client,)).fetchone()
         if documents_requis:
-            conn.execute("UPDATE projets SET statut='Documents à donner' WHERE id=?", (projet['id'],))
+            conn.execute("UPDATE projets SET statut='Documents à donner' WHERE id=%s", (projet['id'],))
             conn.commit()
             try:
                 if client and client['email']:
@@ -5499,7 +5570,7 @@ def _do_start_travaux(conn, projet, client, date_livraison_override=None):
        client (todos + courriel) — l'événement Calendar interne de l'équipe garde son propre
        créneau auto-calculé, pas déplacé par cet override."""
     project_id = projet['id']
-    service_row = conn.execute("SELECT * FROM services WHERE id=?", (projet['id_service'],)).fetchone()
+    service_row = conn.execute("SELECT * FROM services WHERE id=%s", (projet['id_service'],)).fetchone()
     date_livraison = projet['date_livraison_estimee']
     if isinstance(date_livraison, str) and date_livraison:
         try:
@@ -5525,19 +5596,19 @@ def _do_start_travaux(conn, projet, client, date_livraison_override=None):
         if override_date:
             date_livraison = override_date
         conn.execute(
-            "UPDATE projets SET statut='Travaux en cours', calendar_event_id=?, date_livraison_estimee=? WHERE id=?",
+            "UPDATE projets SET statut='Travaux en cours', calendar_event_id=%s, date_livraison_estimee=%s WHERE id=%s",
             (event_id, str(date_livraison) if date_livraison else None, project_id)
         )
     elif override_date:
         date_livraison = override_date
         conn.execute(
-            "UPDATE projets SET statut='Travaux en cours', date_livraison_estimee=? WHERE id=?",
+            "UPDATE projets SET statut='Travaux en cours', date_livraison_estimee=%s WHERE id=%s",
             (str(override_date), project_id)
         )
     else:
-        conn.execute("UPDATE projets SET statut='Travaux en cours' WHERE id=?", (project_id,))
+        conn.execute("UPDATE projets SET statut='Travaux en cours' WHERE id=%s", (project_id,))
 
-    existing_todos = conn.execute("SELECT COUNT(*) FROM todos_perso WHERE projet_id=?", (project_id,)).fetchone()[0]
+    existing_todos = conn.execute("SELECT COUNT(*) FROM todos_perso WHERE projet_id=%s", (project_id,)).fetchone()[0]
     if existing_todos == 0:
         icon_service = service_row['icon'] if service_row and service_row['icon'] else 'default'
         taches = TACHES_PAR_SERVICE.get(icon_service, TACHES_PAR_SERVICE['default'])
@@ -5550,11 +5621,11 @@ def _do_start_travaux(conn, projet, client, date_livraison_override=None):
         for texte in taches:
             cur = conn.execute(
                 """INSERT INTO todos_perso (texte, priorite, date_echeance, projet_id, projet_nom)
-                   VALUES (?, 'normale', ?, ?, ?)""",
+                   VALUES (%s, 'normale', %s, %s, %s) RETURNING id""",
                 (texte, date_echeance, project_id, projet['nom_projet'])
             )
             if gestion_id:
-                conn.execute("INSERT OR IGNORE INTO todo_assignees (todo_id, admin_id) VALUES (?, ?)", (cur.lastrowid, gestion_id))
+                conn.execute("INSERT INTO todo_assignees (todo_id, admin_id) VALUES (%s, %s)", (cur.fetchone()['id'], gestion_id))
     conn.commit()
 
     facture = None
@@ -5573,27 +5644,27 @@ def _do_start_travaux(conn, projet, client, date_livraison_override=None):
             if facture:
                 pdf_path = facture['pdf_path']
                 try:
-                    cr = conn.execute("SELECT factures_folder_id FROM clients WHERE id=?", (client['id'],)).fetchone()
+                    cr = conn.execute("SELECT factures_folder_id FROM clients WHERE id=%s", (client['id'],)).fetchone()
                     if cr and cr['factures_folder_id']:
                         fid, _ = upload_file(pdf_path, f"{facture['numero']}.pdf", cr['factures_folder_id'])
-                        conn.execute("UPDATE factures SET drive_file_id=? WHERE id=?", (fid, facture['id']))
+                        conn.execute("UPDATE factures SET drive_file_id=%s WHERE id=%s", (fid, facture['id']))
                         conn.commit()
                 except Exception as e:
                     print(f"[DRIVE] Upload facture _do_start_travaux: {e}")
         # Génération réussie (ou volontairement sautée) — efface un flag d'échec précédent
-        conn.execute("UPDATE projets SET facture_generation_echouee=0 WHERE id=?", (project_id,))
+        conn.execute("UPDATE projets SET facture_generation_echouee=0 WHERE id=%s", (project_id,))
         conn.commit()
     except Exception as e:
         print(f"[INVOICE] _do_start_travaux: {e}")
-        conn.execute("UPDATE projets SET facture_generation_echouee=1 WHERE id=?", (project_id,))
+        conn.execute("UPDATE projets SET facture_generation_echouee=1 WHERE id=%s", (project_id,))
         gestion_id = _admin_id_for_role(conn, 'gestion')
         cur = conn.execute(
             """INSERT INTO todos_perso (texte, priorite, projet_id, projet_nom)
-               VALUES (?, 'haute', ?, ?)""",
+               VALUES (%s, 'haute', %s, %s) RETURNING id""",
             (f"⚠️ Facture non générée pour « {projet['nom_projet']} » — vérifier et relancer manuellement", project_id, projet['nom_projet'])
         )
         if gestion_id:
-            conn.execute("INSERT OR IGNORE INTO todo_assignees (todo_id, admin_id) VALUES (?, ?)", (cur.lastrowid, gestion_id))
+            conn.execute("INSERT INTO todo_assignees (todo_id, admin_id) VALUES (%s, %s)", (cur.fetchone()['id'], gestion_id))
         conn.commit()
 
     try:
@@ -5625,12 +5696,12 @@ def _check_revision_auto_transition(conn, project_id):
     'Corrections en cours' et prévient l'admin. Si tout est simplement approuvé sans aucun
     commentaire, on ne bouge rien : l'admin reste libre de compléter manuellement quand il
     le juge à propos (pas d'auto-complétion, qui demande un choix de ressources à assigner)."""
-    projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id=%s", (project_id,)).fetchone()
     if not projet or projet['statut'] != 'En révision':
         return
     all_resolved, has_comments = compute_revision_readiness(project_id)
     if all_resolved and has_comments:
-        conn.execute("UPDATE projets SET statut='Corrections en cours' WHERE id=?", (project_id,))
+        conn.execute("UPDATE projets SET statut='Corrections en cours' WHERE id=%s", (project_id,))
         conn.commit()
         push_admin_notif(
             conn,
@@ -5641,10 +5712,10 @@ def _check_revision_auto_transition(conn, project_id):
         )
         conn.commit()
         try:
-            checklist = conn.execute("SELECT id FROM checklistes WHERE id_projet=?", (project_id,)).fetchone()
+            checklist = conn.execute("SELECT id FROM checklistes WHERE id_projet=%s", (project_id,)).fetchone()
             a_corriger = conn.execute(
                 "SELECT nom_item, text_value FROM checklist_items "
-                "WHERE id_checklist=? AND is_revision=1 AND text_value IS NOT NULL AND TRIM(text_value) != ''",
+                "WHERE id_checklist=%s AND is_revision=1 AND text_value IS NOT NULL AND TRIM(text_value) != ''",
                 (checklist['id'],)
             ).fetchall() if checklist else []
             lignes = "\n".join(f"- {it['nom_item']} : {it['text_value']}" for it in a_corriger)
@@ -5664,22 +5735,22 @@ def _check_corrections_completed_auto_transition(conn, project_id):
     de re-vérifier que ceux-là — les items simplement approuvés restent tels quels),
     repasse le projet en 'En révision' et renvoie automatiquement le courriel de
     révision pour ce dernier passage."""
-    projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id=%s", (project_id,)).fetchone()
     if not projet or projet['statut'] != 'Corrections en cours':
         return
-    checklist = conn.execute("SELECT id FROM checklistes WHERE id_projet=?", (project_id,)).fetchone()
+    checklist = conn.execute("SELECT id FROM checklistes WHERE id_projet=%s", (project_id,)).fetchone()
     if not checklist:
         return
     a_corriger = conn.execute(
         "SELECT * FROM checklist_items "
-        "WHERE id_checklist=? AND is_revision=1 AND est_coche=1 AND text_value IS NOT NULL AND TRIM(text_value) != ''",
+        "WHERE id_checklist=%s AND is_revision=1 AND est_coche=1 AND text_value IS NOT NULL AND TRIM(text_value) != ''",
         (checklist['id'],)
     ).fetchall()
     if not a_corriger or not all(int(it['admin_resolu'] or 0) == 1 for it in a_corriger):
         return
     for it in a_corriger:
         conn.execute(
-            "UPDATE checklist_items SET est_coche=0, text_value=NULL, file_path=NULL, admin_resolu=0 WHERE id=?",
+            "UPDATE checklist_items SET est_coche=0, text_value=NULL, file_path=NULL, admin_resolu=0 WHERE id=%s",
             (it['id'],)
         )
     conn.commit()
@@ -5691,31 +5762,31 @@ def _do_start_revision(conn, projet, items_revision=None):
        dédié et /force-status."""
     project_id = projet['id']
     items_revision = [str(n).strip() for n in (items_revision or []) if str(n).strip()]
-    checklist = conn.execute("SELECT id FROM checklistes WHERE id_projet=?", (project_id,)).fetchone()
+    checklist = conn.execute("SELECT id FROM checklistes WHERE id_projet=%s", (project_id,)).fetchone()
     if not checklist:
-        conn.execute("INSERT INTO checklistes (id_projet) VALUES (?)", (project_id,))
+        conn.execute("INSERT INTO checklistes (id_projet) VALUES (%s) RETURNING id", (project_id,))
         conn.commit()
-        checklist = conn.execute("SELECT id FROM checklistes WHERE id_projet=?", (project_id,)).fetchone()
+        checklist = conn.execute("SELECT id FROM checklistes WHERE id_projet=%s", (project_id,)).fetchone()
     if not items_revision:
         deja_existants = conn.execute(
-            "SELECT COUNT(*) AS n FROM checklist_items WHERE id_checklist=? AND is_revision=1",
+            "SELECT COUNT(*) AS n FROM checklist_items WHERE id_checklist=%s AND is_revision=1",
             (checklist['id'],)
         ).fetchone()['n']
         if not deja_existants:
-            service_row = conn.execute("SELECT nom_service FROM services WHERE id=?", (projet['id_service'],)).fetchone() if projet['id_service'] else None
+            service_row = conn.execute("SELECT nom_service FROM services WHERE id=%s", (projet['id_service'],)).fetchone() if projet['id_service'] else None
             nom_service = service_row['nom_service'] if service_row else None
             items_revision = REVISION_ITEMS_PAR_SERVICE.get(nom_service, [])
     for nom in items_revision:
         conn.execute("""
             INSERT INTO checklist_items (id_checklist, nom_item, requires_file, is_required, is_revision, field_type)
-            VALUES (?, ?, 0, 1, 1, 'review')
-        """, (checklist['id'], nom))
-    conn.execute("UPDATE projets SET statut='En révision' WHERE id=?", (project_id,))
+            VALUES (%s, %s, 0, 1, 1, 'review')
+         RETURNING id""", (checklist['id'], nom))
+    conn.execute("UPDATE projets SET statut='En révision' WHERE id=%s", (project_id,))
     conn.commit()
     try:
-        client = conn.execute("SELECT * FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
+        client = conn.execute("SELECT * FROM clients WHERE id=%s", (projet['id_client'],)).fetchone()
         if client and client['email']:
-            projet_fresh = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
+            projet_fresh = conn.execute("SELECT * FROM projets WHERE id=%s", (project_id,)).fetchone()
             _envoyer_courriel_revision(conn, projet_fresh, client)
             push_notification(conn, client['id'], project_id,
                 f"Votre projet « {projet_fresh['nom_projet']} » est en révision.", type='revision')
@@ -5735,28 +5806,28 @@ def _do_complete(conn, projet, ressource_ids=None):
             rid = int(rid)
         except (TypeError, ValueError):
             continue
-        row = conn.execute("SELECT * FROM client_ressources WHERE id=?", (rid,)).fetchone()
+        row = conn.execute("SELECT * FROM client_ressources WHERE id=%s", (rid,)).fetchone()
         if not row or (row['id_client'] is not None and row['id_client'] != id_client):
             continue
         conn.execute("""
             INSERT INTO ressource_assignations (id_ressource, id_client, id_projet)
-            VALUES (?, ?, ?)
+            VALUES (%s, %s, %s)
             ON CONFLICT(id_ressource, id_client) DO NOTHING
-        """, (rid, id_client, project_id))
+         RETURNING id""", (rid, id_client, project_id))
         ressources_assignees.append(dict(_ressource_to_dict(row)))
 
-    conn.execute("UPDATE projets SET statut='Complété' WHERE id=?", (project_id,))
-    conn.execute("UPDATE todos_perso SET est_coche=1 WHERE projet_id=? AND est_coche=0", (project_id,))
+    conn.execute("UPDATE projets SET statut='Complété' WHERE id=%s", (project_id,))
+    conn.execute("UPDATE todos_perso SET est_coche=1 WHERE projet_id=%s AND est_coche=0", (project_id,))
     conn.commit()
     try:
-        client = conn.execute("SELECT * FROM clients WHERE id=?", (id_client,)).fetchone()
+        client = conn.execute("SELECT * FROM clients WHERE id=%s", (id_client,)).fetchone()
         if client and client['email']:
             lien = url_for('project_detail', project_id=project_id, _external=True)
             for r in ressources_assignees:
                 if r['url'] and not r['url'].startswith('http'):
                     r['url'] = PORTAIL_URL + r['url']
             logo_fichiers = conn.execute(
-                "SELECT id, filename FROM projet_logo_fichiers WHERE id_projet=? ORDER BY created_at", (project_id,)
+                "SELECT id, filename FROM projet_logo_fichiers WHERE id_projet=%s ORDER BY created_at", (project_id,)
             ).fetchall()
             logos = [{
                 'filename': f['filename'],
@@ -5779,11 +5850,11 @@ def _do_complete(conn, projet, ressource_ids=None):
 def api_admin_start_work(project_id):
     data = request.get_json(silent=True) or {}
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id=%s", (project_id,)).fetchone()
     if not projet:
         conn.close()
         return jsonify({'error': 'Projet introuvable'}), 404
-    client = conn.execute("SELECT * FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
+    client = conn.execute("SELECT * FROM clients WHERE id=%s", (projet['id_client'],)).fetchone()
     date_livraison = _do_start_travaux(conn, projet, client, date_livraison_override=data.get('date_livraison'))
     conn.close()
     return jsonify({'success': True, 'date_livraison': str(date_livraison) if date_livraison else None})
@@ -5794,7 +5865,7 @@ def api_admin_start_work(project_id):
 def api_admin_start_revision(project_id):
     data = request.get_json() or {}
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id=%s", (project_id,)).fetchone()
     if not projet:
         conn.close()
         return jsonify({'error': 'Projet introuvable'}), 404
@@ -5811,13 +5882,13 @@ def api_admin_toggle_item_resolu(item_id):
     neuf et le projet retourne automatiquement en révision (voir
     _check_corrections_completed_auto_transition)."""
     conn = get_db_connection()
-    item = conn.execute("SELECT * FROM checklist_items WHERE id = ?", (item_id,)).fetchone()
+    item = conn.execute("SELECT * FROM checklist_items WHERE id = %s", (item_id,)).fetchone()
     if not item:
         conn.close()
         return jsonify({'error': 'Item introuvable'}), 404
-    checklist = conn.execute("SELECT id_projet FROM checklistes WHERE id = ?", (item['id_checklist'],)).fetchone()
+    checklist = conn.execute("SELECT id_projet FROM checklistes WHERE id = %s", (item['id_checklist'],)).fetchone()
     new_val = 1 - int(item['admin_resolu'] or 0)
-    conn.execute("UPDATE checklist_items SET admin_resolu = ? WHERE id = ?", (new_val, item_id))
+    conn.execute("UPDATE checklist_items SET admin_resolu = %s WHERE id = %s", (new_val, item_id))
     conn.commit()
     if new_val == 1 and int(item['is_revision'] or 0) == 1:
         _check_corrections_completed_auto_transition(conn, checklist['id_projet'])
@@ -5830,7 +5901,7 @@ def api_admin_toggle_item_resolu(item_id):
 def api_admin_complete_project(project_id):
     data = request.get_json(silent=True) or {}
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id=%s", (project_id,)).fetchone()
     if not projet:
         conn.close()
         return jsonify({'error': 'Projet introuvable'}), 404
@@ -5847,11 +5918,11 @@ def api_admin_force_status(project_id):
     if not statut:
         return jsonify({'error': 'Statut requis'}), 400
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id=%s", (project_id,)).fetchone()
     if not projet:
         conn.close()
         return jsonify({'error': 'Projet introuvable'}), 404
-    client = conn.execute("SELECT * FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
+    client = conn.execute("SELECT * FROM clients WHERE id=%s", (projet['id_client'],)).fetchone()
     statut_norm = normalize_status(statut)
     nom_projet = projet['nom_projet']
 
@@ -5872,7 +5943,7 @@ def api_admin_force_status(project_id):
         return jsonify({'success': True})
 
     # Cas hors pipeline normal (reset, annulation) : mise à jour simple + courriel ponctuel.
-    conn.execute("UPDATE projets SET statut=? WHERE id=?", (statut, project_id))
+    conn.execute("UPDATE projets SET statut=%s WHERE id=%s", (statut, project_id))
     conn.commit()
     try:
         if client and client['email']:
@@ -5900,12 +5971,12 @@ def api_admin_force_status(project_id):
 @admin_required
 def api_admin_notifier_revision(project_id):
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id=%s", (project_id,)).fetchone()
     if not projet:
         conn.close()
         return jsonify({'error': 'Projet introuvable'}), 404
-    client = conn.execute("SELECT * FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
-    iv = conn.execute("SELECT is_complete FROM identite_visuelle WHERE id_projet=?", (project_id,)).fetchone()
+    client = conn.execute("SELECT * FROM clients WHERE id=%s", (projet['id_client'],)).fetchone()
+    iv = conn.execute("SELECT is_complete FROM identite_visuelle WHERE id_projet=%s", (project_id,)).fetchone()
     conn.close()
     try:
         if iv and int(iv['is_complete'] or 0) == 1:
@@ -5924,11 +5995,11 @@ def api_admin_notifier_revision(project_id):
 @admin_required
 def api_admin_rappel_documents(project_id):
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id=%s", (project_id,)).fetchone()
     if not projet:
         conn.close()
         return jsonify({'error': 'Projet introuvable'}), 404
-    client = conn.execute("SELECT * FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
+    client = conn.execute("SELECT * FROM clients WHERE id=%s", (projet['id_client'],)).fetchone()
     conn.close()
     if not client:
         return jsonify({'error': 'Client introuvable'}), 404
@@ -5950,16 +6021,16 @@ def api_admin_rappel_documents(project_id):
 @admin_required
 def api_admin_archive_project(project_id):
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id=%s", (project_id,)).fetchone()
     if not projet:
         conn.close()
         return jsonify({'error': 'Projet introuvable'}), 404
-    conn.execute("UPDATE projets SET is_archived=1 WHERE id=?", (project_id,))
+    conn.execute("UPDATE projets SET is_archived=1 WHERE id=%s", (project_id,))
     conn.commit()
     push_notification(conn, projet['id_client'], project_id, f"Votre projet « {projet['nom_projet']} » a été archivé.", type='archive')
     conn.commit()
     try:
-        client = conn.execute("SELECT * FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
+        client = conn.execute("SELECT * FROM clients WHERE id=%s", (projet['id_client'],)).fetchone()
         if client and client['email'] and int(client['is_email_confirmed'] or 0):
             send_email(client['email'], f"Projet archivé — {projet['nom_projet']}", f"Bonjour {client['nom_complet']}, votre projet a été archivé.", html=email_archive(client['nom_complet'], projet['nom_projet']))
     except Exception as e:
@@ -5972,7 +6043,7 @@ def api_admin_archive_project(project_id):
 @admin_required
 def api_admin_unarchive_project(project_id):
     conn = get_db_connection()
-    conn.execute("UPDATE projets SET is_archived=0 WHERE id=?", (project_id,))
+    conn.execute("UPDATE projets SET is_archived=0 WHERE id=%s", (project_id,))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -5984,13 +6055,13 @@ def api_admin_recreate_drive(project_id):
     conn = get_db_connection()
     try:
         p = conn.execute(
-            'SELECT p.nom_projet, p.id_client, s.documents_requis as svc_docs, s.drive_subfolders FROM projets p LEFT JOIN services s ON s.id=p.id_service WHERE p.id=?',
+            'SELECT p.nom_projet, p.id_client, s.documents_requis as svc_docs, s.drive_subfolders FROM projets p LEFT JOIN services s ON s.id=p.id_service WHERE p.id=%s',
             (project_id,)
         ).fetchone()
         if not p:
             return jsonify({'error': 'Projet introuvable'}), 404
 
-        client = conn.execute('SELECT drive_folder_id FROM clients WHERE id=?', (p['id_client'],)).fetchone()
+        client = conn.execute('SELECT drive_folder_id FROM clients WHERE id=%s', (p['id_client'],)).fetchone()
         parent = (client['drive_folder_id'] if client and client['drive_folder_id'] else None) or os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID')
 
         folder_id = create_folder(p['nom_projet'], parent_id=parent)
@@ -6011,7 +6082,7 @@ def api_admin_recreate_drive(project_id):
                     make_folder_public(sf_id)
 
         conn.execute(
-            'UPDATE projets SET lien_gdrive=?, drive_folder_id=?, depot_folder_id=? WHERE id=?',
+            'UPDATE projets SET lien_gdrive=%s, drive_folder_id=%s, depot_folder_id=%s WHERE id=%s',
             (lien, folder_id, depot_id, project_id)
         )
         conn.commit()
@@ -6028,7 +6099,7 @@ def api_admin_edit_checklist_items(project_id):
     data = request.get_json() or {}
     items = data.get('items', [])
     conn = get_db_connection()
-    checklist = conn.execute("SELECT id FROM checklistes WHERE id_projet=?", (project_id,)).fetchone()
+    checklist = conn.execute("SELECT id FROM checklistes WHERE id_projet=%s", (project_id,)).fetchone()
     if not checklist:
         conn.close()
         return jsonify({'error': 'Checklist introuvable'}), 404
@@ -6051,8 +6122,8 @@ def api_admin_edit_checklist_items(project_id):
         if nom and iid:
             conn.execute("""
                 UPDATE checklist_items
-                SET nom_item=?, item_type=?, file_category=?, requires_file=?, is_required=?
-                WHERE id=? AND id_checklist=?
+                SET nom_item=%s, item_type=%s, file_category=%s, requires_file=%s, is_required=%s
+                WHERE id=%s AND id_checklist=%s
             """, (nom, item_type, file_category, requires_file, is_required, iid, checklist['id']))
     conn.commit()
     conn.close()
@@ -6073,7 +6144,7 @@ def api_confirm_email(token):
             is_valid, maybe_email = s.loads_unsafe(token, salt='email-confirm-salt')
             if is_valid and maybe_email:
                 conn = get_db_connection()
-                u = conn.execute("SELECT is_email_confirmed FROM clients WHERE email = ?", (maybe_email,)).fetchone()
+                u = conn.execute("SELECT is_email_confirmed FROM clients WHERE email = %s", (maybe_email,)).fetchone()
                 conn.close()
                 if u and int(u['is_email_confirmed'] or 0):
                     return jsonify({'error': 'already_confirmed'}), 400
@@ -6082,14 +6153,14 @@ def api_confirm_email(token):
         return jsonify({'error': 'expired'}), 400
 
     conn = get_db_connection()
-    user = conn.execute("SELECT * FROM clients WHERE email = ?", (email,)).fetchone()
+    user = conn.execute("SELECT * FROM clients WHERE email = %s", (email,)).fetchone()
     if not user:
         conn.close()
         return jsonify({'error': 'Compte introuvable'}), 404
 
     if int(user['is_email_confirmed'] or 0):
         # Déjà confirmé (y compris si un scanner a déjà consommé ce lien)
-        conn.execute("UPDATE clients SET confirm_token = NULL WHERE email = ?", (email,))
+        conn.execute("UPDATE clients SET confirm_token = NULL WHERE email = %s", (email,))
         conn.commit()
         conn.close()
         return jsonify({'success': True, 'already_confirmed': True})
@@ -6105,7 +6176,7 @@ def api_confirm_email(token):
         conn.close()
         return jsonify({'error': 'Votre compte a été créé par un administrateur. Utilisez le lien d\'invitation reçu par courriel pour activer votre accès.'}), 400
 
-    conn.execute("UPDATE clients SET is_email_confirmed = 1, confirm_token = NULL WHERE email = ?", (email,))
+    conn.execute("UPDATE clients SET is_email_confirmed = 1, confirm_token = NULL WHERE email = %s", (email,))
     conn.commit()
     conn.close()
 
@@ -6147,7 +6218,7 @@ def api_forgot_password():
     if not _redis_rate_limit(f"reset_rate:{email}", 900):
         return jsonify({'success': True})
     conn = get_db_connection()
-    user = conn.execute("SELECT * FROM clients WHERE email = ?", (email,)).fetchone()
+    user = conn.execute("SELECT * FROM clients WHERE email = %s", (email,)).fetchone()
     conn.close()
     if user:
         try:
@@ -6179,7 +6250,7 @@ def api_change_password():
         return jsonify({'error': 'Mot de passe trop faible — min. 8 caractères, majuscule, minuscule, chiffre et caractère spécial'}), 400
     user_id = session['user_id']
     conn = get_db_connection()
-    user = conn.execute("SELECT mot_de_passe_hash, must_change_password FROM clients WHERE id = ?", (user_id,)).fetchone()
+    user = conn.execute("SELECT mot_de_passe_hash, must_change_password FROM clients WHERE id = %s", (user_id,)).fetchone()
     if not user:
         conn.close()
         return jsonify({'error': 'Compte introuvable'}), 404
@@ -6192,7 +6263,7 @@ def api_change_password():
             conn.close()
             return jsonify({'error': 'Mot de passe actuel incorrect'}), 403
     hashed = bcrypt.generate_password_hash(new_password).decode('utf-8')
-    conn.execute("UPDATE clients SET mot_de_passe_hash = ?, must_change_password = 0 WHERE id = ?", (hashed, user_id))
+    conn.execute("UPDATE clients SET mot_de_passe_hash = %s, must_change_password = 0 WHERE id = %s", (hashed, user_id))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -6208,14 +6279,14 @@ def api_admin_set_temp_password(client_id):
     if not is_password_strong(temp_password):
         return jsonify({'error': 'Mot de passe trop faible — min. 8 caractères, majuscule, minuscule, chiffre et caractère spécial (!@#$%^&*)'}), 400
     conn = get_db_connection()
-    client = conn.execute("SELECT id, email, is_email_confirmed FROM clients WHERE id = ?", (client_id,)).fetchone()
+    client = conn.execute("SELECT id, email, is_email_confirmed FROM clients WHERE id = %s", (client_id,)).fetchone()
     if not client:
         conn.close()
         return jsonify({'error': 'Client introuvable'}), 404
     hashed = bcrypt.generate_password_hash(temp_password).decode('utf-8')
     conn.execute("""
-        UPDATE clients SET mot_de_passe_hash = ?, must_change_password = 1, is_email_confirmed = 1
-        WHERE id = ?
+        UPDATE clients SET mot_de_passe_hash = %s, must_change_password = 1, is_email_confirmed = 1
+        WHERE id = %s
     """, (hashed, client_id))
     conn.commit()
     conn.close()
@@ -6232,13 +6303,13 @@ def api_resend_confirmation():
     if not _redis_rate_limit(f"resend_confirm:{email}", 300):
         return jsonify({'success': True})
     conn = get_db_connection()
-    user = conn.execute("SELECT * FROM clients WHERE email = ?", (email,)).fetchone()
+    user = conn.execute("SELECT * FROM clients WHERE email = %s", (email,)).fetchone()
     conn.close()
     if user and not int(user['is_email_confirmed'] or 0) and user['mot_de_passe_hash']:
         try:
             new_token = s.dumps(email, salt='email-confirm-salt')
             conn2 = get_db_connection()
-            conn2.execute("UPDATE clients SET confirm_token = ? WHERE email = ?", (new_token, email))
+            conn2.execute("UPDATE clients SET confirm_token = %s WHERE email = %s", (new_token, email))
             conn2.commit()
             conn2.close()
             confirm_url = f"{PORTAIL_URL}/confirm-email?token={new_token}"
@@ -6265,13 +6336,13 @@ def api_reset_password():
     except (SignatureExpired, BadTimeSignature, ValueError, TypeError):
         return jsonify({'error': 'Lien invalide ou expiré'}), 400
     conn = get_db_connection()
-    user = conn.execute("SELECT * FROM clients WHERE email = ?", (email,)).fetchone()
+    user = conn.execute("SELECT * FROM clients WHERE email = %s", (email,)).fetchone()
     if not user or user['mot_de_passe_hash'] != token_hash:
         conn.close()
         return jsonify({'error': 'Ce lien a déjà été utilisé ou est invalide'}), 400
     hashed = bcrypt.generate_password_hash(password).decode('utf-8')
     conn.execute(
-        'UPDATE clients SET mot_de_passe_hash = ?, is_email_confirmed = 1 WHERE email = ?', (hashed, email)
+        'UPDATE clients SET mot_de_passe_hash = %s, is_email_confirmed = 1 WHERE email = %s', (hashed, email)
     )
     conn.commit()
     conn.close()
@@ -6285,7 +6356,7 @@ def api_invitation_info(token):
     except (SignatureExpired, BadSignature):
         return jsonify({'error': 'Lien invalide ou expiré'}), 400
     conn = get_db_connection()
-    user = conn.execute("SELECT * FROM clients WHERE email = ?", (email,)).fetchone()
+    user = conn.execute("SELECT * FROM clients WHERE email = %s", (email,)).fetchone()
     conn.close()
     if not user:
         return jsonify({'error': 'Compte introuvable'}), 404
@@ -6320,7 +6391,7 @@ def api_accept_invitation():
     except (SignatureExpired, BadSignature):
         return jsonify({'error': 'Lien invalide ou expiré'}), 400
     conn = get_db_connection()
-    user = conn.execute("SELECT * FROM clients WHERE email = ?", (email,)).fetchone()
+    user = conn.execute("SELECT * FROM clients WHERE email = %s", (email,)).fetchone()
     if not user:
         conn.close()
         return jsonify({'error': 'Compte introuvable'}), 404
@@ -6339,15 +6410,15 @@ def api_accept_invitation():
     code_postal = data.get('code_postal_facturation', '').strip() or None
     hashed = bcrypt.generate_password_hash(password).decode('utf-8')
     conn.execute("""
-        UPDATE clients SET mot_de_passe_hash=?, is_email_confirmed=1, must_change_password=0, confirm_token=NULL,
-        nom_entreprise=COALESCE(?, nom_entreprise),
-        telephone=COALESCE(?, telephone),
-        adresse_facturation=?, ville_facturation=?,
-        province_facturation=?, code_postal_facturation=?
-        WHERE email=?
+        UPDATE clients SET mot_de_passe_hash=%s, is_email_confirmed=1, must_change_password=0, confirm_token=NULL,
+        nom_entreprise=COALESCE(%s, nom_entreprise),
+        telephone=COALESCE(%s, telephone),
+        adresse_facturation=%s, ville_facturation=%s,
+        province_facturation=%s, code_postal_facturation=%s
+        WHERE email=%s
     """, (hashed, nom_entreprise, telephone, adresse, ville, province, code_postal, email))
     conn.commit()
-    user = conn.execute("SELECT * FROM clients WHERE email = ?", (email,)).fetchone()
+    user = conn.execute("SELECT * FROM clients WHERE email = %s", (email,)).fetchone()
     conn.close()
     session.clear()
     session.permanent = True
@@ -6408,17 +6479,17 @@ def api_profile():
     user_id = session['user_id']
     conn = get_db_connection()
     client = conn.execute(
-        'SELECT * FROM clients WHERE id = ?', (user_id,)
+        'SELECT * FROM clients WHERE id = %s', (user_id,)
     ).fetchone()
     projets = conn.execute("""
         SELECT p.*, s.nom_service
         FROM projets p
         LEFT JOIN services s ON s.id = p.id_service
-        WHERE p.id_client = ?
+        WHERE p.id_client = %s
         ORDER BY p.created_at DESC
     """, (user_id,)).fetchall()
     factures = conn.execute(
-        "SELECT * FROM factures WHERE id_client = ? AND statut != 'annulee' ORDER BY date_emission DESC",
+        "SELECT * FROM factures WHERE id_client = %s AND statut != 'annulee' ORDER BY date_emission DESC",
         (user_id,)
     ).fetchall()
     conn.close()
@@ -6463,14 +6534,14 @@ def api_profile_update():
     conn = get_db_connection()
     conn.execute("""
         UPDATE clients SET
-            nom_complet = ?,
-            telephone = ?,
-            nom_entreprise = ?,
-            adresse_facturation = ?,
-            ville_facturation = ?,
-            province_facturation = ?,
-            code_postal_facturation = ?
-        WHERE id = ?
+            nom_complet = %s,
+            telephone = %s,
+            nom_entreprise = %s,
+            adresse_facturation = %s,
+            ville_facturation = %s,
+            province_facturation = %s,
+            code_postal_facturation = %s
+        WHERE id = %s
     """, (
         data.get('nom_complet'),
         data.get('telephone'),
@@ -6494,7 +6565,7 @@ def api_profile_brand():
     user_id = session['user_id']
     conn = get_db_connection()
     conn.execute("""
-        UPDATE clients SET couleur_primaire = ?, couleur_secondaire = ? WHERE id = ?
+        UPDATE clients SET couleur_primaire = %s, couleur_secondaire = %s WHERE id = %s
     """, (data.get('couleur_primaire'), data.get('couleur_secondaire'), user_id))
     conn.commit()
     conn.close()
@@ -6513,12 +6584,12 @@ def api_profile_upload_asset():
         return jsonify({'error': 'Fichier requis'}), 400
 
     conn = get_db_connection()
-    client = conn.execute("SELECT drive_folder_id, nom_entreprise, nom_complet, email FROM clients WHERE id = ?", (user_id,)).fetchone()
+    client = conn.execute("SELECT drive_folder_id, nom_entreprise, nom_complet, email FROM clients WHERE id = %s", (user_id,)).fetchone()
     drive_folder_id = client['drive_folder_id'] if client else None
     if not drive_folder_id:
         nom_dossier = client['nom_entreprise'] or client['nom_complet']
         drive_folder_id = create_folder(nom_dossier, parent_id=os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID'))
-        conn.execute("UPDATE clients SET drive_folder_id = ? WHERE id = ?", (drive_folder_id, user_id))
+        conn.execute("UPDATE clients SET drive_folder_id = %s WHERE id = %s", (drive_folder_id, user_id))
         conn.commit()
     if client and client['email']:
         try:
@@ -6545,10 +6616,10 @@ def api_profile_upload_asset():
         return jsonify({'error': "Échec de l'envoi du fichier"}), 500
 
     if asset_type == 'logo':
-        conn.execute("UPDATE clients SET logo_url = ? WHERE id = ?", (public_url, user_id))
+        conn.execute("UPDATE clients SET logo_url = %s WHERE id = %s", (public_url, user_id))
         conn.commit()
     elif asset_type == 'favicon':
-        conn.execute("UPDATE clients SET favicon_url = ? WHERE id = ?", (public_url, user_id))
+        conn.execute("UPDATE clients SET favicon_url = %s WHERE id = %s", (public_url, user_id))
         conn.commit()
     conn.close()
     return jsonify({'success': True, 'url': public_url})
@@ -6569,18 +6640,18 @@ def api_projet_detail(projet_id):
                s.appel_exploratoire_requis as svc_appel_exploratoire_requis
         FROM projets p
         LEFT JOIN services s ON s.id = p.id_service
-        WHERE p.id = ? AND p.id_client = ?
+        WHERE p.id = %s AND p.id_client = %s
     """, (projet_id, user_id)).fetchone()
     if not p:
         conn.close()
         return jsonify({'error': 'Projet introuvable'}), 404
     checklist = conn.execute(
-        'SELECT * FROM checklistes WHERE id_projet = ?', (projet_id,)
+        'SELECT * FROM checklistes WHERE id_projet = %s', (projet_id,)
     ).fetchone()
     items = []
     if checklist:
         items = conn.execute(
-            'SELECT * FROM checklist_items WHERE id_checklist = ? ORDER BY position',
+            'SELECT * FROM checklist_items WHERE id_checklist = %s ORDER BY position',
             (checklist['id'],)
         ).fetchall()
     dossiers = []
@@ -6598,15 +6669,15 @@ def api_projet_detail(projet_id):
         except Exception:
             dossiers = []
     iv = conn.execute(
-        "SELECT id FROM identite_visuelle WHERE id_projet = ? AND is_complete = 1",
+        "SELECT id FROM identite_visuelle WHERE id_projet = %s AND is_complete = 1",
         (projet_id,)
     ).fetchone()
     board = conn.execute(
-        "SELECT id FROM decision_boards WHERE id_projet = ? AND is_active = 1",
+        "SELECT id FROM decision_boards WHERE id_projet = %s AND is_active = 1",
         (projet_id,)
     ).fetchone()
     logo_fichiers = conn.execute(
-        "SELECT id, filename FROM projet_logo_fichiers WHERE id_projet=? ORDER BY created_at", (projet_id,)
+        "SELECT id, filename FROM projet_logo_fichiers WHERE id_projet=%s ORDER BY created_at", (projet_id,)
     ).fetchall()
     conn.close()
     pipeline_steps = pipeline_for_service({
@@ -6653,24 +6724,24 @@ def api_identite_visuelle_client(projet_id):
     user_id = session['user_id']
     conn = get_db_connection()
     projet = conn.execute(
-        "SELECT * FROM projets WHERE id = ? AND id_client = ?", (projet_id, user_id)
+        "SELECT * FROM projets WHERE id = %s AND id_client = %s", (projet_id, user_id)
     ).fetchone()
     if not projet:
         conn.close()
         return jsonify({'error': 'Projet introuvable'}), 404
     iv = conn.execute(
-        "SELECT * FROM identite_visuelle WHERE id_projet = ? AND is_complete = 1", (projet_id,)
+        "SELECT * FROM identite_visuelle WHERE id_projet = %s AND is_complete = 1", (projet_id,)
     ).fetchone()
     if not iv:
         conn.close()
         return jsonify({'error': 'Identité visuelle non disponible'}), 404
-    logos_rows = conn.execute("SELECT * FROM iv_logos WHERE id_iv = ?", (iv['id'],)).fetchall()
-    fonts = conn.execute("SELECT * FROM iv_fonts WHERE id_iv = ?", (iv['id'],)).fetchall()
+    logos_rows = conn.execute("SELECT * FROM iv_logos WHERE id_iv = %s", (iv['id'],)).fetchall()
+    fonts = conn.execute("SELECT * FROM iv_fonts WHERE id_iv = %s", (iv['id'],)).fetchall()
     declinaisons = conn.execute(
-        "SELECT * FROM iv_declinaisons WHERE id_iv = ? ORDER BY position, id", (iv['id'],)
+        "SELECT * FROM iv_declinaisons WHERE id_iv = %s ORDER BY position, id", (iv['id'],)
     ).fetchall()
     mockups = conn.execute(
-        "SELECT * FROM iv_mockups WHERE id_iv = ? ORDER BY position, id", (iv['id'],)
+        "SELECT * FROM iv_mockups WHERE id_iv = %s ORDER BY position, id", (iv['id'],)
     ).fetchall()
     conn.close()
     logos = {}
@@ -6730,7 +6801,7 @@ def login():
         password = request.form.get('password','')
 
         conn = get_db_connection()
-        user = conn.execute("SELECT * FROM clients WHERE email = ?", (email,)).fetchone()
+        user = conn.execute("SELECT * FROM clients WHERE email = %s", (email,)).fetchone()
         conn.close()
 
         if user and user['auth_provider'] == 'password' and bcrypt.check_password_hash(user['mot_de_passe_hash'], password):
@@ -6770,7 +6841,7 @@ def register():
             return redirect(url_for('register'))
 
         conn = get_db_connection()
-        exists = conn.execute("SELECT is_email_confirmed FROM clients WHERE email = ?", (email,)).fetchone()
+        exists = conn.execute("SELECT is_email_confirmed FROM clients WHERE email = %s", (email,)).fetchone()
         if exists:
             conn.close()
             if not int(exists['is_email_confirmed'] or 0):
@@ -6786,8 +6857,8 @@ def register():
         hashed = bcrypt.generate_password_hash(password).decode('utf-8')
         conn.execute("""
             INSERT INTO clients (nom_complet, email, nom_entreprise, telephone, mot_de_passe_hash, auth_provider, is_email_confirmed, is_admin, drive_folder_id)
-            VALUES (?, ?, ?, ?, ?, 'password', 0, 0, ?)
-        """, (nom, email, nom_entreprise, telephone, hashed, drive_folder_id))
+            VALUES (%s, %s, %s, %s, %s, 'password', 0, 0, %s)
+         RETURNING id""", (nom, email, nom_entreprise, telephone, hashed, drive_folder_id))
         conn.commit()
 
         if not drive_folder_id:
@@ -6797,13 +6868,13 @@ def register():
                     parent_id=os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID')
                 )
                 factures_folder_id = create_folder("Factures", parent_id=new_folder_id)
-                conn.execute("UPDATE clients SET drive_folder_id = ?, factures_folder_id = ? WHERE email = ?", (new_folder_id, factures_folder_id, email))
+                conn.execute("UPDATE clients SET drive_folder_id = %s, factures_folder_id = %s WHERE email = %s", (new_folder_id, factures_folder_id, email))
 
                 conn.commit()
                 # Mettre à jour tous les autres comptes de la même entreprise sans dossier
                 conn.execute("""
-                    UPDATE clients SET drive_folder_id = ?
-                    WHERE drive_folder_id IS NULL AND nom_entreprise = ? AND email != ?
+                    UPDATE clients SET drive_folder_id = %s
+                    WHERE drive_folder_id IS NULL AND nom_entreprise = %s AND email != %s
                 """, (new_folder_id, nom_entreprise, email))
                 conn.commit()
             except Exception as e:
@@ -6834,9 +6905,9 @@ def confirm_email(token):
         return redirect(url_for('accueil'))
 
     conn = get_db_connection()
-    conn.execute("UPDATE clients SET is_email_confirmed = 1 WHERE email = ?", (email,))
+    conn.execute("UPDATE clients SET is_email_confirmed = 1 WHERE email = %s", (email,))
     conn.commit()
-    user = conn.execute("SELECT * FROM clients WHERE email = ?", (email,)).fetchone()
+    user = conn.execute("SELECT * FROM clients WHERE email = %s", (email,)).fetchone()
     conn.close()
     try:
         send_email(
@@ -6873,7 +6944,7 @@ def forgot_password():
             flash("Si votre adresse email est dans notre système, vous recevrez un lien de réinitialisation.", "success")
             return redirect(url_for('forgot_password'))
         conn = get_db_connection()
-        user = conn.execute("SELECT * FROM clients WHERE email = ?", (email,)).fetchone()
+        user = conn.execute("SELECT * FROM clients WHERE email = %s", (email,)).fetchone()
         conn.close()
         if user:
             try:
@@ -6901,7 +6972,7 @@ def accepter_invitation(token):
         return redirect(url_for('accueil'))
 
     conn = get_db_connection()
-    user = conn.execute("SELECT * FROM clients WHERE email = ?", (email,)).fetchone()
+    user = conn.execute("SELECT * FROM clients WHERE email = %s", (email,)).fetchone()
     if not user:
         conn.close()
         flash("Compte introuvable.", "error")
@@ -6932,12 +7003,12 @@ def accepter_invitation(token):
 
         hashed = bcrypt.generate_password_hash(password).decode('utf-8')
         conn.execute("""
-            UPDATE clients SET mot_de_passe_hash=?, is_email_confirmed=1,
-            nom_entreprise=COALESCE(?, nom_entreprise),
-            telephone=COALESCE(?, telephone),
-            adresse_facturation=?, ville_facturation=?,
-            province_facturation=?, code_postal_facturation=?
-            WHERE email=?
+            UPDATE clients SET mot_de_passe_hash=%s, is_email_confirmed=1,
+            nom_entreprise=COALESCE(%s, nom_entreprise),
+            telephone=COALESCE(%s, telephone),
+            adresse_facturation=%s, ville_facturation=%s,
+            province_facturation=%s, code_postal_facturation=%s
+            WHERE email=%s
         """, (hashed, nom_entreprise, telephone, adresse, ville, province, code_postal, email))
 
         conn.commit()
@@ -6958,7 +7029,7 @@ def reset_password(token):
         return redirect(url_for('forgot_password'))
 
     conn = get_db_connection()
-    user = conn.execute("SELECT * FROM clients WHERE email = ?", (email,)).fetchone()
+    user = conn.execute("SELECT * FROM clients WHERE email = %s", (email,)).fetchone()
     conn.close()
     if not user or user['mot_de_passe_hash'] != token_hash:
         flash("Ce lien a déjà été utilisé ou est invalide.", "error")
@@ -6976,7 +7047,7 @@ def reset_password(token):
 
         hashed = bcrypt.generate_password_hash(password).decode('utf-8')
         conn = get_db_connection()
-        conn.execute("UPDATE clients SET mot_de_passe_hash = ? WHERE email = ?", (hashed, email))
+        conn.execute("UPDATE clients SET mot_de_passe_hash = %s WHERE email = %s", (hashed, email))
         conn.commit()
         conn.close()
         flash('Votre mot de passe a été mis à jour avec succès !', 'success')
@@ -6996,15 +7067,15 @@ def dashboard():
     projets_actifs = conn.execute("""
         SELECT p.*, s.icon as service_icon, s.nom_service as service_nom
         FROM projets p
-        LEFT JOIN services s ON s.nom_service = SUBSTR(p.nom_projet, INSTR(p.nom_projet, ' — ') + 3)
-        WHERE p.id_client = ? AND (p.is_archived = 0 OR p.is_archived IS NULL)
+        LEFT JOIN services s ON s.id = p.id_service
+        WHERE p.id_client = %s AND (p.is_archived = 0 OR p.is_archived IS NULL)
         ORDER BY p.created_at DESC
     """, (user_id,)).fetchall()
     projets_archives = conn.execute("""
         SELECT p.*, s.icon as service_icon, s.nom_service as service_nom
         FROM projets p
-        LEFT JOIN services s ON s.nom_service = SUBSTR(p.nom_projet, INSTR(p.nom_projet, ' — ') + 3)
-        WHERE p.id_client = ? AND p.is_archived = 1
+        LEFT JOIN services s ON s.id = p.id_service
+        WHERE p.id_client = %s AND p.is_archived = 1
         ORDER BY p.created_at DESC
     """, (user_id,)).fetchall()
 
@@ -7020,11 +7091,11 @@ def dashboard():
         archives_with_pastille.append(
             {"projet": p, "pastille": pastille_color(ready), "done": done, "total": total}
         )
-    client = conn.execute("SELECT drive_folder_id FROM clients WHERE id=?", (user_id,)).fetchone()
+    client = conn.execute("SELECT drive_folder_id FROM clients WHERE id=%s", (user_id,)).fetchone()
     conn.close()
     conn2 = get_db_connection()
     notifications = conn2.execute(
-        "SELECT * FROM notifications WHERE id_client=? AND is_read=0 ORDER BY created_at DESC",
+        "SELECT * FROM notifications WHERE id_client=%s AND is_read=0 ORDER BY created_at DESC",
         (user_id,)
     ).fetchall()
     conn2.close()
@@ -7046,7 +7117,7 @@ def mark_notification_read(notif_id):
     user_id = session['user_id']
     conn = get_db_connection()
     conn.execute(
-        "UPDATE notifications SET is_read=1 WHERE id=? AND id_client=?",
+        "UPDATE notifications SET is_read=1 WHERE id=%s AND id_client=%s",
         (notif_id, user_id)
     )
     conn.commit()
@@ -7060,8 +7131,8 @@ def project_detail(project_id):
     projet = conn.execute("""
         SELECT p.*, s.icon as service_icon, s.nom_service as service_nom
         FROM projets p
-        LEFT JOIN services s ON s.nom_service = SUBSTR(p.nom_projet, INSTR(p.nom_projet, ' — ') + 3)
-        WHERE p.id = ?
+        LEFT JOIN services s ON s.id = p.id_service
+        WHERE p.id = %s
     """, (project_id,)).fetchone()
     if not projet:
         conn.close()
@@ -7075,12 +7146,12 @@ def project_detail(project_id):
         flash("Accès non autorisé à ce projet.", "error")
         return redirect(url_for('dashboard'))
 
-    checklist = conn.execute("SELECT * FROM checklistes WHERE id_projet = ?", (project_id,)).fetchone()
+    checklist = conn.execute("SELECT * FROM checklistes WHERE id_projet = %s", (project_id,)).fetchone()
     items = []
     if checklist:
         items = conn.execute("""
             SELECT * FROM checklist_items
-            WHERE id_checklist = ?
+            WHERE id_checklist = %s
             ORDER BY id ASC
         """, (checklist['id'],)).fetchall()
 
@@ -7094,13 +7165,13 @@ def project_detail(project_id):
             drive_folders = list_subfolders(projet['drive_folder_id'])
         except Exception as e:
             print(f"[DRIVE] Liste sous-dossiers échouée: {e}")
-    board = conn.execute("SELECT * FROM decision_boards WHERE id_projet=? AND is_active=1", (project_id,)).fetchone()
-    choices = conn.execute("SELECT id FROM decision_board_choices WHERE id_projet=?", (project_id,)).fetchone()
-    iv = conn.execute("SELECT is_complete FROM identite_visuelle WHERE id_projet=? AND is_complete=1", (project_id,)).fetchone()
+    board = conn.execute("SELECT * FROM decision_boards WHERE id_projet=%s AND is_active=1", (project_id,)).fetchone()
+    choices = conn.execute("SELECT id FROM decision_board_choices WHERE id_projet=%s", (project_id,)).fetchone()
+    iv = conn.execute("SELECT is_complete FROM identite_visuelle WHERE id_projet=%s AND is_complete=1", (project_id,)).fetchone()
     has_identite_visuelle = iv is not None
-    iv_assigned = conn.execute("SELECT id FROM identite_visuelle WHERE id_projet=?", (project_id,)).fetchone()
+    iv_assigned = conn.execute("SELECT id FROM identite_visuelle WHERE id_projet=%s", (project_id,)).fetchone()
     has_identite_assigned = iv_assigned is not None
-    client = conn.execute("SELECT * FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
+    client = conn.execute("SELECT * FROM clients WHERE id=%s", (projet['id_client'],)).fetchone()
     conn.close()
     resp = make_response(render_template('project_detail.html',
                            projet=projet, checklist=checklist, items=items,
@@ -7119,14 +7190,14 @@ def project_detail(project_id):
 @login_required
 def toggle_checklist_item(item_id):
     conn = get_db_connection()
-    item = conn.execute("SELECT * FROM checklist_items WHERE id = ?", (item_id,)).fetchone()
+    item = conn.execute("SELECT * FROM checklist_items WHERE id = %s", (item_id,)).fetchone()
     if not item:
         conn.close()
         return redirect(url_for('dashboard'))
 
-    checklist = conn.execute("SELECT id_projet FROM checklistes WHERE id = ?", (item['id_checklist'],)).fetchone()
-    projet = conn.execute("SELECT * FROM projets WHERE id = ?", (checklist['id_projet'],)).fetchone()
-    client = conn.execute("SELECT * FROM clients WHERE id = ?", (projet['id_client'],)).fetchone()
+    checklist = conn.execute("SELECT id_projet FROM checklistes WHERE id = %s", (item['id_checklist'],)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id = %s", (checklist['id_projet'],)).fetchone()
+    client = conn.execute("SELECT * FROM clients WHERE id = %s", (projet['id_client'],)).fetchone()
 
     is_owner = (projet['id_client'] == session['user_id'])
     is_admin = bool(session.get('is_admin', False))
@@ -7145,7 +7216,7 @@ def toggle_checklist_item(item_id):
         flash("Vous devez téléverser le fichier demandé avant de cocher cette tâche.", "error")
         return redirect(url_for('project_detail', project_id=projet['id']))
 
-    conn.execute("UPDATE checklist_items SET est_coche = ? WHERE id = ?", (new_status, item_id))
+    conn.execute("UPDATE checklist_items SET est_coche = %s WHERE id = %s", (new_status, item_id))
     conn.commit()
     conn.close()
 
@@ -7166,7 +7237,7 @@ def toggle_checklist_item(item_id):
         ready, done, total = compute_checklist_readiness(projet['id'])
         if ready:
             conn2 = get_db_connection()
-            conn2.execute("UPDATE projets SET statut='Documents reçus' WHERE id=?", (projet['id'],))
+            conn2.execute("UPDATE projets SET statut='Documents reçus' WHERE id=%s", (projet['id'],))
             conn2.commit()
             try:
                 lien = url_for('project_detail', project_id=projet['id'], _external=True)
@@ -7197,7 +7268,7 @@ def upload_item_file(item_id):
         return redirect(request.referrer or url_for('dashboard'))
 
     conn = get_db_connection()
-    item = conn.execute("SELECT * FROM checklist_items WHERE id = ?", (item_id,)).fetchone()
+    item = conn.execute("SELECT * FROM checklist_items WHERE id = %s", (item_id,)).fetchone()
     if not item:
         conn.close()
         flash("Élément introuvable.", "error")
@@ -7209,9 +7280,9 @@ def upload_item_file(item_id):
         flash(f"Ce champ attend un fichier de type : {cat_label}", "error")
         return redirect(request.referrer or url_for('dashboard'))
 
-    checklist = conn.execute("SELECT id_projet FROM checklistes WHERE id = ?", (item['id_checklist'],)).fetchone()
+    checklist = conn.execute("SELECT id_projet FROM checklistes WHERE id = %s", (item['id_checklist'],)).fetchone()
 
-    projet   = conn.execute("SELECT * FROM projets WHERE id = ?", (checklist['id_projet'],)).fetchone()
+    projet   = conn.execute("SELECT * FROM projets WHERE id = %s", (checklist['id_projet'],)).fetchone()
 
     is_owner = (projet['id_client'] == session['user_id'])
     is_admin = bool(session.get('is_admin', False))
@@ -7244,14 +7315,14 @@ def upload_item_file(item_id):
 
     conn.execute("""
         INSERT INTO uploads (id_item, filename, filepath, uploaded_by)
-        VALUES (?, ?, ?, ?)
-    """, (item_id, safe_name, save_path, 'admin' if is_admin else 'client'))
+        VALUES (%s, %s, %s, %s)
+     RETURNING id""", (item_id, safe_name, save_path, 'admin' if is_admin else 'client'))
 
     if int(item['requires_file'] or 0) == 1:
-        conn.execute("UPDATE checklist_items SET file_path = ?, est_coche = 1 WHERE id = ?",
+        conn.execute("UPDATE checklist_items SET file_path = %s, est_coche = 1 WHERE id = %s",
                      (save_path, item_id))
     else:
-        conn.execute("UPDATE checklist_items SET file_path = ? WHERE id = ?", (save_path, item_id))
+        conn.execute("UPDATE checklist_items SET file_path = %s WHERE id = %s", (save_path, item_id))
 
     conn.commit()
     conn.close()
@@ -7263,10 +7334,10 @@ def upload_item_file(item_id):
         ready, done, total = compute_checklist_readiness(projet['id'])
         if ready:
             conn3 = get_db_connection()
-            conn3.execute("UPDATE projets SET statut='Documents reçus' WHERE id=?", (projet['id'],))
+            conn3.execute("UPDATE projets SET statut='Documents reçus' WHERE id=%s", (projet['id'],))
             conn3.commit()
             try:
-                client_notif = conn3.execute("SELECT * FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
+                client_notif = conn3.execute("SELECT * FROM clients WHERE id=%s", (projet['id_client'],)).fetchone()
                 lien = url_for('project_detail', project_id=projet['id'], _external=True)
                 send_email_client(client_notif,
                     f"Documents reçus — {projet['nom_projet']}",
@@ -7284,12 +7355,12 @@ def upload_item_file(item_id):
 @login_required
 def api_toggle_checklist_item(item_id):
     conn = get_db_connection()
-    item = conn.execute("SELECT * FROM checklist_items WHERE id = ?", (item_id,)).fetchone()
+    item = conn.execute("SELECT * FROM checklist_items WHERE id = %s", (item_id,)).fetchone()
     if not item:
         conn.close()
         return jsonify({'error': 'Item introuvable'}), 404
-    checklist = conn.execute("SELECT id_projet FROM checklistes WHERE id = ?", (item['id_checklist'],)).fetchone()
-    projet = conn.execute("SELECT * FROM projets WHERE id = ?", (checklist['id_projet'],)).fetchone()
+    checklist = conn.execute("SELECT id_projet FROM checklistes WHERE id = %s", (item['id_checklist'],)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id = %s", (checklist['id_projet'],)).fetchone()
     is_owner = (projet['id_client'] == session['user_id'])
     is_admin = bool(session.get('is_admin', False))
     if not (is_owner or is_admin):
@@ -7302,12 +7373,12 @@ def api_toggle_checklist_item(item_id):
     if requires_file and new_status == 1 and not has_file:
         conn.close()
         return jsonify({'error': 'Fichier requis avant de cocher'}), 400
-    conn.execute("UPDATE checklist_items SET est_coche = ? WHERE id = ?", (new_status, item_id))
+    conn.execute("UPDATE checklist_items SET est_coche = %s WHERE id = %s", (new_status, item_id))
     conn.commit()
     if new_status == 1 and normalize_status(projet['statut']) == "Documents à donner":
         ready, done, total = compute_checklist_readiness(projet['id'])
         if ready:
-            conn.execute("UPDATE projets SET statut='Documents reçus' WHERE id=?", (projet['id'],))
+            conn.execute("UPDATE projets SET statut='Documents reçus' WHERE id=%s", (projet['id'],))
             conn.commit()
             _notify_checklist_complete(conn, projet)
     if int(item['is_revision'] or 0) == 1:
@@ -7325,12 +7396,12 @@ def api_upload_item_file(item_id):
     if not allowed(file.filename):
         return jsonify({'error': 'Extension non autorisée'}), 400
     conn = get_db_connection()
-    item = conn.execute("SELECT * FROM checklist_items WHERE id = ?", (item_id,)).fetchone()
+    item = conn.execute("SELECT * FROM checklist_items WHERE id = %s", (item_id,)).fetchone()
     if not item:
         conn.close()
         return jsonify({'error': 'Item introuvable'}), 404
-    checklist = conn.execute("SELECT id_projet FROM checklistes WHERE id = ?", (item['id_checklist'],)).fetchone()
-    projet = conn.execute("SELECT * FROM projets WHERE id = ?", (checklist['id_projet'],)).fetchone()
+    checklist = conn.execute("SELECT id_projet FROM checklistes WHERE id = %s", (item['id_checklist'],)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id = %s", (checklist['id_projet'],)).fetchone()
     is_owner = (projet['id_client'] == session['user_id'])
     is_admin = bool(session.get('is_admin', False))
     if not (is_owner or is_admin):
@@ -7347,14 +7418,14 @@ def api_upload_item_file(item_id):
         drive_upload(save_path, safe_name, target_folder_id)
     except Exception as e:
         print(f"[DRIVE] Upload API échoué: {e}")
-    conn.execute("INSERT INTO uploads (id_item, filename, filepath, uploaded_by) VALUES (?, ?, ?, ?)",
+    conn.execute("INSERT INTO uploads (id_item, filename, filepath, uploaded_by) VALUES (%s, %s, %s, %s) RETURNING id",
                  (item_id, safe_name, save_path, 'admin' if is_admin else 'client'))
-    conn.execute("UPDATE checklist_items SET file_path = ?, est_coche = 1 WHERE id = ?", (save_path, item_id))
+    conn.execute("UPDATE checklist_items SET file_path = %s, est_coche = 1 WHERE id = %s", (save_path, item_id))
     conn.commit()
     if normalize_status(projet['statut']) == "Documents à donner":
         ready, _, _ = compute_checklist_readiness(projet['id'])
         if ready:
-            conn.execute("UPDATE projets SET statut='Documents reçus' WHERE id=?", (projet['id'],))
+            conn.execute("UPDATE projets SET statut='Documents reçus' WHERE id=%s", (projet['id'],))
             conn.commit()
             _notify_checklist_complete(conn, projet)
     if int(item['is_revision'] or 0) == 1:
@@ -7371,7 +7442,7 @@ def api_projet_upload_fichier(projet_id):
     if not file or file.filename == '':
         return jsonify({'error': 'Fichier requis'}), 400
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id = ? AND id_client = ?", (projet_id, client_id)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id = %s AND id_client = %s", (projet_id, client_id)).fetchone()
     if not projet:
         conn.close()
         return jsonify({'error': 'Projet introuvable'}), 404
@@ -7405,11 +7476,11 @@ def api_projet_contact(projet_id):
     if not message:
         return jsonify({'error': 'Message requis'}), 400
     conn = get_db_connection()
-    projet = conn.execute("SELECT nom_projet FROM projets WHERE id = ? AND id_client = ?", (projet_id, client_id)).fetchone()
+    projet = conn.execute("SELECT nom_projet FROM projets WHERE id = %s AND id_client = %s", (projet_id, client_id)).fetchone()
     if not projet:
         conn.close()
         return jsonify({'error': 'Projet introuvable'}), 404
-    client = conn.execute("SELECT nom_complet FROM clients WHERE id = ?", (client_id,)).fetchone()
+    client = conn.execute("SELECT nom_complet FROM clients WHERE id = %s", (client_id,)).fetchone()
     nom_client = client['nom_complet'] if client else 'Client'
     push_admin_notif(
         conn,
@@ -7437,7 +7508,7 @@ def api_projet_ajouter_upload(projet_id):
     user_id = session['user_id']
     conn = get_db_connection()
     projet = conn.execute(
-        "SELECT * FROM projets WHERE id = ? AND id_client = ?", (projet_id, user_id)
+        "SELECT * FROM projets WHERE id = %s AND id_client = %s", (projet_id, user_id)
     ).fetchone()
     if not projet:
         conn.close()
@@ -7445,25 +7516,25 @@ def api_projet_ajouter_upload(projet_id):
     data = request.get_json() or {}
     nom_base = (data.get('nom_base') or 'Fichier').strip()
     checklist = conn.execute(
-        "SELECT * FROM checklistes WHERE id_projet = ?", (projet_id,)
+        "SELECT * FROM checklistes WHERE id_projet = %s", (projet_id,)
     ).fetchone()
     if not checklist:
         conn.close()
         return jsonify({'error': 'Checklist introuvable'}), 404
     count = conn.execute(
-        "SELECT COUNT(*) FROM checklist_items WHERE id_checklist = ? AND nom_item LIKE ?",
+        "SELECT COUNT(*) FROM checklist_items WHERE id_checklist = %s AND nom_item LIKE %s",
         (checklist['id'], f'{nom_base}%')
     ).fetchone()[0]
     max_pos = conn.execute(
-        "SELECT COALESCE(MAX(position), 0) FROM checklist_items WHERE id_checklist = ?",
+        "SELECT COALESCE(MAX(position), 0) FROM checklist_items WHERE id_checklist = %s",
         (checklist['id'],)
     ).fetchone()[0]
     nouveau_nom = f"{nom_base} — {count + 1}"
     cur = conn.execute(
-        "INSERT INTO checklist_items (id_checklist, nom_item, requires_file, is_required, position) VALUES (?, ?, 1, 0, ?)",
+        "INSERT INTO checklist_items (id_checklist, nom_item, requires_file, is_required, position) VALUES (%s, %s, 1, 0, %s) RETURNING id",
         (checklist['id'], nouveau_nom, max_pos + 1)
     )
-    new_id = cur.lastrowid
+    new_id = cur.fetchone()['id']
     conn.commit()
     conn.close()
     return jsonify({
@@ -7486,25 +7557,25 @@ def api_save_item_text(item_id):
     data = request.get_json(force=True)
     text_value = (data.get('text_value') or '').strip()
     conn = get_db_connection()
-    item = conn.execute("SELECT * FROM checklist_items WHERE id = ?", (item_id,)).fetchone()
+    item = conn.execute("SELECT * FROM checklist_items WHERE id = %s", (item_id,)).fetchone()
     if not item:
         conn.close()
         return jsonify({'error': 'Item introuvable'}), 404
-    checklist = conn.execute("SELECT id_projet FROM checklistes WHERE id = ?", (item['id_checklist'],)).fetchone()
-    projet = conn.execute("SELECT * FROM projets WHERE id = ?", (checklist['id_projet'],)).fetchone()
+    checklist = conn.execute("SELECT id_projet FROM checklistes WHERE id = %s", (item['id_checklist'],)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id = %s", (checklist['id_projet'],)).fetchone()
     is_owner = (projet['id_client'] == session['user_id'])
     is_admin = bool(session.get('is_admin', False))
     if not (is_owner or is_admin):
         conn.close()
         return jsonify({'error': 'Non autorisé'}), 403
     est_coche = 1 if text_value else 0
-    conn.execute("UPDATE checklist_items SET text_value = ?, est_coche = ? WHERE id = ?",
+    conn.execute("UPDATE checklist_items SET text_value = %s, est_coche = %s WHERE id = %s",
                  (text_value if text_value else None, est_coche, item_id))
     conn.commit()
     if est_coche and normalize_status(projet['statut']) == "Documents à donner":
         ready, _, _ = compute_checklist_readiness(projet['id'])
         if ready:
-            conn.execute("UPDATE projets SET statut='Documents reçus' WHERE id=?", (projet['id'],))
+            conn.execute("UPDATE projets SET statut='Documents reçus' WHERE id=%s", (projet['id'],))
             conn.commit()
             _notify_checklist_complete(conn, projet)
     if int(item['is_revision'] or 0) == 1:
@@ -7522,18 +7593,18 @@ def api_save_item_commentaire(item_id):
     data = request.get_json(force=True)
     commentaire = (data.get('commentaire') or '').strip()
     conn = get_db_connection()
-    item = conn.execute("SELECT * FROM checklist_items WHERE id = ?", (item_id,)).fetchone()
+    item = conn.execute("SELECT * FROM checklist_items WHERE id = %s", (item_id,)).fetchone()
     if not item:
         conn.close()
         return jsonify({'error': 'Item introuvable'}), 404
-    checklist = conn.execute("SELECT id_projet FROM checklistes WHERE id = ?", (item['id_checklist'],)).fetchone()
-    projet = conn.execute("SELECT * FROM projets WHERE id = ?", (checklist['id_projet'],)).fetchone()
+    checklist = conn.execute("SELECT id_projet FROM checklistes WHERE id = %s", (item['id_checklist'],)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id = %s", (checklist['id_projet'],)).fetchone()
     is_owner = (projet['id_client'] == session['user_id'])
     is_admin = bool(session.get('is_admin', False))
     if not (is_owner or is_admin):
         conn.close()
         return jsonify({'error': 'Non autorisé'}), 403
-    conn.execute("UPDATE checklist_items SET commentaire = ? WHERE id = ?",
+    conn.execute("UPDATE checklist_items SET commentaire = %s WHERE id = %s",
                  (commentaire if commentaire else None, item_id))
     conn.commit()
     if commentaire and int(item['is_revision'] or 0) == 1:
@@ -7546,15 +7617,15 @@ def api_save_item_commentaire(item_id):
 @login_required
 def download_uploaded_file(upload_id):
     conn = get_db_connection()
-    up = conn.execute("SELECT * FROM uploads WHERE id = ?", (upload_id,)).fetchone()
+    up = conn.execute("SELECT * FROM uploads WHERE id = %s", (upload_id,)).fetchone()
     if not up:
         conn.close()
         flash("Fichier introuvable.", "error")
         return redirect(url_for('dashboard'))
 
-    item = conn.execute("SELECT * FROM checklist_items WHERE id = ?", (up['id_item'],)).fetchone()
-    checklist = conn.execute("SELECT id_projet FROM checklistes WHERE id = ?", (item['id_checklist'],)).fetchone()
-    projet = conn.execute("SELECT * FROM projets WHERE id = ?", (checklist['id_projet'],)).fetchone()
+    item = conn.execute("SELECT * FROM checklist_items WHERE id = %s", (up['id_item'],)).fetchone()
+    checklist = conn.execute("SELECT id_projet FROM checklistes WHERE id = %s", (item['id_checklist'],)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id = %s", (checklist['id_projet'],)).fetchone()
 
     is_owner = (projet['id_client'] == session['user_id'])
     is_admin = bool(session.get('is_admin', False))
@@ -7579,20 +7650,20 @@ def download_uploaded_file(upload_id):
 @login_required
 def profile():
     conn = get_db_connection()
-    user = conn.execute("SELECT * FROM clients WHERE id = ?", (session['user_id'],)).fetchone()
+    user = conn.execute("SELECT * FROM clients WHERE id = %s", (session['user_id'],)).fetchone()
     projets_actifs = conn.execute("""
-        SELECT * FROM projets WHERE id_client = ? AND (is_archived = 0 OR is_archived IS NULL)
+        SELECT * FROM projets WHERE id_client = %s AND (is_archived = 0 OR is_archived IS NULL)
         ORDER BY created_at DESC
     """, (session['user_id'],)).fetchall()
     projets_archives = conn.execute("""
-        SELECT * FROM projets WHERE id_client = ? AND is_archived = 1
+        SELECT * FROM projets WHERE id_client = %s AND is_archived = 1
         ORDER BY created_at DESC
     """, (session['user_id'],)).fetchall()
 
     # Factures depuis la DB
     factures_db = conn.execute("""
         SELECT * FROM factures
-        WHERE id_client = ? AND statut NOT IN ('ouverte', 'annulee')
+        WHERE id_client = %s AND statut NOT IN ('ouverte', 'annulee')
         ORDER BY created_at DESC
     """, (session['user_id'],)).fetchall()
     conn.close()
@@ -7615,17 +7686,17 @@ def update_profile():
     province = request.form.get('province','').strip()
 
     conn = get_db_connection()
-    user = conn.execute("SELECT * FROM clients WHERE id = ?", (user_id,)).fetchone()
+    user = conn.execute("SELECT * FROM clients WHERE id = %s", (user_id,)).fetchone()
     if user['auth_provider'] == 'password':
         email = request.form.get('email','').strip().lower()
         conn.execute("""
-            UPDATE clients SET nom_complet=?, nom_entreprise=?, telephone=?,
-            adresse=?, ville=?, code_postal=?, province=?, email=? WHERE id=?
+            UPDATE clients SET nom_complet=%s, nom_entreprise=%s, telephone=%s,
+            adresse=%s, ville=%s, code_postal=%s, province=%s, email=%s WHERE id=%s
         """, (nom, entreprise, telephone, adresse, ville, code_postal, province, email, user_id))
     else:
         conn.execute("""
-            UPDATE clients SET nom_complet=?, nom_entreprise=?, telephone=?,
-            adresse=?, ville=?, code_postal=?, province=? WHERE id=?
+            UPDATE clients SET nom_complet=%s, nom_entreprise=%s, telephone=%s,
+            adresse=%s, ville=%s, code_postal=%s, province=%s WHERE id=%s
         """, (nom, entreprise, telephone, adresse, ville, code_postal, province, user_id))
     conn.commit()
     conn.close()
@@ -7634,15 +7705,15 @@ def update_profile():
     flash("Vos informations ont été mises à jour avec succès !", "success")
     return redirect(url_for('profile') + '#infos')
     conn = get_db_connection()
-    user = conn.execute("SELECT * FROM clients WHERE id = ?", (user_id,)).fetchone()
+    user = conn.execute("SELECT * FROM clients WHERE id = %s", (user_id,)).fetchone()
     if user['auth_provider'] == 'password':
         email = request.form.get('email','').strip().lower()
         conn.execute("""
-            UPDATE clients SET nom_complet=?, nom_entreprise=?, telephone=?, email=? WHERE id=?
+            UPDATE clients SET nom_complet=%s, nom_entreprise=%s, telephone=%s, email=%s WHERE id=%s
         """, (nom, entreprise, telephone, email, user_id))
     else:
         conn.execute("""
-            UPDATE clients SET nom_complet=?, nom_entreprise=?, telephone=? WHERE id=?
+            UPDATE clients SET nom_complet=%s, nom_entreprise=%s, telephone=%s WHERE id=%s
         """, (nom, entreprise, telephone, user_id))
     conn.commit()
     conn.close()
@@ -7660,7 +7731,7 @@ def update_password():
     confirm = request.form.get('confirm_password','')
 
     conn = get_db_connection()
-    user = conn.execute("SELECT * FROM clients WHERE id = ?", (user_id,)).fetchone()
+    user = conn.execute("SELECT * FROM clients WHERE id = %s", (user_id,)).fetchone()
 
     if not bcrypt.check_password_hash(user['mot_de_passe_hash'], current):
         conn.close()
@@ -7678,7 +7749,7 @@ def update_password():
         return redirect(url_for('profile'))
 
     hashed = bcrypt.generate_password_hash(new).decode('utf-8')
-    conn.execute("UPDATE clients SET mot_de_passe_hash = ? WHERE id = ?", (hashed, user_id))
+    conn.execute("UPDATE clients SET mot_de_passe_hash = %s WHERE id = %s", (hashed, user_id))
     conn.commit()
     conn.close()
 
@@ -7742,7 +7813,7 @@ def build_aujourd_hui(conn):
             LEFT JOIN services s ON s.id = p.id_service
             WHERE p.is_archived = 0
               AND p.date_livraison_estimee IS NOT NULL
-              AND p.date_livraison_estimee < ?
+              AND p.date_livraison_estimee < %s
               AND p.statut NOT IN ('Complété', 'Livré')
             ORDER BY p.date_livraison_estimee ASC
         """, (str(today),)).fetchall()
@@ -7766,7 +7837,7 @@ def build_aujourd_hui(conn):
         JOIN clients c ON c.id = p.id_client
         WHERE p.is_archived = 0
           AND p.statut = 'En révision'
-          AND (p.statut_updated_at IS NULL OR p.statut_updated_at <= ?)
+          AND (p.statut_updated_at IS NULL OR p.statut_updated_at <= %s)
         ORDER BY p.statut_updated_at ASC NULLS FIRST
     """, (seuil_revision,)).fetchall()
     for r in rows:
@@ -7782,7 +7853,7 @@ def build_aujourd_hui(conn):
         JOIN clients c ON c.id = p.id_client
         WHERE p.is_archived = 0
           AND p.statut = 'Documents à donner'
-          AND (p.statut_updated_at IS NULL OR p.statut_updated_at <= ?)
+          AND (p.statut_updated_at IS NULL OR p.statut_updated_at <= %s)
         ORDER BY p.statut_updated_at ASC NULLS FIRST
     """, (seuil_docs,)).fetchall()
     for r in rows:
@@ -7798,7 +7869,7 @@ def build_aujourd_hui(conn):
         JOIN clients c ON c.id = p.id_client
         WHERE p.is_archived = 0
           AND p.date_livraison_estimee IS NOT NULL
-          AND p.date_livraison_estimee < ?
+          AND p.date_livraison_estimee < %s
           AND p.statut NOT IN ('Complété', 'Livré')
         ORDER BY p.date_livraison_estimee ASC
     """, (str(today),)).fetchall()
@@ -7838,7 +7909,7 @@ def admin_dashboard():
         JOIN clients c ON c.id = f.id_client
         LEFT JOIN facture_lignes fl ON fl.id_facture = f.id
         WHERE f.statut = 'ouverte'
-        GROUP BY f.id
+        GROUP BY f.id, c.nom_complet, c.nom_entreprise, c.is_email_confirmed
         ORDER BY c.is_email_confirmed ASC, f.created_at DESC
     """).fetchall()
 
@@ -7855,13 +7926,13 @@ def admin_dashboard():
     mois_actuel = date.today().strftime('%Y-%m')
     marketing_posts_todo = conn.execute("""
         SELECT * FROM marketing_posts
-        WHERE strftime('%Y-%m', date_publication) = ?
+        WHERE LEFT(date_publication, 7) = %s
         AND todo_felix_done = 0
         ORDER BY date_publication ASC
     """, (mois_actuel,)).fetchall()
     marketing_posts_complets = conn.execute("""
         SELECT * FROM marketing_posts
-        WHERE strftime('%Y-%m', date_publication) = ?
+        WHERE LEFT(date_publication, 7) = %s
         AND todo_felix_done = 1
         ORDER BY date_publication ASC
     """, (mois_actuel,)).fetchall()
@@ -7913,8 +7984,8 @@ def add_client():
         # Compte créé sans mot de passe, non confirmé
         conn.execute("""
             INSERT INTO clients (nom_complet, email, nom_entreprise, telephone, mot_de_passe_hash, auth_provider, is_email_confirmed, is_admin)
-            VALUES (?, ?, ?, ?, '', 'password', 0, 0)
-        """, (nom, email, entreprise, telephone))
+            VALUES (%s, %s, %s, %s, '', 'password', 0, 0)
+         RETURNING id""", (nom, email, entreprise, telephone))
         conn.commit()
 
         # Dossier Drive
@@ -7922,7 +7993,7 @@ def add_client():
             dossier_nom = entreprise if entreprise else nom
             drive_folder_id = create_folder(dossier_nom, parent_id=os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID'))
             factures_folder_id = create_folder("Factures", parent_id=drive_folder_id)
-            conn.execute("UPDATE clients SET drive_folder_id=?, factures_folder_id=? WHERE email=?", (drive_folder_id, factures_folder_id, email))
+            conn.execute("UPDATE clients SET drive_folder_id=%s, factures_folder_id=%s WHERE email=%s", (drive_folder_id, factures_folder_id, email))
             conn.commit()
         except Exception as e:
             print(f"[DRIVE] Création dossier client échouée: {e}")
@@ -7943,7 +8014,7 @@ def add_client():
             print(f"[MAIL] Email invitation échoué: {e}")
 
         flash(f"Client '{nom}' ajouté et invitation envoyée.", "success")
-    except sqlite3.IntegrityError:
+    except psycopg.errors.UniqueViolation:
         flash(f"Erreur : L'email '{email}' existe déjà.", "error")
     finally:
         conn.close()
@@ -7968,7 +8039,7 @@ def add_project():
 
     # Charger le service EN PREMIER
     conn_tmp = get_db_connection()
-    service_row = conn_tmp.execute("SELECT * FROM services WHERE id=?", (id_service,)).fetchone()
+    service_row = conn_tmp.execute("SELECT * FROM services WHERE id=%s", (id_service,)).fetchone()
     conn_tmp.close()
 
     nom_service = service_row['nom_service'] if service_row else "Projet"
@@ -8002,28 +8073,28 @@ def add_project():
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO projets (nom_projet, titre_projet, heure_seance, lien_reunion, duree_seance_minutes, statut, lien_gdrive, id_client, localisation, id_service)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (nom_projet, titre_projet, heure_seance, lien_reunion, duree_seance_minutes, statut, lien_gdrive, id_client, localisation, id_service))
-        id_projet = cur.lastrowid
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+         RETURNING id""", (nom_projet, titre_projet, heure_seance, lien_reunion, duree_seance_minutes, statut, lien_gdrive, id_client, localisation, id_service))
+        id_projet = cur.fetchone()['id']
         if id_service:
-            cur.execute("INSERT INTO checklistes (id_projet) VALUES (?)", (id_projet,))
-            id_checklist = cur.lastrowid
+            cur.execute("INSERT INTO checklistes (id_projet) VALUES (%s) RETURNING id", (id_projet,))
+            id_checklist = cur.fetchone()['id']
             items_modele = conn.execute("""
                 SELECT nom_item, requires_file, is_required, item_type, video_url, is_revision_item, file_category
-                FROM checklist_model_items WHERE id_service = ?
+                FROM checklist_model_items WHERE id_service = %s
             """, (id_service,)).fetchall()
             for m in items_modele:
                 if not int(m['is_revision_item'] or 0):
                     cur.execute("""
                         INSERT INTO checklist_items (id_checklist, nom_item, requires_file, is_required, item_type, video_url, is_revision, file_category)
-                        VALUES (?, ?, ?, ?, ?, ?, 0, ?)
-                    """, (id_checklist, m['nom_item'], int(m['requires_file'] or 0), int(m['is_required'] or 1), m['item_type'] or 'document', m['video_url'], m['file_category'] or 'autre'))
+                        VALUES (%s, %s, %s, %s, %s, %s, 0, %s)
+                     RETURNING id""", (id_checklist, m['nom_item'], int(m['requires_file'] or 0), int(m['is_required'] or 1), m['item_type'] or 'document', m['video_url'], m['file_category'] or 'autre'))
 
         conn.commit()
 
         # Créer dossier Drive
         try:
-            client = conn.execute("SELECT * FROM clients WHERE id=?", (id_client,)).fetchone()
+            client = conn.execute("SELECT * FROM clients WHERE id=%s", (id_client,)).fetchone()
             parent = client['drive_folder_id'] if client and client['drive_folder_id'] else os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID')
             projet_folder_id = create_folder(nom_projet, parent_id=parent)
             make_folder_public(projet_folder_id)
@@ -8033,7 +8104,7 @@ def add_project():
                 depot_folder_id = create_folder("Dépôt de fichiers", parent_id=projet_folder_id)
                 make_folder_public(depot_folder_id)
             lien_gdrive_new = get_folder_link(projet_folder_id)
-            conn.execute("UPDATE projets SET lien_gdrive=?, drive_folder_id=?, depot_folder_id=? WHERE id=?", (lien_gdrive_new, projet_folder_id, depot_folder_id, id_projet))
+            conn.execute("UPDATE projets SET lien_gdrive=%s, drive_folder_id=%s, depot_folder_id=%s WHERE id=%s", (lien_gdrive_new, projet_folder_id, depot_folder_id, id_projet))
             # Créer les sous-dossiers Drive selon le service
             if service_row and service_row['drive_subfolders']:
                 for nom_sous_dossier in service_row['drive_subfolders'].split('|'):
@@ -8050,14 +8121,14 @@ def add_project():
         if heure_seance and localisation:
             try:
                 from calendar_service import create_seance_event
-                client_row = conn.execute("SELECT * FROM clients WHERE id=?", (id_client,)).fetchone()
+                client_row = conn.execute("SELECT * FROM clients WHERE id=%s", (id_client,)).fetchone()
                 create_seance_event(nom_projet, date_seance, heure_seance, duree_seance_minutes, localisation, client_row['email'])
             except Exception as e:
                 print(f"[CALENDAR] Invitation séance échouée: {e}")
 
         # Email création projet
         try:
-            client_notif = conn.execute("SELECT * FROM clients WHERE id=?", (id_client,)).fetchone()
+            client_notif = conn.execute("SELECT * FROM clients WHERE id=%s", (id_client,)).fetchone()
             if client_notif and client_notif['email']:
                 lien_projet = url_for('project_detail', project_id=id_projet, _external=True)
                 send_email_client(client_notif,
@@ -8092,10 +8163,10 @@ def edit_client(client_id):
         code_postal_facturation = request.form.get('code_postal_facturation','').strip()
         pays_facturation = request.form.get('pays_facturation','Canada').strip()
         conn.execute("""
-            UPDATE clients SET nom_complet=?, email=?, nom_entreprise=?,
-            mode_facturation=?, adresse_facturation=?, ville_facturation=?,
-            province_facturation=?, code_postal_facturation=?, pays_facturation=?
-            WHERE id=?
+            UPDATE clients SET nom_complet=%s, email=%s, nom_entreprise=%s,
+            mode_facturation=%s, adresse_facturation=%s, ville_facturation=%s,
+            province_facturation=%s, code_postal_facturation=%s, pays_facturation=%s
+            WHERE id=%s
         """, (nom, email, entreprise, mode_facturation, adresse_facturation,
                ville_facturation, province_facturation, code_postal_facturation,
                pays_facturation, client_id))
@@ -8104,7 +8175,7 @@ def edit_client(client_id):
         flash(f"Le client '{nom}' a été mis à jour.", "success")
         return redirect(url_for('admin_dashboard'))
 
-    client = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
+    client = conn.execute("SELECT * FROM clients WHERE id = %s", (client_id,)).fetchone()
     conn.close()
     if not client:
         return redirect(url_for('admin_dashboard'))
@@ -8114,7 +8185,7 @@ def edit_client(client_id):
 @admin_required
 def delete_client(client_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+    conn.execute("DELETE FROM clients WHERE id = %s", (client_id,))
     conn.commit()
     conn.close()
     flash("Client supprimé.", "success")
@@ -8135,17 +8206,17 @@ def edit_project(project_id):
         id_client = request.form.get('id_client')
         titre_affiche = request.form.get('titre_affiche','').strip() or None
 
-        old = conn.execute("SELECT statut, id_client FROM projets WHERE id = ?", (project_id,)).fetchone()
+        old = conn.execute("SELECT statut, id_client FROM projets WHERE id = %s", (project_id,)).fetchone()
 
         conn.execute("""
-            UPDATE projets SET nom_projet=?, statut=?, lien_gdrive=?, id_client=?, titre_affiche=? WHERE id=?
+            UPDATE projets SET nom_projet=%s, statut=%s, lien_gdrive=%s, id_client=%s, titre_affiche=%s WHERE id=%s
         """, (nom_projet, statut, lien_gdrive, id_client, titre_affiche, project_id))
         conn.commit()
 
         # Notification client si passage à "Travaux terminés"
         try:
             if old and (old['statut'] != statut):
-                client = conn.execute("SELECT * FROM clients WHERE id = ?", (id_client,)).fetchone()
+                client = conn.execute("SELECT * FROM clients WHERE id = %s", (id_client,)).fetchone()
                 if client and client['email']:
                     lien = url_for('project_detail', project_id=project_id, _external=True)
                     statut_norm = normalize_status(statut)
@@ -8170,7 +8241,7 @@ def edit_project(project_id):
                     elif statut_norm in ["Travaux terminés", "Complété"]:
                         subject = f"Votre projet est terminé — {nom_projet}"
                         body_txt = f"Bonjour {client['nom_complet']}, votre projet est terminé : {nom_projet}"
-                        lien_drive = conn.execute("SELECT lien_gdrive FROM projets WHERE id=?", (project_id,)).fetchone()
+                        lien_drive = conn.execute("SELECT lien_gdrive FROM projets WHERE id=%s", (project_id,)).fetchone()
                         body_html = email_livraison(client['nom_complet'], nom_projet, lien, lien_drive['lien_gdrive'] if lien_drive else None)
                         push_notification(conn, client['id'], project_id, f"Votre projet « {nom_projet} » est terminé !", type='termine')
                     if subject and body_txt:
@@ -8182,7 +8253,7 @@ def edit_project(project_id):
         flash(f"Le projet '{nom_projet}' a été mis à jour.", "success")
         return redirect(url_for('admin_dashboard'))
 
-    projet = conn.execute("SELECT * FROM projets WHERE id = ?", (project_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id = %s", (project_id,)).fetchone()
     clients = conn.execute("SELECT id, nom_complet FROM clients").fetchall()
     conn.close()
     if not projet:
@@ -8193,7 +8264,7 @@ def edit_project(project_id):
 @admin_required
 def delete_project(project_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM projets WHERE id = ?", (project_id,))
+    conn.execute("DELETE FROM projets WHERE id = %s", (project_id,))
     conn.commit()
     conn.close()
     flash("Projet supprimé.", "success")
@@ -8209,7 +8280,7 @@ def admin_services():
     for service in les_services:
         items = conn.execute("""
             SELECT * FROM checklist_model_items
-            WHERE id_service = ?
+            WHERE id_service = %s
             ORDER BY is_revision_item ASC, id ASC
         """, (service['id'],)).fetchall()
         services_avec_items.append({'service': service, 'items': items})
@@ -8240,11 +8311,11 @@ def add_service():
         drive_subfolders = request.form.get('drive_subfolders', '').strip()
         conn.execute("""
             INSERT INTO services (nom_service, description, localisation_requise, documents_requis, icon, duree_production_minutes, delai_fixe_heures, drive_subfolders)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (nom_service, description, localisation_requise, documents_requis, icon, duree_production_minutes, delai_fixe_heures, drive_subfolders))
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+         RETURNING id""", (nom_service, description, localisation_requise, documents_requis, icon, duree_production_minutes, delai_fixe_heures, drive_subfolders))
         conn.commit()
         flash(f"Le service '{nom_service}' a été ajouté.", "success")
-    except sqlite3.IntegrityError:
+    except psycopg.errors.UniqueViolation:
         flash(f"Erreur : Le service '{nom_service}' existe déjà.", "error")
     finally:
         conn.close()
@@ -8254,8 +8325,8 @@ def add_service():
 @admin_required
 def delete_service(service_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM checklist_model_items WHERE id_service = ?", (service_id,))
-    conn.execute("DELETE FROM services WHERE id = ?", (service_id,))
+    conn.execute("DELETE FROM checklist_model_items WHERE id_service = %s", (service_id,))
+    conn.execute("DELETE FROM services WHERE id = %s", (service_id,))
     conn.commit()
     conn.close()
     flash("Service supprimé (et items de modèle associés).", "success")
@@ -8285,8 +8356,8 @@ def add_checklist_item(service_id):
     conn = get_db_connection()
     conn.execute("""
         INSERT INTO checklist_model_items (id_service, nom_item, requires_file, is_required, item_type, video_url, is_revision_item, file_category)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (service_id, nom_item, requires_file, is_required, item_type, video_url, is_revision_item, file_category))
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+     RETURNING id""", (service_id, nom_item, requires_file, is_required, item_type, video_url, is_revision_item, file_category))
     conn.commit()
     conn.close()
     return redirect(url_for('admin_services'))
@@ -8295,7 +8366,7 @@ def add_checklist_item(service_id):
 @admin_required
 def delete_checklist_item(item_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM checklist_model_items WHERE id = ?", (item_id,))
+    conn.execute("DELETE FROM checklist_model_items WHERE id = %s", (item_id,))
     conn.commit()
     conn.close()
     return redirect(url_for('admin_services'))
@@ -8303,15 +8374,15 @@ def delete_checklist_item(item_id):
 def update_project_status(project_id):
     """Met à jour le statut du projet selon l'état de la checklist."""
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id=%s", (project_id,)).fetchone()
     if not projet:
         conn.close()
         return
-    checklist = conn.execute("SELECT id FROM checklistes WHERE id_projet=?", (project_id,)).fetchone()
+    checklist = conn.execute("SELECT id FROM checklistes WHERE id_projet=%s", (project_id,)).fetchone()
     if not checklist:
         conn.close()
         return
-    items = conn.execute("SELECT * FROM checklist_items WHERE id_checklist=?", (checklist['id'],)).fetchall()
+    items = conn.execute("SELECT * FROM checklist_items WHERE id_checklist=%s", (checklist['id'],)).fetchall()
     if not items:
         conn.close()
         return
@@ -8323,7 +8394,7 @@ def update_project_status(project_id):
     items_requis = [i for i in items if int(i['is_required'] or 0) == 1 and int(i['is_revision'] or 0) == 0]
     tous_coches = all(int(i['est_coche'] or 0) == 1 for i in items_requis)
     if tous_coches and items_requis:
-        conn.execute("UPDATE projets SET statut='Travaux en cours' WHERE id=?", (project_id,))
+        conn.execute("UPDATE projets SET statut='Travaux en cours' WHERE id=%s", (project_id,))
         conn.commit()
     conn.close()
 
@@ -8332,14 +8403,14 @@ def _envoyer_courriel_revision(conn, projet, client):
     Site Web Vitrine (lien du site + pistes de révision cochables) quand applicable,
     sinon le template générique. Centralisé ici pour que tous les points d'entrée
     (panneau admin, bouton « Notifier le client », API JSON) se comportent pareil."""
-    service_row = conn.execute("SELECT nom_service FROM services WHERE id=?", (projet['id_service'],)).fetchone() if projet['id_service'] else None
+    service_row = conn.execute("SELECT nom_service FROM services WHERE id=%s", (projet['id_service'],)).fetchone() if projet['id_service'] else None
     nom_service = service_row['nom_service'] if service_row else None
     lien_portail = url_for('project_detail', project_id=projet['id'], _external=True)
     if nom_service == 'Site Web Vitrine' and projet['lien_site_test']:
         items_rows = conn.execute("""
             SELECT ci.nom_item FROM checklist_items ci
             JOIN checklistes c ON c.id = ci.id_checklist
-            WHERE c.id_projet = ? AND ci.is_revision = 1
+            WHERE c.id_projet = %s AND ci.is_revision = 1
             ORDER BY ci.position, ci.id
         """, (projet['id'],)).fetchall()
         items_revision = [r['nom_item'] for r in items_rows]
@@ -8356,9 +8427,9 @@ def force_status(project_id):
     statut = request.form.get('statut', '').strip()
     if statut:
         conn = get_db_connection()
-        projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
-        client = conn.execute("SELECT * FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
-        conn.execute("UPDATE projets SET statut=? WHERE id=?", (statut, project_id))
+        projet = conn.execute("SELECT * FROM projets WHERE id=%s", (project_id,)).fetchone()
+        client = conn.execute("SELECT * FROM clients WHERE id=%s", (projet['id_client'],)).fetchone()
+        conn.execute("UPDATE projets SET statut=%s WHERE id=%s", (statut, project_id))
         conn.commit()
         try:
             if client and client['email']:
@@ -8411,7 +8482,7 @@ def marketing_calendrier():
     conn = get_db_connection()
     posts = conn.execute("""
         SELECT * FROM marketing_posts
-        WHERE strftime('%Y-%m', date_publication) = ?
+        WHERE LEFT(date_publication, 7) = %s
         ORDER BY date_publication ASC
     """, (mois,)).fetchall()
     conn.close()
@@ -8451,8 +8522,8 @@ def marketing_nouveau_post():
         conn = get_db_connection()
         conn.execute("""
             INSERT INTO marketing_posts (titre, description, date_publication, plateformes, statut, drive_folder_id, created_by)
-            VALUES (?, ?, ?, ?, 'planifié', ?, ?)
-        """, (titre, description, date_publication, plateformes_json, drive_folder_id, session.get('user_id')))
+            VALUES (%s, %s, %s, %s, 'planifié', %s, %s)
+         RETURNING id""", (titre, description, date_publication, plateformes_json, drive_folder_id, session.get('user_id')))
         conn.commit()
         conn.close()
 
@@ -8480,7 +8551,7 @@ def marketing_notifier_felix(mois):
     conn = get_db_connection()
     posts = conn.execute("""
         SELECT * FROM marketing_posts
-        WHERE strftime('%Y-%m', date_publication) = ?
+        WHERE LEFT(date_publication, 7) = %s
         AND demande_envoyee = 0
         ORDER BY date_publication ASC
     """, (mois,)).fetchall()
@@ -8536,7 +8607,7 @@ def marketing_notifier_felix(mois):
         )
         # Marquer tous comme envoyés
         for post in posts:
-            conn.execute("UPDATE marketing_posts SET demande_envoyee=1 WHERE id=?", (post['id'],))
+            conn.execute("UPDATE marketing_posts SET demande_envoyee=1 WHERE id=%s", (post['id'],))
         conn.commit()
         flash(f"Demande envoyée à Félix — {len(posts)} post(s) inclus.", "success")
     except Exception as e:
@@ -8550,13 +8621,13 @@ def marketing_notifier_felix(mois):
 @admin_required
 def marketing_supprimer_post(post_id):
     conn = get_db_connection()
-    post = conn.execute("SELECT * FROM marketing_posts WHERE id=?", (post_id,)).fetchone()
+    post = conn.execute("SELECT * FROM marketing_posts WHERE id=%s", (post_id,)).fetchone()
     if not post:
         conn.close()
         flash("Post introuvable.", "error")
         return redirect(url_for('marketing_calendrier'))
     mois = post['date_publication'][:7]
-    conn.execute("DELETE FROM marketing_posts WHERE id=?", (post_id,))
+    conn.execute("DELETE FROM marketing_posts WHERE id=%s", (post_id,))
     conn.commit()
     conn.close()
     flash("Post supprimé.", "success")
@@ -8566,12 +8637,12 @@ def marketing_supprimer_post(post_id):
 @admin_required
 def marketing_todo_toggle(post_id):
     conn = get_db_connection()
-    post = conn.execute("SELECT * FROM marketing_posts WHERE id=?", (post_id,)).fetchone()
+    post = conn.execute("SELECT * FROM marketing_posts WHERE id=%s", (post_id,)).fetchone()
     if not post:
         conn.close()
         return jsonify({'error': 'Post introuvable'}), 404
     new_val = 0 if int(post['todo_felix_done'] or 0) else 1
-    conn.execute("UPDATE marketing_posts SET todo_felix_done=? WHERE id=?", (new_val, post_id))
+    conn.execute("UPDATE marketing_posts SET todo_felix_done=%s WHERE id=%s", (new_val, post_id))
     conn.commit()
     conn.close()
     return jsonify({'done': bool(new_val)})
@@ -8585,7 +8656,7 @@ def marketing_notifier_marie(mois):
     conn = get_db_connection()
     posts = conn.execute("""
         SELECT * FROM marketing_posts
-        WHERE strftime('%Y-%m', date_publication) = ?
+        WHERE LEFT(date_publication, 7) = %s
         AND statut IN ('visuels prêts', 'planifié', 'Planifié')
         AND todo_marie_done = 0
         ORDER BY date_publication ASC
@@ -8638,7 +8709,7 @@ def marketing_notifier_marie(mois):
             html=html_body
         )
         for post in posts:
-            conn.execute("UPDATE marketing_posts SET todo_marie_done=1 WHERE id=?", (post['id'],))
+            conn.execute("UPDATE marketing_posts SET todo_marie_done=1 WHERE id=%s", (post['id'],))
         conn.commit()
         flash(f"Marie notifiée — {len(posts)} post(s) inclus.", "success")
     except Exception as e:
@@ -8656,7 +8727,7 @@ def marketing_deposer_visuel(post_id):
     from email_templates import email_visuel_depose
 
     conn = get_db_connection()
-    post = conn.execute("SELECT * FROM marketing_posts WHERE id=?", (post_id,)).fetchone()
+    post = conn.execute("SELECT * FROM marketing_posts WHERE id=%s", (post_id,)).fetchone()
     if not post:
         conn.close()
         flash("Post introuvable.", "error")
@@ -8686,7 +8757,7 @@ def marketing_deposer_visuel(post_id):
             print(f"[DRIVE] Upload visuel échoué: {e}")
 
     if nb_uploades > 0:
-        conn.execute("UPDATE marketing_posts SET statut='visuels prêts' WHERE id=?", (post_id,))
+        conn.execute("UPDATE marketing_posts SET statut='visuels prêts' WHERE id=%s", (post_id,))
         conn.commit()
 
         flash(f"{nb_uploades} visuel(s) déposé(s) avec succès.", "success")
@@ -8708,9 +8779,9 @@ def marketing_deposer_visuel(post_id):
 @admin_required
 def notifier_revision(project_id):
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
-    client = conn.execute("SELECT * FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
-    iv = conn.execute("SELECT is_complete FROM identite_visuelle WHERE id_projet=?", (project_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id=%s", (project_id,)).fetchone()
+    client = conn.execute("SELECT * FROM clients WHERE id=%s", (projet['id_client'],)).fetchone()
+    iv = conn.execute("SELECT is_complete FROM identite_visuelle WHERE id_projet=%s", (project_id,)).fetchone()
     try:
         if iv and int(iv['is_complete'] or 0) == 1:
             lien = url_for('projet_identite', project_id=project_id, _external=True)
@@ -8746,10 +8817,10 @@ def edit_service(service_id):
     decision_board_requis = 1 if request.form.get('decision_board_requis') else 0
     drive_subfolders = request.form.get('drive_subfolders', '').strip()
     conn.execute("""
-        UPDATE services SET documents_requis=?, localisation_requise=?, icon=?,
-        duree_production_minutes=?, delai_fixe_heures=?, heure_seance_defaut=?,
-        duree_seance_minutes=?, appel_exploratoire_requis=?, prix=?, exonere_taxes=?,
-        decision_board_requis=?, drive_subfolders=? WHERE id=?
+        UPDATE services SET documents_requis=%s, localisation_requise=%s, icon=%s,
+        duree_production_minutes=%s, delai_fixe_heures=%s, heure_seance_defaut=%s,
+        duree_seance_minutes=%s, appel_exploratoire_requis=%s, prix=%s, exonere_taxes=%s,
+        decision_board_requis=%s, drive_subfolders=%s WHERE id=%s
     """, (documents_requis, localisation_requise, icon, duree_production_minutes, delai_fixe_heures, heure_seance_defaut, duree_seance_minutes, appel_exploratoire_requis, prix, exonere_taxes, decision_board_requis, drive_subfolders, service_id))
 
     conn.commit()
@@ -8764,7 +8835,7 @@ def create_admin():
 @admin_required
 def edit_checklist_items(project_id):
     conn = get_db_connection()
-    checklist = conn.execute("SELECT id FROM checklistes WHERE id_projet = ?", (project_id,)).fetchone()
+    checklist = conn.execute("SELECT id FROM checklistes WHERE id_projet = %s", (project_id,)).fetchone()
     if not checklist:
         conn.close()
         flash("Checklist introuvable.", "error")
@@ -8791,8 +8862,8 @@ def edit_checklist_items(project_id):
         if nom:
             conn.execute("""
                 UPDATE checklist_items
-                SET nom_item=?, item_type=?, file_category=?, requires_file=?, is_required=?
-                WHERE id=? AND id_checklist=?
+                SET nom_item=%s, item_type=%s, file_category=%s, requires_file=%s, is_required=%s
+                WHERE id=%s AND id_checklist=%s
             """, (nom, item_type, file_category, requires_file, is_required, iid, checklist['id']))
 
     conn.commit()
@@ -8840,15 +8911,15 @@ def api_admin_create_facture():
         return jsonify({'error': 'Client requis.'}), 400
     conn = get_db_connection()
     try:
-        client = conn.execute("SELECT id FROM clients WHERE id=?", (id_client,)).fetchone()
+        client = conn.execute("SELECT id FROM clients WHERE id=%s", (id_client,)).fetchone()
         if not client:
             return jsonify({'error': 'Client introuvable.'}), 404
         numero = generer_numero_facture(id_client, conn)
         cur = conn.execute("""
             INSERT INTO factures (numero, id_client, statut, type_facturation, sous_total, tps, tvq, total)
-            VALUES (?, ?, 'ouverte', 'manuelle', 0, 0, 0, 0)
-        """, (numero, id_client))
-        facture_id = cur.lastrowid
+            VALUES (%s, %s, 'ouverte', 'manuelle', 0, 0, 0, 0)
+         RETURNING id""", (numero, id_client))
+        facture_id = cur.fetchone()['id']
         conn.commit()
         return jsonify({'success': True, 'id': facture_id, 'numero': numero}), 201
     finally:
@@ -8859,13 +8930,13 @@ def api_admin_create_facture():
 @admin_required
 def api_admin_get_facture(facture_id):
     conn = get_db_connection()
-    facture = conn.execute("SELECT * FROM factures WHERE id=?", (facture_id,)).fetchone()
+    facture = conn.execute("SELECT * FROM factures WHERE id=%s", (facture_id,)).fetchone()
     if not facture:
         conn.close()
         return jsonify({'error': 'Facture introuvable'}), 404
-    client = conn.execute("SELECT * FROM clients WHERE id=?", (facture['id_client'],)).fetchone()
+    client = conn.execute("SELECT * FROM clients WHERE id=%s", (facture['id_client'],)).fetchone()
     lignes = conn.execute(
-        "SELECT * FROM facture_lignes WHERE id_facture=? ORDER BY date_service, id", (facture_id,)
+        "SELECT * FROM facture_lignes WHERE id_facture=%s ORDER BY date_service, id", (facture_id,)
     ).fetchall()
     conn.close()
     return jsonify({
@@ -8922,16 +8993,16 @@ def api_admin_ajouter_ligne(facture_id):
     try:
         conn.execute("""
             INSERT INTO facture_lignes (id_facture, description, date_service, localisation, quantite, prix_unitaire, total_ligne)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (facture_id, description, date_service, localisation, quantite, prix, total_ligne))
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+         RETURNING id""", (facture_id, description, date_service, localisation, quantite, prix, total_ligne))
         lignes = conn.execute(
-            "SELECT prix_unitaire, quantite FROM facture_lignes WHERE id_facture=?", (facture_id,)
+            "SELECT prix_unitaire, quantite FROM facture_lignes WHERE id_facture=%s", (facture_id,)
         ).fetchall()
         sous_total = sum(float(l['prix_unitaire']) * int(l['quantite']) for l in lignes)
         tps  = round(sous_total * 0.05, 2)
         tvq  = round(sous_total * 0.09975, 2)
         total = round(sous_total + tps + tvq, 2)
-        conn.execute("UPDATE factures SET sous_total=?, tps=?, tvq=?, total=? WHERE id=?",
+        conn.execute("UPDATE factures SET sous_total=%s, tps=%s, tvq=%s, total=%s WHERE id=%s",
                      (sous_total, tps, tvq, total, facture_id))
         conn.commit()
         regenerer_pdf_facture(facture_id, conn)
@@ -8955,20 +9026,20 @@ def api_admin_modifier_ligne(ligne_id):
 
     conn = get_db_connection()
     try:
-        ligne = conn.execute("SELECT id_facture FROM facture_lignes WHERE id=?", (ligne_id,)).fetchone()
+        ligne = conn.execute("SELECT id_facture FROM facture_lignes WHERE id=%s", (ligne_id,)).fetchone()
         if not ligne:
             return jsonify({'error': 'Ligne introuvable.'}), 404
         conn.execute("""
-            UPDATE facture_lignes SET description=?, localisation=?, prix_unitaire=?, quantite=?, total_ligne=? WHERE id=?
+            UPDATE facture_lignes SET description=%s, localisation=%s, prix_unitaire=%s, quantite=%s, total_ligne=%s WHERE id=%s
         """, (description, localisation, prix, quantite, total_ligne, ligne_id))
         lignes = conn.execute(
-            "SELECT prix_unitaire, quantite FROM facture_lignes WHERE id_facture=?", (ligne['id_facture'],)
+            "SELECT prix_unitaire, quantite FROM facture_lignes WHERE id_facture=%s", (ligne['id_facture'],)
         ).fetchall()
         sous_total = sum(float(l['prix_unitaire']) * int(l['quantite']) for l in lignes)
         tps  = round(sous_total * 0.05, 2)
         tvq  = round(sous_total * 0.09975, 2)
         total = round(sous_total + tps + tvq, 2)
-        conn.execute("UPDATE factures SET sous_total=?, tps=?, tvq=?, total=? WHERE id=?",
+        conn.execute("UPDATE factures SET sous_total=%s, tps=%s, tvq=%s, total=%s WHERE id=%s",
                      (sous_total, tps, tvq, total, ligne['id_facture']))
         conn.commit()
         regenerer_pdf_facture(ligne['id_facture'], conn)
@@ -8985,19 +9056,19 @@ def api_admin_modifier_ligne(ligne_id):
 def api_admin_supprimer_ligne(ligne_id):
     conn = get_db_connection()
     try:
-        ligne = conn.execute("SELECT id_facture FROM facture_lignes WHERE id=?", (ligne_id,)).fetchone()
+        ligne = conn.execute("SELECT id_facture FROM facture_lignes WHERE id=%s", (ligne_id,)).fetchone()
         if not ligne:
             return jsonify({'error': 'Ligne introuvable.'}), 404
         facture_id = ligne['id_facture']
-        conn.execute("DELETE FROM facture_lignes WHERE id=?", (ligne_id,))
+        conn.execute("DELETE FROM facture_lignes WHERE id=%s", (ligne_id,))
         lignes = conn.execute(
-            "SELECT prix_unitaire, quantite FROM facture_lignes WHERE id_facture=?", (facture_id,)
+            "SELECT prix_unitaire, quantite FROM facture_lignes WHERE id_facture=%s", (facture_id,)
         ).fetchall()
         sous_total = sum(float(l['prix_unitaire']) * int(l['quantite']) for l in lignes)
         tps  = round(sous_total * 0.05, 2)
         tvq  = round(sous_total * 0.09975, 2)
         total = round(sous_total + tps + tvq, 2)
-        conn.execute("UPDATE factures SET sous_total=?, tps=?, tvq=?, total=? WHERE id=?",
+        conn.execute("UPDATE factures SET sous_total=%s, tps=%s, tvq=%s, total=%s WHERE id=%s",
                      (sous_total, tps, tvq, total, facture_id))
         conn.commit()
         regenerer_pdf_facture(facture_id, conn)
@@ -9016,12 +9087,12 @@ def api_admin_fermer_facture(facture_id):
     from datetime import date, timedelta
     import pathlib
     conn = get_db_connection()
-    facture = conn.execute("SELECT * FROM factures WHERE id=?", (facture_id,)).fetchone()
+    facture = conn.execute("SELECT * FROM factures WHERE id=%s", (facture_id,)).fetchone()
     if not facture or facture['statut'] != 'ouverte':
         conn.close()
         return jsonify({'error': 'Facture introuvable ou déjà fermée.'}), 400
-    client = conn.execute("SELECT * FROM clients WHERE id=?", (facture['id_client'],)).fetchone()
-    lignes = conn.execute("SELECT * FROM facture_lignes WHERE id_facture=? ORDER BY date_service", (facture_id,)).fetchall()
+    client = conn.execute("SELECT * FROM clients WHERE id=%s", (facture['id_client'],)).fetchone()
+    lignes = conn.execute("SELECT * FROM facture_lignes WHERE id_facture=%s ORDER BY date_service", (facture_id,)).fetchall()
     today = date.today()
     date_str = today.strftime("%Y-%m-%d")
     upload_root  = os.getenv("UPLOAD_ROOT", "/data/uploads")
@@ -9036,12 +9107,12 @@ def api_admin_fermer_facture(facture_id):
         print(f"[INVOICE] Génération PDF échouée: {e}")
     drive_file_id = None
     try:
-        client_row = conn.execute("SELECT factures_folder_id FROM clients WHERE id=?", (client['id'],)).fetchone()
+        client_row = conn.execute("SELECT factures_folder_id FROM clients WHERE id=%s", (client['id'],)).fetchone()
         if client_row and client_row['factures_folder_id']:
             drive_file_id, _ = upload_file(pdf_path, f"{facture['numero']}.pdf", client_row['factures_folder_id'])
     except Exception as e:
         print(f"[DRIVE] Upload facture échoué: {e}")
-    conn.execute("UPDATE factures SET statut='envoyee', date_emission=?, date_echeance='À la réception', pdf_path=?, drive_file_id=? WHERE id=?",
+    conn.execute("UPDATE factures SET statut='envoyee', date_emission=%s, date_echeance='À la réception', pdf_path=%s, drive_file_id=%s WHERE id=%s",
                  (date_str, pdf_path, drive_file_id, facture_id))
     conn.commit()
     try:
@@ -9069,7 +9140,7 @@ def api_admin_facture_payee(facture_id):
     data = request.get_json(silent=True) or {}
     date_paiement = (data.get('date_paiement') or '').strip() or datetime.now().strftime('%Y-%m-%d')
     conn = get_db_connection()
-    conn.execute("UPDATE factures SET statut='payee', date_paiement=? WHERE id=?", (date_paiement, facture_id))
+    conn.execute("UPDATE factures SET statut='payee', date_paiement=%s WHERE id=%s", (date_paiement, facture_id))
     # Facture payée → entre dans les revenus (grand livre)
     materialiser_revenu_facture(conn, facture_id, date_paiement)
     conn.commit()
@@ -9081,7 +9152,7 @@ def api_admin_facture_payee(facture_id):
 @admin_required
 def api_admin_supprimer_facture(facture_id):
     conn = get_db_connection()
-    facture = conn.execute("SELECT * FROM factures WHERE id=?", (facture_id,)).fetchone()
+    facture = conn.execute("SELECT * FROM factures WHERE id=%s", (facture_id,)).fetchone()
     if not facture:
         conn.close()
         return jsonify({'error': 'Facture introuvable.'}), 404
@@ -9089,8 +9160,8 @@ def api_admin_supprimer_facture(facture_id):
         try: os.remove(facture['pdf_path'])
         except Exception as e: print(f"[INVOICE] Suppression PDF échouée: {e}")
     supprimer_revenu_facture(conn, facture_id)
-    conn.execute("DELETE FROM facture_lignes WHERE id_facture=?", (facture_id,))
-    conn.execute("DELETE FROM factures WHERE id=?", (facture_id,))
+    conn.execute("DELETE FROM facture_lignes WHERE id_facture=%s", (facture_id,))
+    conn.execute("DELETE FROM factures WHERE id=%s", (facture_id,))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -9101,14 +9172,14 @@ def api_admin_supprimer_facture(facture_id):
 def admin_facture(facture_id):
     from datetime import date
     conn = get_db_connection()
-    facture = conn.execute("SELECT * FROM factures WHERE id=?", (facture_id,)).fetchone()
+    facture = conn.execute("SELECT * FROM factures WHERE id=%s", (facture_id,)).fetchone()
     if not facture:
         conn.close()
         flash("Facture introuvable.", "error")
         return redirect(url_for('admin_dashboard'))
-    client = conn.execute("SELECT * FROM clients WHERE id=?", (facture['id_client'],)).fetchone()
+    client = conn.execute("SELECT * FROM clients WHERE id=%s", (facture['id_client'],)).fetchone()
     lignes = conn.execute("""
-        SELECT * FROM facture_lignes WHERE id_facture=? ORDER BY date_service, id
+        SELECT * FROM facture_lignes WHERE id_facture=%s ORDER BY date_service, id
     """, (facture_id,)).fetchall()
     conn.close()
     return render_template('admin_facture.html',
@@ -9121,9 +9192,9 @@ def regenerer_pdf_facture(facture_id, conn):
     from invoice_service import generer_pdf_facture
     import pathlib
     try:
-        facture = conn.execute("SELECT * FROM factures WHERE id=?", (facture_id,)).fetchone()
-        client  = conn.execute("SELECT * FROM clients WHERE id=?", (facture['id_client'],)).fetchone()
-        lignes  = conn.execute("SELECT * FROM facture_lignes WHERE id_facture=? ORDER BY date_service, id", (facture_id,)).fetchall()
+        facture = conn.execute("SELECT * FROM factures WHERE id=%s", (facture_id,)).fetchone()
+        client  = conn.execute("SELECT * FROM clients WHERE id=%s", (facture['id_client'],)).fetchone()
+        lignes  = conn.execute("SELECT * FROM facture_lignes WHERE id_facture=%s ORDER BY date_service, id", (facture_id,)).fetchall()
 
         upload_root  = os.getenv("UPLOAD_ROOT", "/data/uploads")
         factures_dir = os.path.join(upload_root, "factures", f"client_{client['id']}")
@@ -9151,20 +9222,20 @@ def regenerer_pdf_facture(facture_id, conn):
         }
 
         generer_pdf_facture(facture_dict, lignes_dict, dict(client), pdf_path)
-        conn.execute("UPDATE factures SET pdf_path=? WHERE id=?", (pdf_path, facture_id))
+        conn.execute("UPDATE factures SET pdf_path=%s WHERE id=%s", (pdf_path, facture_id))
         conn.commit()
 
         # Re-upload Drive
         try:
             client_row = conn.execute(
-                "SELECT factures_folder_id FROM clients WHERE id=?", (client['id'],)
+                "SELECT factures_folder_id FROM clients WHERE id=%s", (client['id'],)
             ).fetchone()
             if client_row and client_row['factures_folder_id']:
                 drive_file_id, _ = upload_file(
                     pdf_path, f"{facture['numero']}.pdf",
                     client_row['factures_folder_id']
                 )
-                conn.execute("UPDATE factures SET drive_file_id=? WHERE id=?", (drive_file_id, facture_id))
+                conn.execute("UPDATE factures SET drive_file_id=%s WHERE id=%s", (drive_file_id, facture_id))
                 conn.commit()
         except Exception as e:
             print(f"[DRIVE] Re-upload facture échoué: {e}")
@@ -9187,19 +9258,19 @@ def ajouter_ligne_facture_admin(facture_id):
     conn.execute("""
         INSERT INTO facture_lignes
         (id_facture, description, date_service, localisation, quantite, prix_unitaire, total_ligne)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (facture_id, description, date_service, localisation, quantite, prix, total_ligne))
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+     RETURNING id""", (facture_id, description, date_service, localisation, quantite, prix, total_ligne))
 
     # Recalculer totaux
     lignes = conn.execute(
-        "SELECT prix_unitaire, quantite FROM facture_lignes WHERE id_facture=?", (facture_id,)
+        "SELECT prix_unitaire, quantite FROM facture_lignes WHERE id_facture=%s", (facture_id,)
     ).fetchall()
     sous_total = sum(float(l['prix_unitaire']) * int(l['quantite']) for l in lignes)
     tps  = round(sous_total * 0.05, 2)
     tvq  = round(sous_total * 0.09975, 2)
     total = round(sous_total + tps + tvq, 2)
     conn.execute("""
-        UPDATE factures SET sous_total=?, tps=?, tvq=?, total=? WHERE id=?
+        UPDATE factures SET sous_total=%s, tps=%s, tvq=%s, total=%s WHERE id=%s
     """, (sous_total, tps, tvq, total, facture_id))
     regenerer_pdf_facture(facture_id, conn)
     conn.close()
@@ -9216,22 +9287,22 @@ def modifier_ligne_facture(ligne_id):
     total_ligne = round(prix * quantite, 2)
 
     conn = get_db_connection()
-    ligne = conn.execute("SELECT id_facture FROM facture_lignes WHERE id=?", (ligne_id,)).fetchone()
+    ligne = conn.execute("SELECT id_facture FROM facture_lignes WHERE id=%s", (ligne_id,)).fetchone()
     conn.execute("""
-        UPDATE facture_lignes SET description=?, prix_unitaire=?, quantite=?, total_ligne=?
-        WHERE id=?
+        UPDATE facture_lignes SET description=%s, prix_unitaire=%s, quantite=%s, total_ligne=%s
+        WHERE id=%s
     """, (description, prix, quantite, total_ligne, ligne_id))
 
     # Recalculer totaux
     lignes = conn.execute(
-        "SELECT prix_unitaire, quantite FROM facture_lignes WHERE id_facture=?", (ligne['id_facture'],)
+        "SELECT prix_unitaire, quantite FROM facture_lignes WHERE id_facture=%s", (ligne['id_facture'],)
     ).fetchall()
     sous_total = sum(float(l['prix_unitaire']) * int(l['quantite']) for l in lignes)
     tps  = round(sous_total * 0.05, 2)
     tvq  = round(sous_total * 0.09975, 2)
     total = round(sous_total + tps + tvq, 2)
     conn.execute("""
-        UPDATE factures SET sous_total=?, tps=?, tvq=?, total=? WHERE id=?
+        UPDATE factures SET sous_total=%s, tps=%s, tvq=%s, total=%s WHERE id=%s
     """, (sous_total, tps, tvq, total, ligne['id_facture']))
     conn.commit()
     facture_id = ligne['id_facture']
@@ -9245,20 +9316,20 @@ def modifier_ligne_facture(ligne_id):
 @admin_required
 def supprimer_ligne_facture(ligne_id):
     conn = get_db_connection()
-    ligne = conn.execute("SELECT id_facture FROM facture_lignes WHERE id=?", (ligne_id,)).fetchone()
+    ligne = conn.execute("SELECT id_facture FROM facture_lignes WHERE id=%s", (ligne_id,)).fetchone()
     facture_id = ligne['id_facture']
-    conn.execute("DELETE FROM facture_lignes WHERE id=?", (ligne_id,))
+    conn.execute("DELETE FROM facture_lignes WHERE id=%s", (ligne_id,))
 
     # Recalculer totaux
     lignes = conn.execute(
-        "SELECT prix_unitaire, quantite FROM facture_lignes WHERE id_facture=?", (facture_id,)
+        "SELECT prix_unitaire, quantite FROM facture_lignes WHERE id_facture=%s", (facture_id,)
     ).fetchall()
     sous_total = sum(float(l['prix_unitaire']) * int(l['quantite']) for l in lignes)
     tps  = round(sous_total * 0.05, 2)
     tvq  = round(sous_total * 0.09975, 2)
     total = round(sous_total + tps + tvq, 2)
     conn.execute("""
-        UPDATE factures SET sous_total=?, tps=?, tvq=?, total=? WHERE id=?
+        UPDATE factures SET sous_total=%s, tps=%s, tvq=%s, total=%s WHERE id=%s
     """, (sous_total, tps, tvq, total, facture_id))
     conn.commit()
     regenerer_pdf_facture(facture_id, conn)
@@ -9269,13 +9340,13 @@ def supprimer_ligne_facture(ligne_id):
 @admin_required
 def archive_project(project_id):
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
-    conn.execute("UPDATE projets SET is_archived = 1 WHERE id = ?", (project_id,))
+    projet = conn.execute("SELECT * FROM projets WHERE id=%s", (project_id,)).fetchone()
+    conn.execute("UPDATE projets SET is_archived = 1 WHERE id = %s", (project_id,))
     conn.commit()
     push_notification(conn, projet['id_client'], project_id, f"Votre projet « {projet['nom_projet']} » a été archivé.", type='archive')
     conn.commit()
     try:
-        client = conn.execute("SELECT * FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
+        client = conn.execute("SELECT * FROM clients WHERE id=%s", (projet['id_client'],)).fetchone()
         if client and client['email'] and int(client['is_email_confirmed'] or 0):
             send_email(
                 client['email'],
@@ -9294,7 +9365,7 @@ def archive_project(project_id):
 @admin_required
 def unarchive_project(project_id):
     conn = get_db_connection()
-    conn.execute("UPDATE projets SET is_archived = 0 WHERE id = ?", (project_id,))
+    conn.execute("UPDATE projets SET is_archived = 0 WHERE id = %s", (project_id,))
     conn.commit()
     conn.close()
     flash("Projet désarchivé.", "success")
@@ -9307,7 +9378,7 @@ def unarchive_project(project_id):
 @admin_required
 def notifier_facture(client_id):
     conn = get_db_connection()
-    client = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
+    client = conn.execute("SELECT * FROM clients WHERE id = %s", (client_id,)).fetchone()
     conn.close()
     if client:
         try:
@@ -9338,24 +9409,24 @@ def notifier_facture(client_id):
 @admin_required
 def api_admin_notifier_facture(project_id):
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id=%s", (project_id,)).fetchone()
     if not projet:
         conn.close()
         return jsonify({'error': 'Projet introuvable'}), 404
-    client = conn.execute("SELECT * FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
+    client = conn.execute("SELECT * FROM clients WHERE id=%s", (projet['id_client'],)).fetchone()
     if not client:
         conn.close()
         return jsonify({'error': 'Client introuvable'}), 404
     facture = conn.execute("""
         SELECT f.* FROM factures f
         JOIN facture_lignes fl ON fl.id_facture = f.id
-        WHERE fl.id_projet = ? AND f.statut != 'annulee'
+        WHERE fl.id_projet = %s AND f.statut != 'annulee'
         ORDER BY f.created_at DESC LIMIT 1
     """, (project_id,)).fetchone()
     ligne = None
     if facture:
         ligne = conn.execute(
-            "SELECT description FROM facture_lignes WHERE id_facture=? AND id_projet=? LIMIT 1",
+            "SELECT description FROM facture_lignes WHERE id_facture=%s AND id_projet=%s LIMIT 1",
             (facture['id'], project_id)
         ).fetchone()
     conn.close()
@@ -9400,7 +9471,7 @@ def api_marketing_notifier_felix(mois):
     conn = get_db_connection()
     posts = conn.execute("""
         SELECT * FROM marketing_posts
-        WHERE strftime('%Y-%m', date_publication) = ?
+        WHERE LEFT(date_publication, 7) = %s
         AND demande_envoyee = 0
         ORDER BY date_publication ASC
     """, (mois,)).fetchall()
@@ -9423,7 +9494,7 @@ def api_marketing_notifier_felix(mois):
             html=html_body
         )
         for post in posts:
-            conn.execute("UPDATE marketing_posts SET demande_envoyee=1 WHERE id=?", (post['id'],))
+            conn.execute("UPDATE marketing_posts SET demande_envoyee=1 WHERE id=%s", (post['id'],))
         conn.commit()
     except Exception as e:
         print(f"[MAIL] api_notifier_felix: {e}")
@@ -9440,7 +9511,7 @@ def api_marketing_notifier_marie(mois):
     conn = get_db_connection()
     posts = conn.execute("""
         SELECT * FROM marketing_posts
-        WHERE strftime('%Y-%m', date_publication) = ?
+        WHERE LEFT(date_publication, 7) = %s
         AND statut IN ('visuels prêts', 'planifié', 'Planifié')
         AND todo_marie_done = 0
         ORDER BY date_publication ASC
@@ -9464,7 +9535,7 @@ def api_marketing_notifier_marie(mois):
             html=html_body
         )
         for post in posts:
-            conn.execute("UPDATE marketing_posts SET todo_marie_done=1 WHERE id=?", (post['id'],))
+            conn.execute("UPDATE marketing_posts SET todo_marie_done=1 WHERE id=%s", (post['id'],))
         conn.commit()
     except Exception as e:
         print(f"[MAIL] api_notifier_marie: {e}")
@@ -9479,7 +9550,7 @@ def api_marketing_notifier_marie(mois):
 
 def _marketing_post_fichiers(conn, post_id) -> list:
     rows = conn.execute(
-        "SELECT id, filename, created_at FROM marketing_post_fichiers WHERE id_post = ? ORDER BY created_at ASC",
+        "SELECT id, filename, created_at FROM marketing_post_fichiers WHERE id_post = %s ORDER BY created_at ASC",
         (post_id,)
     ).fetchall()
     return [{'id': r['id'], 'filename': r['filename'], 'created_at': r['created_at']} for r in rows]
@@ -9493,7 +9564,7 @@ def api_admin_marketing_list():
     conn = get_db_connection()
     posts = conn.execute("""
         SELECT * FROM marketing_posts
-        WHERE strftime('%Y-%m', date_publication) = ?
+        WHERE LEFT(date_publication, 7) = %s
         ORDER BY date_publication ASC
     """, (mois,)).fetchall()
     result = [{
@@ -9528,10 +9599,10 @@ def api_admin_marketing_create():
     conn = get_db_connection()
     cur = conn.execute("""
         INSERT INTO marketing_posts (titre, description, date_publication, plateformes, statut, created_by)
-        VALUES (?, ?, ?, ?, 'planifié', ?)
-    """, (titre, description, date_publication, _json.dumps(plateformes), session.get('user_id')))
+        VALUES (%s, %s, %s, %s, 'planifié', %s)
+     RETURNING id""", (titre, description, date_publication, _json.dumps(plateformes), session.get('user_id')))
     conn.commit()
-    post_id = cur.lastrowid
+    post_id = cur.fetchone()['id']
     conn.close()
     return jsonify({'success': True, 'id': post_id}), 201
 
@@ -9540,7 +9611,7 @@ def api_admin_marketing_create():
 @admin_required
 def api_admin_marketing_delete(post_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM marketing_posts WHERE id = ?", (post_id,))
+    conn.execute("DELETE FROM marketing_posts WHERE id = %s", (post_id,))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -9555,7 +9626,7 @@ def api_admin_marketing_upload(post_id):
     if not allowed(file.filename):
         return jsonify({'error': 'Extension non autorisée'}), 400
     conn = get_db_connection()
-    post = conn.execute("SELECT * FROM marketing_posts WHERE id = ?", (post_id,)).fetchone()
+    post = conn.execute("SELECT * FROM marketing_posts WHERE id = %s", (post_id,)).fetchone()
     if not post:
         conn.close()
         return jsonify({'error': 'Post introuvable'}), 404
@@ -9572,25 +9643,25 @@ def api_admin_marketing_upload(post_id):
             root_id = os.getenv('MARKETING_DRIVE_FOLDER_ID')
             mois_folder = create_folder(post['date_publication'][:7], parent_id=root_id)
             drive_folder_id = create_folder(f"{post['date_publication']} — {post['titre']}", parent_id=mois_folder)
-            conn.execute("UPDATE marketing_posts SET drive_folder_id = ? WHERE id = ?", (drive_folder_id, post_id))
+            conn.execute("UPDATE marketing_posts SET drive_folder_id = %s WHERE id = %s", (drive_folder_id, post_id))
         from drive_service import upload_file as drive_upload
         drive_upload(save_path, safe_name, drive_folder_id)
     except Exception as e:
         print(f"[DRIVE] Upload visuel marketing échoué: {e}")
 
     conn.execute(
-        "INSERT INTO marketing_post_fichiers (id_post, filename, filepath, uploaded_by) VALUES (?, ?, ?, ?)",
+        "INSERT INTO marketing_post_fichiers (id_post, filename, filepath, uploaded_by) VALUES (%s, %s, %s, %s) RETURNING id",
         (post_id, file.filename, save_path, session.get('user_id'))
     )
     # Déposer un visuel = la tâche de création est faite — coche automatiquement,
     # et propage vers la tâche perso / le roadmap si ce post y est lié.
-    conn.execute("UPDATE marketing_posts SET todo_felix_done = 1 WHERE id = ?", (post_id,))
+    conn.execute("UPDATE marketing_posts SET todo_felix_done = 1 WHERE id = %s", (post_id,))
     conn.commit()
     linked_roadmap_todo_id = post['linked_roadmap_todo_id'] if 'linked_roadmap_todo_id' in post.keys() else None
     if linked_roadmap_todo_id:
         production_id = _admin_id_for_role(conn, 'production')
         is_assigned_to_production = conn.execute(
-            "SELECT 1 FROM roadmap_todo_assignees WHERE roadmap_todo_id = ? AND admin_id = ?",
+            "SELECT 1 FROM roadmap_todo_assignees WHERE roadmap_todo_id = %s AND admin_id = %s",
             (linked_roadmap_todo_id, production_id)
         ).fetchone()
         if is_assigned_to_production:
@@ -9605,7 +9676,7 @@ def api_admin_marketing_upload(post_id):
 def api_admin_marketing_serve_fichier(post_id, fichier_id):
     conn = get_db_connection()
     f = conn.execute(
-        "SELECT * FROM marketing_post_fichiers WHERE id = ? AND id_post = ?", (fichier_id, post_id)
+        "SELECT * FROM marketing_post_fichiers WHERE id = %s AND id_post = %s", (fichier_id, post_id)
     ).fetchone()
     conn.close()
     if not f:
@@ -9624,12 +9695,12 @@ def api_admin_marketing_serve_fichier(post_id, fichier_id):
 def api_admin_marketing_delete_fichier(post_id, fichier_id):
     conn = get_db_connection()
     f = conn.execute(
-        "SELECT * FROM marketing_post_fichiers WHERE id = ? AND id_post = ?", (fichier_id, post_id)
+        "SELECT * FROM marketing_post_fichiers WHERE id = %s AND id_post = %s", (fichier_id, post_id)
     ).fetchone()
     if not f:
         conn.close()
         return jsonify({'error': 'Fichier introuvable'}), 404
-    conn.execute("DELETE FROM marketing_post_fichiers WHERE id = ?", (fichier_id,))
+    conn.execute("DELETE FROM marketing_post_fichiers WHERE id = %s", (fichier_id,))
     conn.commit()
     conn.close()
     try:
@@ -9644,18 +9715,18 @@ def api_admin_marketing_delete_fichier(post_id, fichier_id):
 @admin_required
 def api_admin_marketing_todo_toggle(post_id):
     conn = get_db_connection()
-    post = conn.execute("SELECT * FROM marketing_posts WHERE id = ?", (post_id,)).fetchone()
+    post = conn.execute("SELECT * FROM marketing_posts WHERE id = %s", (post_id,)).fetchone()
     if not post:
         conn.close()
         return jsonify({'error': 'Post non trouvé'}), 404
     new_val = 0 if post['todo_felix_done'] else 1
-    conn.execute("UPDATE marketing_posts SET todo_felix_done = ? WHERE id = ?", (new_val, post_id))
+    conn.execute("UPDATE marketing_posts SET todo_felix_done = %s WHERE id = %s", (new_val, post_id))
     conn.commit()
     linked_roadmap_todo_id = post['linked_roadmap_todo_id'] if 'linked_roadmap_todo_id' in post.keys() else None
     if linked_roadmap_todo_id:
         production_id = _admin_id_for_role(conn, 'production')
         is_assigned_to_production = conn.execute(
-            "SELECT 1 FROM roadmap_todo_assignees WHERE roadmap_todo_id = ? AND admin_id = ?",
+            "SELECT 1 FROM roadmap_todo_assignees WHERE roadmap_todo_id = %s AND admin_id = %s",
             (linked_roadmap_todo_id, production_id)
         ).fetchone()
         if is_assigned_to_production:
@@ -9668,11 +9739,11 @@ def api_admin_marketing_todo_toggle(post_id):
 @admin_required
 def api_admin_marketing_publier(post_id):
     conn = get_db_connection()
-    post = conn.execute("SELECT * FROM marketing_posts WHERE id = ?", (post_id,)).fetchone()
+    post = conn.execute("SELECT * FROM marketing_posts WHERE id = %s", (post_id,)).fetchone()
     if not post:
         conn.close()
         return jsonify({'error': 'Post non trouvé'}), 404
-    conn.execute("UPDATE marketing_posts SET statut = 'publié' WHERE id = ?", (post_id,))
+    conn.execute("UPDATE marketing_posts SET statut = 'publié' WHERE id = %s", (post_id,))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -9699,11 +9770,11 @@ def api_admin_services_create():
     conn = get_db_connection()
     try:
         cur = conn.execute(
-            "INSERT INTO services (nom_service, description, icon, categorie, prix, actif) VALUES (?, ?, ?, ?, ?, 1)",
+            "INSERT INTO services (nom_service, description, icon, categorie, prix, actif) VALUES (%s, %s, %s, %s, %s, 1) RETURNING id",
             (nom_service, description, icon, categorie, prix)
         )
         conn.commit()
-        service_id = cur.lastrowid
+        service_id = cur.fetchone()['id']
     except Exception as e:
         conn.close()
         return jsonify({'error': str(e)}), 409
@@ -9715,8 +9786,8 @@ def api_admin_services_create():
 @admin_required
 def api_admin_services_delete(service_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM checklist_model_items WHERE id_service = ?", (service_id,))
-    conn.execute("DELETE FROM services WHERE id = ?", (service_id,))
+    conn.execute("DELETE FROM checklist_model_items WHERE id_service = %s", (service_id,))
+    conn.execute("DELETE FROM services WHERE id = %s", (service_id,))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -9728,7 +9799,7 @@ def api_admin_services_update(service_id):
     """Mise à jour partielle : tarification (prix, durée affichée) et bascule actif/inactif."""
     data = request.get_json(silent=True) or {}
     conn = get_db_connection()
-    existing = conn.execute("SELECT id FROM services WHERE id = ?", (service_id,)).fetchone()
+    existing = conn.execute("SELECT id FROM services WHERE id = %s", (service_id,)).fetchone()
     if not existing:
         conn.close()
         return jsonify({'error': 'Service introuvable'}), 404
@@ -9747,10 +9818,10 @@ def api_admin_services_update(service_id):
 
     if champs:
         valeurs.append(service_id)
-        conn.execute(f"UPDATE services SET {', '.join(champs)} WHERE id = ?", valeurs)
+        conn.execute(f"UPDATE services SET {', '.join(champs)} WHERE id = %s", valeurs)
         conn.commit()
 
-    row = conn.execute("SELECT * FROM services WHERE id = ?", (service_id,)).fetchone()
+    row = conn.execute("SELECT * FROM services WHERE id = %s", (service_id,)).fetchone()
     conn.close()
     return jsonify({
         'success': True,
@@ -9773,19 +9844,19 @@ def api_admin_services_add_extra(service_id):
     except (TypeError, ValueError):
         return jsonify({'error': 'Prix invalide'}), 400
     conn = get_db_connection()
-    existing = conn.execute("SELECT id FROM services WHERE id = ?", (service_id,)).fetchone()
+    existing = conn.execute("SELECT id FROM services WHERE id = %s", (service_id,)).fetchone()
     if not existing:
         conn.close()
         return jsonify({'error': 'Service introuvable'}), 404
     position = conn.execute(
-        "SELECT COALESCE(MAX(position), -1) + 1 FROM service_extras WHERE id_service = ?", (service_id,)
+        "SELECT COALESCE(MAX(position), -1) + 1 FROM service_extras WHERE id_service = %s", (service_id,)
     ).fetchone()[0]
     cur = conn.execute(
-        "INSERT INTO service_extras (id_service, nom, prix, position) VALUES (?, ?, ?, ?)",
+        "INSERT INTO service_extras (id_service, nom, prix, position) VALUES (%s, %s, %s, %s) RETURNING id",
         (service_id, nom, prix, position)
     )
     conn.commit()
-    extra_id = cur.lastrowid
+    extra_id = cur.fetchone()['id']
     conn.close()
     return jsonify({'success': True, 'id': extra_id, 'nom': nom, 'prix': prix}), 201
 
@@ -9794,7 +9865,7 @@ def api_admin_services_add_extra(service_id):
 @admin_required
 def api_admin_services_delete_extra(extra_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM service_extras WHERE id = ?", (extra_id,))
+    conn.execute("DELETE FROM service_extras WHERE id = %s", (extra_id,))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -9806,7 +9877,7 @@ def api_admin_services_update_item(item_id):
     """Bascule obligatoire/optionnel (ou renomme) un checkpoint sans le recréer."""
     data = request.get_json(silent=True) or {}
     conn = get_db_connection()
-    existing = conn.execute("SELECT id FROM checklist_model_items WHERE id = ?", (item_id,)).fetchone()
+    existing = conn.execute("SELECT id FROM checklist_model_items WHERE id = %s", (item_id,)).fetchone()
     if not existing:
         conn.close()
         return jsonify({'error': 'Checkpoint introuvable'}), 404
@@ -9823,10 +9894,10 @@ def api_admin_services_update_item(item_id):
 
     if champs:
         valeurs.append(item_id)
-        conn.execute(f"UPDATE checklist_model_items SET {', '.join(champs)} WHERE id = ?", valeurs)
+        conn.execute(f"UPDATE checklist_model_items SET {', '.join(champs)} WHERE id = %s", valeurs)
         conn.commit()
 
-    row = conn.execute("SELECT * FROM checklist_model_items WHERE id = ?", (item_id,)).fetchone()
+    row = conn.execute("SELECT * FROM checklist_model_items WHERE id = %s", (item_id,)).fetchone()
     conn.close()
     return jsonify({'success': True, 'id': row['id'], 'nom_item': row['nom_item'], 'is_required': bool(row['is_required'])})
 
@@ -9842,10 +9913,10 @@ def api_admin_services_add_item(service_id):
     conn = get_db_connection()
     cur = conn.execute("""
         INSERT INTO checklist_model_items (id_service, nom_item, requires_file, is_required, item_type, file_category)
-        VALUES (?, ?, 0, ?, 'document', 'autre')
-    """, (service_id, nom_item, is_required))
+        VALUES (%s, %s, 0, %s, 'document', 'autre')
+     RETURNING id""", (service_id, nom_item, is_required))
     conn.commit()
-    item_id = cur.lastrowid
+    item_id = cur.fetchone()['id']
     conn.close()
     return jsonify({'success': True, 'id': item_id}), 201
 
@@ -9854,7 +9925,7 @@ def api_admin_services_add_item(service_id):
 @admin_required
 def api_admin_services_delete_item(item_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM checklist_model_items WHERE id = ?", (item_id,))
+    conn.execute("DELETE FROM checklist_model_items WHERE id = %s", (item_id,))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -9890,13 +9961,13 @@ def api_admin_services_create_with_items():
                 localisation_requise, documents_requis, appel_exploratoire_requis,
                 decision_board_requis, duree_seance_minutes, duree_tournage_minutes,
                 duree_production_minutes, duree_finalisation_minutes, slug, categorie)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
             (nom_service, description, icon, prix, exonere_taxes,
              localisation_requise, documents_requis, appel_exploratoire_requis,
              decision_board_requis, duree_seance_minutes, duree_tournage_minutes,
              duree_production_minutes, duree_finalisation_minutes, slug, categorie)
         )
-        service_id = cur.lastrowid
+        service_id = cur.fetchone()['id']
         for idx, item in enumerate(items):
             nom_item = (item.get('nom_item') or '').strip()
             if not nom_item:
@@ -9909,11 +9980,11 @@ def api_admin_services_create_with_items():
             conn.execute("""
                 INSERT INTO checklist_model_items
                     (id_service, nom_item, requires_file, is_required, item_type, file_category, field_type, position)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (service_id, nom_item, requires_file, is_required, item_type, file_category, field_type, idx))
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+             RETURNING id""", (service_id, nom_item, requires_file, is_required, item_type, file_category, field_type, idx))
         conn.commit()
         return jsonify({'success': True, 'id': service_id}), 201
-    except sqlite3.IntegrityError:
+    except psycopg.errors.UniqueViolation:
         conn.rollback()
         return jsonify({'error': f"Le service '{nom_service}' existe déjà."}), 409
     finally:
@@ -9933,15 +10004,15 @@ def api_admin_services_create_with_items():
 def api_client_get_decision_board(projet_id):
     client_id = session['user_id']
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id = ? AND id_client = ?", (projet_id, client_id)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id = %s AND id_client = %s", (projet_id, client_id)).fetchone()
     if not projet:
         conn.close()
         return jsonify({'error': 'Projet introuvable'}), 404
-    board = conn.execute("SELECT * FROM decision_boards WHERE id_projet = ? AND is_active = 1", (projet_id,)).fetchone()
+    board = conn.execute("SELECT * FROM decision_boards WHERE id_projet = %s AND is_active = 1", (projet_id,)).fetchone()
     if not board:
         conn.close()
         return jsonify({'error': 'Decision board non disponible'}), 404
-    choices = conn.execute("SELECT * FROM decision_board_choices WHERE id_projet = ?", (projet_id,)).fetchone()
+    choices = conn.execute("SELECT * FROM decision_board_choices WHERE id_projet = %s", (projet_id,)).fetchone()
     conn.close()
     return jsonify({
         'nom_projet': projet['nom_projet'],
@@ -9967,11 +10038,11 @@ def api_client_submit_decision_board(projet_id):
     client_id = session['user_id']
     data = request.get_json(silent=True) or {}
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id = ? AND id_client = ?", (projet_id, client_id)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id = %s AND id_client = %s", (projet_id, client_id)).fetchone()
     if not projet:
         conn.close()
         return jsonify({'error': 'Projet introuvable'}), 404
-    board = conn.execute("SELECT id FROM decision_boards WHERE id_projet = ? AND is_active = 1", (projet_id,)).fetchone()
+    board = conn.execute("SELECT id FROM decision_boards WHERE id_projet = %s AND is_active = 1", (projet_id,)).fetchone()
     if not board:
         conn.close()
         return jsonify({'error': 'Decision board non disponible'}), 404
@@ -9985,25 +10056,25 @@ def api_client_submit_decision_board(projet_id):
     nom_suggestion   = (data.get('nom_suggestion') or '').strip()
     commentaires     = (data.get('commentaires') or '').strip()
 
-    already = conn.execute("SELECT id FROM decision_board_choices WHERE id_projet=?", (projet_id,)).fetchone()
+    already = conn.execute("SELECT id FROM decision_board_choices WHERE id_projet=%s", (projet_id,)).fetchone()
     if already:
         conn.execute("""
             UPDATE decision_board_choices SET
-                choix_directions=?, choix_noms=?, choix_icones=?, choix_typos=?,
-                choix_palettes=?, choix_logos=?, nom_suggestion=?, commentaires=?,
+                choix_directions=%s, choix_noms=%s, choix_icones=%s, choix_typos=%s,
+                choix_palettes=%s, choix_logos=%s, nom_suggestion=%s, commentaires=%s,
                 submitted_at=CURRENT_TIMESTAMP
-            WHERE id_projet=?
+            WHERE id_projet=%s
         """, (choix_directions, choix_noms, choix_icones, choix_typos, choix_palettes, choix_logos, nom_suggestion, commentaires, projet_id))
     else:
         conn.execute("""
             INSERT INTO decision_board_choices
             (id_projet, choix_directions, choix_noms, choix_icones, choix_typos, choix_palettes, choix_logos, nom_suggestion, commentaires)
-            VALUES (?,?,?,?,?,?,?,?,?)
-        """, (projet_id, choix_directions, choix_noms, choix_icones, choix_typos, choix_palettes, choix_logos, nom_suggestion, commentaires))
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+         RETURNING id""", (projet_id, choix_directions, choix_noms, choix_icones, choix_typos, choix_palettes, choix_logos, nom_suggestion, commentaires))
     conn.commit()
 
     try:
-        client = conn.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+        client = conn.execute("SELECT * FROM clients WHERE id=%s", (client_id,)).fetchone()
         settings = get_notification_settings()
         if settings["admin_emails"]:
             subject = f"[Decision Board] {client['nom_complet']} a soumis ses choix — {projet['nom_projet']}"
@@ -10039,8 +10110,8 @@ def api_client_submit_decision_board(projet_id):
 @admin_required
 def api_admin_get_decision_board(project_id):
     conn = get_db_connection()
-    board   = conn.execute("SELECT * FROM decision_boards WHERE id_projet=?", (project_id,)).fetchone()
-    choices = conn.execute("SELECT * FROM decision_board_choices WHERE id_projet=?", (project_id,)).fetchone()
+    board   = conn.execute("SELECT * FROM decision_boards WHERE id_projet=%s", (project_id,)).fetchone()
+    choices = conn.execute("SELECT * FROM decision_board_choices WHERE id_projet=%s", (project_id,)).fetchone()
     conn.close()
 
     def _board_field(col):
@@ -10082,7 +10153,7 @@ def api_admin_get_decision_board(project_id):
 def api_admin_save_decision_board(project_id):
     import json as _json, tempfile
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id=%s", (project_id,)).fetchone()
     if not projet:
         conn.close()
         return jsonify({'error': 'Projet introuvable.'}), 404
@@ -10098,13 +10169,13 @@ def api_admin_save_decision_board(project_id):
             conn.close()
             return jsonify({'error': 'JSON invalide. Vérifiez la syntaxe.'}), 400
 
-    existing = conn.execute("SELECT * FROM decision_boards WHERE id_projet=?", (project_id,)).fetchone()
+    existing = conn.execute("SELECT * FROM decision_boards WHERE id_projet=%s", (project_id,)).fetchone()
     board_was_active = bool(existing and int(existing['is_active'] or 0))
 
     assets_folder_id = existing['assets_folder_id'] if existing and existing['assets_folder_id'] else None
     if not assets_folder_id:
         try:
-            client = conn.execute("SELECT * FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
+            client = conn.execute("SELECT * FROM clients WHERE id=%s", (projet['id_client'],)).fetchone()
             parent = client['drive_folder_id'] if client and client['drive_folder_id'] else os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID')
             assets_folder_id = create_folder("DecisionBoardAssets", parent_id=parent)
         except Exception as e:
@@ -10145,15 +10216,15 @@ def api_admin_save_decision_board(project_id):
         if existing:
             conn.execute("""
                 UPDATE decision_boards SET
-                    config_json=?, is_active=?, assets_folder_id=?,
-                    icon1_url=?, icon1_name=?, icon2_url=?, icon2_name=?,
-                    icon3_url=?, icon3_name=?, icon4_url=?, icon4_name=?,
-                    logo1_url=?, logo1_name=?, logo2_url=?, logo2_name=?,
-                    logo3_url=?, logo3_name=?, logo4_url=?, logo4_name=?,
-                    logo1_flat_url=?, logo2_flat_url=?, logo3_flat_url=?, logo4_flat_url=?,
-                    logo1_url2=?, logo2_url2=?, logo3_url2=?, logo4_url2=?,
+                    config_json=%s, is_active=%s, assets_folder_id=%s,
+                    icon1_url=%s, icon1_name=%s, icon2_url=%s, icon2_name=%s,
+                    icon3_url=%s, icon3_name=%s, icon4_url=%s, icon4_name=%s,
+                    logo1_url=%s, logo1_name=%s, logo2_url=%s, logo2_name=%s,
+                    logo3_url=%s, logo3_name=%s, logo4_url=%s, logo4_name=%s,
+                    logo1_flat_url=%s, logo2_flat_url=%s, logo3_flat_url=%s, logo4_flat_url=%s,
+                    logo1_url2=%s, logo2_url2=%s, logo3_url2=%s, logo4_url2=%s,
                     updated_at=CURRENT_TIMESTAMP
-                WHERE id_projet=?
+                WHERE id_projet=%s
             """, (config_json, is_active, assets_folder_id,
                   fields['icon1_url'], fields['icon1_name'], fields['icon2_url'], fields['icon2_name'],
                   fields['icon3_url'], fields['icon3_name'], fields['icon4_url'], fields['icon4_name'],
@@ -10172,7 +10243,7 @@ def api_admin_save_decision_board(project_id):
                     logo3_url, logo3_name, logo4_url, logo4_name,
                     logo1_flat_url, logo2_flat_url, logo3_flat_url, logo4_flat_url,
                     logo1_url2, logo2_url2, logo3_url2, logo4_url2
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """, (project_id, config_json, is_active, assets_folder_id,
                   fields['icon1_url'], fields['icon1_name'], fields['icon2_url'], fields['icon2_name'],
                   fields['icon3_url'], fields['icon3_name'], fields['icon4_url'], fields['icon4_name'],
@@ -10197,7 +10268,7 @@ def api_admin_save_decision_board(project_id):
 def admin_decision_board(project_id):
     import json, tempfile
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id=%s", (project_id,)).fetchone()
     if not projet:
         conn.close()
         flash("Projet introuvable.", "error")
@@ -10220,14 +10291,14 @@ def admin_decision_board(project_id):
                 return redirect(url_for('admin_decision_board', project_id=project_id))
 
         # Récupérer le board existant
-        existing = conn.execute("SELECT * FROM decision_boards WHERE id_projet=?", (project_id,)).fetchone()
+        existing = conn.execute("SELECT * FROM decision_boards WHERE id_projet=%s", (project_id,)).fetchone()
         board_was_active = bool(existing and int(existing['is_active'] or 0))
 
         # Créer le dossier DecisionBoardAssets sur Drive si nécessaire
         assets_folder_id = existing['assets_folder_id'] if existing and existing['assets_folder_id'] else None
         if not assets_folder_id:
             try:
-                client = conn.execute("SELECT * FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
+                client = conn.execute("SELECT * FROM clients WHERE id=%s", (projet['id_client'],)).fetchone()
                 parent = client['drive_folder_id'] if client and client['drive_folder_id'] else os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID')
                 assets_folder_id = create_folder("DecisionBoardAssets", parent_id=parent)
             except Exception as e:
@@ -10290,15 +10361,15 @@ def admin_decision_board(project_id):
         if existing:
             conn.execute("""
                 UPDATE decision_boards SET
-                    config_json=?, is_active=?, assets_folder_id=?,
-                    icon1_url=?, icon1_name=?, icon2_url=?, icon2_name=?,
-                    icon3_url=?, icon3_name=?, icon4_url=?, icon4_name=?,
-                    logo1_url=?, logo1_name=?, logo2_url=?, logo2_name=?,
-                    logo3_url=?, logo3_name=?, logo4_url=?, logo4_name=?,
-                    logo1_flat_url=?, logo2_flat_url=?, logo3_flat_url=?, logo4_flat_url=?,
-                    logo1_url2=?, logo2_url2=?, logo3_url2=?, logo4_url2=?,
+                    config_json=%s, is_active=%s, assets_folder_id=%s,
+                    icon1_url=%s, icon1_name=%s, icon2_url=%s, icon2_name=%s,
+                    icon3_url=%s, icon3_name=%s, icon4_url=%s, icon4_name=%s,
+                    logo1_url=%s, logo1_name=%s, logo2_url=%s, logo2_name=%s,
+                    logo3_url=%s, logo3_name=%s, logo4_url=%s, logo4_name=%s,
+                    logo1_flat_url=%s, logo2_flat_url=%s, logo3_flat_url=%s, logo4_flat_url=%s,
+                    logo1_url2=%s, logo2_url2=%s, logo3_url2=%s, logo4_url2=%s,
                     updated_at=CURRENT_TIMESTAMP
-                WHERE id_projet=?
+                WHERE id_projet=%s
             """, (config_json, is_active, assets_folder_id,
                   icon1_url, icon1_name, icon2_url, icon2_name,
                   icon3_url, icon3_name, icon4_url, icon4_name,
@@ -10317,7 +10388,7 @@ def admin_decision_board(project_id):
                     logo3_url, logo3_name, logo4_url, logo4_name,
                     logo1_flat_url, logo2_flat_url, logo3_flat_url, logo4_flat_url,
                     logo1_url2, logo2_url2, logo3_url2, logo4_url2
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """, (project_id, config_json, is_active, assets_folder_id,
                   icon1_url, icon1_name, icon2_url, icon2_name,
                   icon3_url, icon3_name, icon4_url, icon4_name,
@@ -10333,8 +10404,8 @@ def admin_decision_board(project_id):
         flash("Decision board sauvegardé.", "success")
         return redirect(url_for('admin_decision_board', project_id=project_id))
 
-    board   = conn.execute("SELECT * FROM decision_boards WHERE id_projet=?", (project_id,)).fetchone()
-    choices = conn.execute("SELECT * FROM decision_board_choices WHERE id_projet=?", (project_id,)).fetchone()
+    board   = conn.execute("SELECT * FROM decision_boards WHERE id_projet=%s", (project_id,)).fetchone()
+    choices = conn.execute("SELECT * FROM decision_board_choices WHERE id_projet=%s", (project_id,)).fetchone()
     conn.close()
     return render_template('admin_decision_board.html', projet=projet, board=board, choices=choices)
 
@@ -10342,7 +10413,7 @@ def admin_decision_board(project_id):
 @login_required
 def client_decision_board(project_id):
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id=%s", (project_id,)).fetchone()
     is_owner = projet and (projet['id_client'] == session['user_id'])
     is_admin = bool(session.get('is_admin', False))
     if not projet or not (is_owner or is_admin):
@@ -10355,17 +10426,17 @@ def client_decision_board(project_id):
         flash("Le decision board n'est pas encore disponible.", "error")
         return redirect(url_for('project_detail', project_id=project_id))
 
-    board = conn.execute("SELECT * FROM decision_boards WHERE id_projet=? AND is_active=1", (project_id,)).fetchone()
+    board = conn.execute("SELECT * FROM decision_boards WHERE id_projet=%s AND is_active=1", (project_id,)).fetchone()
     if not board:
         conn.close()
         flash("Le decision board n'est pas encore configuré.", "error")
         return redirect(url_for('project_detail', project_id=project_id))
 
-    already_submitted = conn.execute("SELECT id FROM decision_board_choices WHERE id_projet=?", (project_id,)).fetchone()
+    already_submitted = conn.execute("SELECT id FROM decision_board_choices WHERE id_projet=%s", (project_id,)).fetchone()
     conn.close()
     
     conn2 = get_db_connection()
-    client = conn2.execute("SELECT nom_complet, nom_entreprise FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
+    client = conn2.execute("SELECT nom_complet, nom_entreprise FROM clients WHERE id=%s", (projet['id_client'],)).fetchone()
     conn2.close()
     client_name = client['nom_entreprise'] or client['nom_complet'] if client else 'Votre marque'
     return render_template('client_decision_board.html', projet=projet, board=board, already_submitted=already_submitted, client_name=client_name)
@@ -10374,7 +10445,7 @@ def client_decision_board(project_id):
 @login_required
 def submit_decision_board(project_id):
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id=?", (project_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id=%s", (project_id,)).fetchone()
     is_owner = projet and (projet['id_client'] == session['user_id'])
     is_admin = bool(session.get('is_admin', False))
     if not projet or not (is_owner or is_admin):
@@ -10382,7 +10453,7 @@ def submit_decision_board(project_id):
         flash("Accès non autorisé.", "error")
         return redirect(url_for('dashboard'))
 
-    already = conn.execute("SELECT id FROM decision_board_choices WHERE id_projet=?", (project_id,)).fetchone()
+    already = conn.execute("SELECT id FROM decision_board_choices WHERE id_projet=%s", (project_id,)).fetchone()
 
     choix_directions = request.form.get('choix_directions', '')
     choix_noms       = request.form.get('choix_noms', '')
@@ -10396,25 +10467,25 @@ def submit_decision_board(project_id):
     if already:
         conn.execute("""
             UPDATE decision_board_choices SET
-                choix_directions=?, choix_noms=?, choix_icones=?, choix_typos=?,
-                choix_palettes=?, choix_logos=?, nom_suggestion=?, commentaires=?,
+                choix_directions=%s, choix_noms=%s, choix_icones=%s, choix_typos=%s,
+                choix_palettes=%s, choix_logos=%s, nom_suggestion=%s, commentaires=%s,
                 submitted_at=CURRENT_TIMESTAMP
-            WHERE id_projet=?
+            WHERE id_projet=%s
         """, (choix_directions, choix_noms, choix_icones, choix_typos, choix_palettes, choix_logos, nom_suggestion, commentaires, project_id))
     else:
         conn.execute("""
             INSERT INTO decision_board_choices
             (id_projet, choix_directions, choix_noms, choix_icones, choix_typos, choix_palettes, choix_logos, nom_suggestion, commentaires)
-            VALUES (?,?,?,?,?,?,?,?,?)
-        """, (project_id, choix_directions, choix_noms, choix_icones, choix_typos, choix_palettes, choix_logos, nom_suggestion, commentaires))
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+         RETURNING id""", (project_id, choix_directions, choix_noms, choix_icones, choix_typos, choix_palettes, choix_logos, nom_suggestion, commentaires))
     conn.commit()
 
     # Statut → Documents reçus + notifications
-    conn.execute("UPDATE projets SET statut='Documents reçus' WHERE id=?", (project_id,))
+    conn.execute("UPDATE projets SET statut='Documents reçus' WHERE id=%s", (project_id,))
     conn.commit()
 
     try:
-        client = conn.execute("SELECT * FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
+        client = conn.execute("SELECT * FROM clients WHERE id=%s", (projet['id_client'],)).fetchone()
         settings = get_notification_settings()
 
         # Email admin avec tous les choix
@@ -10461,14 +10532,14 @@ def fermer_facture(facture_id):
     from invoice_service import generer_pdf_facture, calculer_taxes
     from datetime import date, timedelta
     conn = get_db_connection()
-    facture = conn.execute("SELECT * FROM factures WHERE id=?", (facture_id,)).fetchone()
+    facture = conn.execute("SELECT * FROM factures WHERE id=%s", (facture_id,)).fetchone()
     if not facture or facture['statut'] != 'ouverte':
         conn.close()
         flash("Facture introuvable ou déjà fermée.", "error")
         return redirect(url_for('admin_dashboard'))
 
-    client = conn.execute("SELECT * FROM clients WHERE id=?", (facture['id_client'],)).fetchone()
-    lignes = conn.execute("SELECT * FROM facture_lignes WHERE id_facture=? ORDER BY date_service", (facture_id,)).fetchall()
+    client = conn.execute("SELECT * FROM clients WHERE id=%s", (facture['id_client'],)).fetchone()
+    lignes = conn.execute("SELECT * FROM facture_lignes WHERE id_facture=%s ORDER BY date_service", (facture_id,)).fetchall()
 
     today    = date.today()
     date_str = today.strftime("%Y-%m-%d")
@@ -10504,7 +10575,7 @@ def fermer_facture(facture_id):
     drive_file_id = None
     try:
         client_row = conn.execute(
-            "SELECT factures_folder_id FROM clients WHERE id=?", (client['id'],)
+            "SELECT factures_folder_id FROM clients WHERE id=%s", (client['id'],)
         ).fetchone()
         if client_row and client_row['factures_folder_id']:
             drive_file_id, _ = upload_file(
@@ -10515,8 +10586,8 @@ def fermer_facture(facture_id):
 
     # Mettre à jour DB
     conn.execute("""
-        UPDATE factures SET statut='envoyee', date_emission=?, date_echeance='À la réception',
-        pdf_path=?, drive_file_id=? WHERE id=?
+        UPDATE factures SET statut='envoyee', date_emission=%s, date_echeance='À la réception',
+        pdf_path=%s, drive_file_id=%s WHERE id=%s
     """, (date_str, pdf_path, drive_file_id, facture_id))
     conn.commit()
 
@@ -10548,7 +10619,7 @@ def fermer_facture(facture_id):
 def marquer_facture_payee(facture_id):
     today = datetime.now().strftime('%Y-%m-%d')
     conn = get_db_connection()
-    conn.execute("UPDATE factures SET statut='payee', date_paiement=? WHERE id=?", (today, facture_id))
+    conn.execute("UPDATE factures SET statut='payee', date_paiement=%s WHERE id=%s", (today, facture_id))
     materialiser_revenu_facture(conn, facture_id, today)
     conn.commit()
     conn.close()
@@ -10559,7 +10630,7 @@ def marquer_facture_payee(facture_id):
 @admin_required
 def supprimer_facture(facture_id):
     conn = get_db_connection()
-    facture = conn.execute("SELECT * FROM factures WHERE id=?", (facture_id,)).fetchone()
+    facture = conn.execute("SELECT * FROM factures WHERE id=%s", (facture_id,)).fetchone()
     if not facture:
         conn.close()
         flash("Facture introuvable.", "error")
@@ -10574,8 +10645,8 @@ def supprimer_facture(facture_id):
 
     # Supprimer lignes + facture en DB (+ revenu lié dans le grand livre)
     supprimer_revenu_facture(conn, facture_id)
-    conn.execute("DELETE FROM facture_lignes WHERE id_facture=?", (facture_id,))
-    conn.execute("DELETE FROM factures WHERE id=?", (facture_id,))
+    conn.execute("DELETE FROM facture_lignes WHERE id_facture=%s", (facture_id,))
+    conn.execute("DELETE FROM factures WHERE id=%s", (facture_id,))
     conn.commit()
     conn.close()
     flash(f"Facture {facture['numero']} supprimée.", "success")
@@ -10585,7 +10656,7 @@ def supprimer_facture(facture_id):
 @admin_required
 def admin_download_facture(facture_id):
     conn = get_db_connection()
-    facture = conn.execute("SELECT * FROM factures WHERE id=?", (facture_id,)).fetchone()
+    facture = conn.execute("SELECT * FROM factures WHERE id=%s", (facture_id,)).fetchone()
     conn.close()
     if not facture or not facture['pdf_path'] or not os.path.exists(facture['pdf_path']):
         flash("PDF introuvable.", "error")
@@ -10600,7 +10671,7 @@ def api_admin_download_facture(facture_id):
     # proxifie que /api/* vers Flask (voir next.config.*), donc un <a href="/admin/facture/...">
     # tombe dans le vide côté Next.js (404) sans jamais atteindre le backend.
     conn = get_db_connection()
-    facture = conn.execute("SELECT * FROM factures WHERE id=?", (facture_id,)).fetchone()
+    facture = conn.execute("SELECT * FROM factures WHERE id=%s", (facture_id,)).fetchone()
     conn.close()
     if not facture or not facture['pdf_path'] or not os.path.exists(facture['pdf_path']):
         return jsonify({'error': 'PDF introuvable.'}), 404
@@ -10620,16 +10691,16 @@ def api_admin_identite_get(projet_id):
     import json as _json
     conn = get_db_connection()
     try:
-        projet = conn.execute("SELECT * FROM projets WHERE id = ?", (projet_id,)).fetchone()
+        projet = conn.execute("SELECT * FROM projets WHERE id = %s", (projet_id,)).fetchone()
         if not projet:
             return jsonify({'error': 'Projet introuvable'}), 404
-        iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = ?", (projet_id,)).fetchone()
+        iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = %s", (projet_id,)).fetchone()
         if not iv:
             return jsonify({'error': 'Identité visuelle non configurée'}), 404
-        logos_rows = conn.execute("SELECT * FROM iv_logos WHERE id_iv = ?", (iv['id'],)).fetchall()
-        fonts     = conn.execute("SELECT * FROM iv_fonts WHERE id_iv = ?", (iv['id'],)).fetchall()
-        decls     = conn.execute("SELECT * FROM iv_declinaisons WHERE id_iv = ? ORDER BY position, id", (iv['id'],)).fetchall()
-        mockups   = conn.execute("SELECT * FROM iv_mockups WHERE id_iv = ? ORDER BY position, id", (iv['id'],)).fetchall()
+        logos_rows = conn.execute("SELECT * FROM iv_logos WHERE id_iv = %s", (iv['id'],)).fetchall()
+        fonts     = conn.execute("SELECT * FROM iv_fonts WHERE id_iv = %s", (iv['id'],)).fetchall()
+        decls     = conn.execute("SELECT * FROM iv_declinaisons WHERE id_iv = %s ORDER BY position, id", (iv['id'],)).fetchall()
+        mockups   = conn.execute("SELECT * FROM iv_mockups WHERE id_iv = %s ORDER BY position, id", (iv['id'],)).fetchall()
         logos = {}
         for l in logos_rows:
             logos[l['variante']] = {
@@ -10664,19 +10735,19 @@ def api_admin_identite_get(projet_id):
 def api_admin_identite_publier(projet_id):
     conn = get_db_connection()
     try:
-        projet = conn.execute("SELECT * FROM projets WHERE id = ?", (projet_id,)).fetchone()
+        projet = conn.execute("SELECT * FROM projets WHERE id = %s", (projet_id,)).fetchone()
         if not projet:
             return jsonify({'error': 'Projet introuvable'}), 404
-        iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = ?", (projet_id,)).fetchone()
+        iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = %s", (projet_id,)).fetchone()
         if not iv:
             return jsonify({'error': 'Identité visuelle non configurée'}), 404
-        conn.execute("UPDATE identite_visuelle SET is_complete = 1 WHERE id = ?", (iv['id'],))
-        conn.execute("UPDATE projets SET statut='En révision' WHERE id = ?", (projet_id,))
+        conn.execute("UPDATE identite_visuelle SET is_complete = 1 WHERE id = %s", (iv['id'],))
+        conn.execute("UPDATE projets SET statut='En révision' WHERE id = %s", (projet_id,))
         push_notification(conn, projet['id_client'], projet_id,
             f"Votre identité visuelle pour « {projet['nom_projet']} » est prête !", type='identite_visuelle')
         conn.commit()
         try:
-            client = conn.execute("SELECT * FROM clients WHERE id = ?", (projet['id_client'],)).fetchone()
+            client = conn.execute("SELECT * FROM clients WHERE id = %s", (projet['id_client'],)).fetchone()
             if client and client['email']:
                 lien = url_for('projet_identite', project_id=projet_id, _external=True)
                 send_email_client(client,
@@ -10696,7 +10767,7 @@ def api_admin_identite_logo(projet_id):
     import tempfile
     conn = get_db_connection()
     try:
-        iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = ?", (projet_id,)).fetchone()
+        iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = %s", (projet_id,)).fetchone()
         if not iv:
             return jsonify({'ok': False, 'error': 'Identité visuelle non trouvée'}), 404
         variante = request.form.get('variant', '').strip()
@@ -10711,7 +10782,7 @@ def api_admin_identite_logo(projet_id):
             return jsonify({'ok': False, 'error': 'Format non supporté'}), 400
         iv_folder_id = iv['iv_folder_id']
         if not iv_folder_id:
-            projet = conn.execute("SELECT p.*, c.drive_folder_id as client_folder_id, c.nom_entreprise, c.nom_complet, c.email FROM projets p JOIN clients c ON c.id = p.id_client WHERE p.id = ?", (projet_id,)).fetchone()
+            projet = conn.execute("SELECT p.*, c.drive_folder_id as client_folder_id, c.nom_entreprise, c.nom_complet, c.email FROM projets p JOIN clients c ON c.id = p.id_client WHERE p.id = %s", (projet_id,)).fetchone()
             proj_folder = projet['drive_folder_id'] if projet else None
             if not proj_folder:
                 # Créer le dossier projet sous le dossier client
@@ -10719,12 +10790,12 @@ def api_admin_identite_logo(projet_id):
                 if not client_folder:
                     nom_client = (projet['nom_entreprise'] or projet['nom_complet']) if projet else 'Client'
                     client_folder = create_folder(nom_client, parent_id=os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID'))
-                    conn.execute("UPDATE clients SET drive_folder_id = ? WHERE id = (SELECT id_client FROM projets WHERE id = ?)", (client_folder, projet_id))
+                    conn.execute("UPDATE clients SET drive_folder_id = %s WHERE id = (SELECT id_client FROM projets WHERE id = %s)", (client_folder, projet_id))
                 proj_folder = create_folder(projet['nom_projet'], parent_id=client_folder)
-                conn.execute("UPDATE projets SET drive_folder_id = ? WHERE id = ?", (proj_folder, projet_id))
+                conn.execute("UPDATE projets SET drive_folder_id = %s WHERE id = %s", (proj_folder, projet_id))
                 conn.commit()
             iv_folder_id = create_folder("Identité visuelle", parent_id=proj_folder)
-            conn.execute("UPDATE identite_visuelle SET iv_folder_id = ? WHERE id = ?", (iv_folder_id, iv['id']))
+            conn.execute("UPDATE identite_visuelle SET iv_folder_id = %s WHERE id = %s", (iv_folder_id, iv['id']))
             conn.commit()
             if projet and projet['email']:
                 try:
@@ -10741,16 +10812,16 @@ def api_admin_identite_logo(projet_id):
         finally:
             os.unlink(tmp.name)
         existing = conn.execute(
-            "SELECT id FROM iv_logos WHERE id_iv = ? AND variante = ?", (iv['id'], variante)
+            "SELECT id FROM iv_logos WHERE id_iv = %s AND variante = %s", (iv['id'], variante)
         ).fetchone()
         if existing:
             conn.execute(
-                "UPDATE iv_logos SET drive_file_id=?, public_url=?, filename=? WHERE id=?",
+                "UPDATE iv_logos SET drive_file_id=%s, public_url=%s, filename=%s WHERE id=%s",
                 (file_id, public_url, fichier.filename, existing['id'])
             )
         else:
             conn.execute(
-                "INSERT INTO iv_logos (id_iv, variante, drive_file_id, public_url, filename) VALUES (?,?,?,?,?)",
+                "INSERT INTO iv_logos (id_iv, variante, drive_file_id, public_url, filename) VALUES (%s,%s,%s,%s,%s) RETURNING id",
                 (iv['id'], variante, file_id, public_url, fichier.filename)
             )
         conn.commit()
@@ -10763,21 +10834,21 @@ def api_admin_identite_logo(projet_id):
 
 
 def _get_or_create_iv(conn, projet_id):
-    iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = ?", (projet_id,)).fetchone()
+    iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = %s", (projet_id,)).fetchone()
     if not iv:
-        conn.execute("INSERT INTO identite_visuelle (id_projet, is_complete) VALUES (?, 0)", (projet_id,))
+        conn.execute("INSERT INTO identite_visuelle (id_projet, is_complete) VALUES (%s, 0) RETURNING id", (projet_id,))
         conn.commit()
-        iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = ?", (projet_id,)).fetchone()
+        iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = %s", (projet_id,)).fetchone()
     return iv
 
 
 def _ensure_iv_folder(conn, iv, projet_id):
     if iv['iv_folder_id']:
         return iv['iv_folder_id']
-    projet = conn.execute("SELECT * FROM projets WHERE id = ?", (projet_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id = %s", (projet_id,)).fetchone()
     parent = projet['drive_folder_id'] if projet and projet['drive_folder_id'] else os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID')
     folder_id = create_folder("Identité visuelle", parent_id=parent)
-    conn.execute("UPDATE identite_visuelle SET iv_folder_id = ? WHERE id = ?", (folder_id, iv['id']))
+    conn.execute("UPDATE identite_visuelle SET iv_folder_id = %s WHERE id = %s", (folder_id, iv['id']))
     conn.commit()
     return folder_id
 
@@ -10787,7 +10858,7 @@ def _ensure_iv_folder(conn, iv, projet_id):
 def api_admin_identite_init(projet_id):
     conn = get_db_connection()
     try:
-        if not conn.execute("SELECT id FROM projets WHERE id = ?", (projet_id,)).fetchone():
+        if not conn.execute("SELECT id FROM projets WHERE id = %s", (projet_id,)).fetchone():
             return jsonify({'error': 'Projet introuvable'}), 404
         iv = _get_or_create_iv(conn, projet_id)
         return jsonify({'ok': True, 'id': iv['id']})
@@ -10803,7 +10874,7 @@ def api_admin_palette_save(projet_id):
     try:
         iv = _get_or_create_iv(conn, projet_id)
         palette = request.get_json(force=True).get('palette', [])
-        conn.execute("UPDATE identite_visuelle SET palette_json = ? WHERE id = ?",
+        conn.execute("UPDATE identite_visuelle SET palette_json = %s WHERE id = %s",
                      (_json.dumps(palette), iv['id']))
         conn.commit()
         return jsonify({'ok': True})
@@ -10818,14 +10889,14 @@ def api_admin_fonts_save(projet_id):
     try:
         iv = _get_or_create_iv(conn, projet_id)
         fonts = request.get_json(force=True).get('fonts', [])
-        conn.execute("DELETE FROM iv_fonts WHERE id_iv = ?", (iv['id'],))
+        conn.execute("DELETE FROM iv_fonts WHERE id_iv = %s", (iv['id'],))
         for f in fonts:
             nom = f.get('nom_font', '').strip()
             if not nom:
                 continue
             usage = f.get('usage', '').strip()
             gurl = f.get('google_font_url') or f"https://fonts.google.com/specimen/{nom.replace(' ', '+')}"
-            conn.execute("INSERT INTO iv_fonts (id_iv, nom_font, google_font_url, usage) VALUES (?,?,?,?)",
+            conn.execute("INSERT INTO iv_fonts (id_iv, nom_font, google_font_url, usage) VALUES (%s,%s,%s,%s) RETURNING id",
                          (iv['id'], nom, gurl, usage))
         conn.commit()
         return jsonify({'ok': True})
@@ -10855,10 +10926,10 @@ def api_admin_declinaison_upload(projet_id):
             public_url = make_file_public(file_id)
         finally:
             os.unlink(tmp.name)
-        conn.execute("INSERT INTO iv_declinaisons (id_iv, drive_file_id, public_url, filename, label) VALUES (?,?,?,?,?)",
+        conn.execute("INSERT INTO iv_declinaisons (id_iv, drive_file_id, public_url, filename, label) VALUES (%s,%s,%s,%s,%s) RETURNING id",
                      (iv['id'], file_id, public_url, fichier.filename, label or None))
         conn.commit()
-        row_id = conn.execute("SELECT last_insert_rowid() as id").fetchone()['id']
+        row_id = conn.execute("SELECT lastval() as id").fetchone()['id']
         return jsonify({'ok': True, 'id': row_id, 'public_url': public_url, 'filename': fichier.filename, 'label': label or None})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
@@ -10871,7 +10942,7 @@ def api_admin_declinaison_upload(projet_id):
 def api_admin_declinaison_delete(projet_id, decl_id):
     conn = get_db_connection()
     try:
-        conn.execute("DELETE FROM iv_declinaisons WHERE id = ?", (decl_id,))
+        conn.execute("DELETE FROM iv_declinaisons WHERE id = %s", (decl_id,))
         conn.commit()
         return jsonify({'ok': True})
     finally:
@@ -10900,10 +10971,10 @@ def api_admin_mockup_upload(projet_id):
             public_url = make_file_public(file_id)
         finally:
             os.unlink(tmp.name)
-        conn.execute("INSERT INTO iv_mockups (id_iv, drive_file_id, public_url, filename, label) VALUES (?,?,?,?,?)",
+        conn.execute("INSERT INTO iv_mockups (id_iv, drive_file_id, public_url, filename, label) VALUES (%s,%s,%s,%s,%s) RETURNING id",
                      (iv['id'], file_id, public_url, fichier.filename, label or None))
         conn.commit()
-        row_id = conn.execute("SELECT last_insert_rowid() as id").fetchone()['id']
+        row_id = conn.execute("SELECT lastval() as id").fetchone()['id']
         return jsonify({'ok': True, 'id': row_id, 'public_url': public_url, 'filename': fichier.filename, 'label': label or None})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
@@ -10916,7 +10987,7 @@ def api_admin_mockup_upload(projet_id):
 def api_admin_mockup_delete(projet_id, mockup_id):
     conn = get_db_connection()
     try:
-        conn.execute("DELETE FROM iv_mockups WHERE id = ?", (mockup_id,))
+        conn.execute("DELETE FROM iv_mockups WHERE id = %s", (mockup_id,))
         conn.commit()
         return jsonify({'ok': True})
     finally:
@@ -10932,7 +11003,7 @@ def api_admin_mockup_delete(projet_id, mockup_id):
 def admin_identite_visuelle(project_id):
     import tempfile
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id = ?", (project_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id = %s", (project_id,)).fetchone()
     if not projet:
         conn.close()
         flash("Projet introuvable.", "error")
@@ -10947,7 +11018,7 @@ def admin_identite_visuelle(project_id):
 
         # Récupérer ou créer l'entrée identite_visuelle
         iv = conn.execute(
-            "SELECT * FROM identite_visuelle WHERE id_projet = ?",
+            "SELECT * FROM identite_visuelle WHERE id_projet = %s",
             (project_id,)
         ).fetchone()
         iv_was_complete = bool(iv and int(iv['is_complete'] or 0))
@@ -10971,8 +11042,8 @@ def admin_identite_visuelle(project_id):
                     sous_titre,
                     palette_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (
+                VALUES (%s, %s, %s, %s, %s, %s)
+             RETURNING id""", (
                 project_id,
                 is_complete,
                 iv_folder_id,
@@ -10982,20 +11053,20 @@ def admin_identite_visuelle(project_id):
             ))
             conn.commit()
             iv = conn.execute(
-                "SELECT * FROM identite_visuelle WHERE id_projet = ?",
+                "SELECT * FROM identite_visuelle WHERE id_projet = %s",
                 (project_id,)
             ).fetchone()
         else:
             conn.execute("""
                 UPDATE identite_visuelle
-                SET is_complete = ?,
-                    iv_folder_id = ?,
-                    nom_compagnie = ?,
-                    sous_titre = ?,
-                    palette_json = ?,
-                    contexte = ?,
+                SET is_complete = %s,
+                    iv_folder_id = %s,
+                    nom_compagnie = %s,
+                    sous_titre = %s,
+                    palette_json = %s,
+                    contexte = %s,
                     updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
+                WHERE id = %s
             """, (
                 is_complete,
                 iv_folder_id,
@@ -11007,7 +11078,7 @@ def admin_identite_visuelle(project_id):
             ))
             conn.commit()
             iv = conn.execute(
-                "SELECT * FROM identite_visuelle WHERE id_projet = ?",
+                "SELECT * FROM identite_visuelle WHERE id_projet = %s",
                 (project_id,)
             ).fetchone()
 
@@ -11048,44 +11119,44 @@ def admin_identite_visuelle(project_id):
             file_id, public_url = upload_logo(f'logo_{variante}')
             prev_file_id, prev_url = upload_logo(f'logo_{variante}_preview')
             existing = conn.execute(
-                "SELECT id, drive_file_id, public_url FROM iv_logos WHERE id_iv = ? AND variante = ?",
+                "SELECT id, drive_file_id, public_url FROM iv_logos WHERE id_iv = %s AND variante = %s",
                 (id_iv, variante)
             ).fetchone()
 
             if file_id and prev_file_id:
                 if existing:
                     conn.execute("""
-                        UPDATE iv_logos SET drive_file_id=?, public_url=?, filename=?, preview_file_id=?, preview_url=?
-                        WHERE id=?
+                        UPDATE iv_logos SET drive_file_id=%s, public_url=%s, filename=%s, preview_file_id=%s, preview_url=%s
+                        WHERE id=%s
                     """, (file_id, public_url, request.files[f'logo_{variante}'].filename, prev_file_id, prev_url, existing['id']))
                 else:
                     conn.execute("""
                         INSERT INTO iv_logos (id_iv, variante, drive_file_id, public_url, filename, preview_file_id, preview_url)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (id_iv, variante, file_id, public_url, request.files[f'logo_{variante}'].filename, prev_file_id, prev_url))
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                     RETURNING id""", (id_iv, variante, file_id, public_url, request.files[f'logo_{variante}'].filename, prev_file_id, prev_url))
             elif file_id:
                 if existing:
                     conn.execute("""
-                        UPDATE iv_logos SET drive_file_id=?, public_url=?, filename=? WHERE id=?
+                        UPDATE iv_logos SET drive_file_id=%s, public_url=%s, filename=%s WHERE id=%s
                     """, (file_id, public_url, request.files[f'logo_{variante}'].filename, existing['id']))
                 else:
                     conn.execute("""
                         INSERT INTO iv_logos (id_iv, variante, drive_file_id, public_url, filename)
-                        VALUES (?, ?, ?, ?, ?)
-                    """, (id_iv, variante, file_id, public_url, request.files[f'logo_{variante}'].filename))
+                        VALUES (%s, %s, %s, %s, %s)
+                     RETURNING id""", (id_iv, variante, file_id, public_url, request.files[f'logo_{variante}'].filename))
             elif prev_file_id and existing:
                 conn.execute("""
-                    UPDATE iv_logos SET preview_file_id=?, preview_url=? WHERE id=?
+                    UPDATE iv_logos SET preview_file_id=%s, preview_url=%s WHERE id=%s
                 """, (prev_file_id, prev_url, existing['id']))
             elif not existing:
                 conn.execute("""
                     INSERT INTO iv_logos (id_iv, variante)
-                    VALUES (?, ?)
-                """, (id_iv, variante))
+                    VALUES (%s, %s)
+                 RETURNING id""", (id_iv, variante))
         conn.commit()
 
         # Fonts — efface et recrée
-        conn.execute("DELETE FROM iv_fonts WHERE id_iv = ?", (id_iv,))
+        conn.execute("DELETE FROM iv_fonts WHERE id_iv = %s", (id_iv,))
         noms_fonts = request.form.getlist('font_nom')
         usages_fonts = request.form.getlist('font_usage')
         for nom, usage in zip(noms_fonts, usages_fonts):
@@ -11095,8 +11166,8 @@ def admin_identite_visuelle(project_id):
             google_url = f"https://fonts.google.com/specimen/{nom.replace(' ', '+')}"
             conn.execute("""
                 INSERT INTO iv_fonts (id_iv, nom_font, google_font_url, usage)
-                VALUES (?, ?, ?, ?)
-            """, (id_iv, nom, google_url, usage.strip()))
+                VALUES (%s, %s, %s, %s)
+             RETURNING id""", (id_iv, nom, google_url, usage.strip()))
 
         conn.commit()
         conn.close()
@@ -11105,7 +11176,7 @@ def admin_identite_visuelle(project_id):
 
     # GET
     iv = conn.execute(
-        "SELECT * FROM identite_visuelle WHERE id_projet = ?",
+        "SELECT * FROM identite_visuelle WHERE id_projet = %s",
         (project_id,)
     ).fetchone()
 
@@ -11114,12 +11185,12 @@ def admin_identite_visuelle(project_id):
 
     if iv:
         logos = conn.execute(
-            "SELECT * FROM iv_logos WHERE id_iv = ?",
+            "SELECT * FROM iv_logos WHERE id_iv = %s",
             (iv['id'],)
         ).fetchall()
 
         fonts = conn.execute(
-            "SELECT * FROM iv_fonts WHERE id_iv = ?",
+            "SELECT * FROM iv_fonts WHERE id_iv = %s",
             (iv['id'],)
         ).fetchall()
 
@@ -11129,12 +11200,12 @@ def admin_identite_visuelle(project_id):
 
     if iv:
         declinaisons = conn.execute(
-            "SELECT * FROM iv_declinaisons WHERE id_iv = ? ORDER BY position, id",
+            "SELECT * FROM iv_declinaisons WHERE id_iv = %s ORDER BY position, id",
             (iv['id'],)
         ).fetchall()
 
         mockups = conn.execute(
-            "SELECT * FROM iv_mockups WHERE id_iv = ? ORDER BY position, id",
+            "SELECT * FROM iv_mockups WHERE id_iv = %s ORDER BY position, id",
             (iv['id'],)
         ).fetchall()
 
@@ -11154,7 +11225,7 @@ def admin_identite_visuelle(project_id):
 @login_required
 def client_identite_visuelle(project_id):
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id = ?", (project_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id = %s", (project_id,)).fetchone()
     if not projet:
         conn.close()
         flash("Projet introuvable.", "error")
@@ -11168,7 +11239,7 @@ def client_identite_visuelle(project_id):
         return redirect(url_for('dashboard'))
 
     iv = conn.execute("""
-        SELECT * FROM identite_visuelle WHERE id_projet = ? AND is_complete = 1
+        SELECT * FROM identite_visuelle WHERE id_projet = %s AND is_complete = 1
     """, (project_id,)).fetchone()
 
     if not iv:
@@ -11176,10 +11247,10 @@ def client_identite_visuelle(project_id):
         flash("L'identité visuelle n'est pas encore disponible.", "error")
         return redirect(url_for('project_detail', project_id=project_id))
 
-    logos = conn.execute("SELECT * FROM iv_logos WHERE id_iv = ?", (iv['id'],)).fetchall()
-    fonts = conn.execute("SELECT * FROM iv_fonts WHERE id_iv = ?", (iv['id'],)).fetchall()
-    declinaisons = conn.execute("SELECT * FROM iv_declinaisons WHERE id_iv = ? ORDER BY position, id", (iv['id'],)).fetchall()
-    mockups = conn.execute("SELECT * FROM iv_mockups WHERE id_iv = ? ORDER BY position, id", (iv['id'],)).fetchall()
+    logos = conn.execute("SELECT * FROM iv_logos WHERE id_iv = %s", (iv['id'],)).fetchall()
+    fonts = conn.execute("SELECT * FROM iv_fonts WHERE id_iv = %s", (iv['id'],)).fetchall()
+    declinaisons = conn.execute("SELECT * FROM iv_declinaisons WHERE id_iv = %s ORDER BY position, id", (iv['id'],)).fetchall()
+    mockups = conn.execute("SELECT * FROM iv_mockups WHERE id_iv = %s ORDER BY position, id", (iv['id'],)).fetchall()
 
     logos_dict = {l['variante']: l for l in logos}
     conn.close()
@@ -11199,7 +11270,7 @@ def upload_declinaison(project_id):
     import tempfile
     conn = get_db_connection()
     try:
-        iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = ?", (project_id,)).fetchone()
+        iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = %s", (project_id,)).fetchone()
         if not iv:
             return jsonify({'ok': False, 'error': 'IV non trouvée'})
         fichier = request.files.get('fichier')
@@ -11208,10 +11279,10 @@ def upload_declinaison(project_id):
             return jsonify({'ok': False, 'error': 'Fichier manquant'})
         iv_folder_id = iv['iv_folder_id']
         if not iv_folder_id:
-            projet = conn.execute("SELECT * FROM projets WHERE id = ?", (project_id,)).fetchone()
+            projet = conn.execute("SELECT * FROM projets WHERE id = %s", (project_id,)).fetchone()
             parent = projet['drive_folder_id'] if projet and projet['drive_folder_id'] else os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID')
             iv_folder_id = create_folder("Identité visuelle", parent_id=parent)
-            conn.execute("UPDATE identite_visuelle SET iv_folder_id = ? WHERE id = ?", (iv_folder_id, iv['id']))
+            conn.execute("UPDATE identite_visuelle SET iv_folder_id = %s WHERE id = %s", (iv_folder_id, iv['id']))
             conn.commit()
         ext = fichier.filename.rsplit('.', 1)[-1].lower()
         safe_name = secure_filename(fichier.filename)
@@ -11223,8 +11294,8 @@ def upload_declinaison(project_id):
         public_url = make_file_public(file_id)
         conn.execute("""
             INSERT INTO iv_declinaisons (id_iv, drive_file_id, public_url, filename, label)
-            VALUES (?, ?, ?, ?, ?)
-        """, (iv['id'], file_id, public_url, safe_name, label))
+            VALUES (%s, %s, %s, %s, %s)
+         RETURNING id""", (iv['id'], file_id, public_url, safe_name, label))
         conn.commit()
         return jsonify({'ok': True, 'public_url': public_url, 'filename': safe_name})
     except Exception as e:
@@ -11237,7 +11308,7 @@ def upload_declinaison(project_id):
 @admin_required
 def delete_declinaison(project_id, decl_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM iv_declinaisons WHERE id = ?", (decl_id,))
+    conn.execute("DELETE FROM iv_declinaisons WHERE id = %s", (decl_id,))
     conn.commit()
     conn.close()
     return jsonify({'ok': True})
@@ -11249,7 +11320,7 @@ def upload_mockup(project_id):
     import tempfile
     conn = get_db_connection()
     try:
-        iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = ?", (project_id,)).fetchone()
+        iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = %s", (project_id,)).fetchone()
         if not iv:
             return jsonify({'ok': False, 'error': 'IV non trouvée'})
         fichier = request.files.get('fichier')
@@ -11258,10 +11329,10 @@ def upload_mockup(project_id):
             return jsonify({'ok': False, 'error': 'Fichier manquant'})
         iv_folder_id = iv['iv_folder_id']
         if not iv_folder_id:
-            projet = conn.execute("SELECT * FROM projets WHERE id = ?", (project_id,)).fetchone()
+            projet = conn.execute("SELECT * FROM projets WHERE id = %s", (project_id,)).fetchone()
             parent = projet['drive_folder_id'] if projet and projet['drive_folder_id'] else os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID')
             iv_folder_id = create_folder("Identité visuelle", parent_id=parent)
-            conn.execute("UPDATE identite_visuelle SET iv_folder_id = ? WHERE id = ?", (iv_folder_id, iv['id']))
+            conn.execute("UPDATE identite_visuelle SET iv_folder_id = %s WHERE id = %s", (iv_folder_id, iv['id']))
             conn.commit()
         ext = fichier.filename.rsplit('.', 1)[-1].lower()
         safe_name = secure_filename(fichier.filename)
@@ -11273,8 +11344,8 @@ def upload_mockup(project_id):
         public_url = make_file_public(file_id)
         conn.execute("""
             INSERT INTO iv_mockups (id_iv, drive_file_id, public_url, filename, label)
-            VALUES (?, ?, ?, ?, ?)
-        """, (iv['id'], file_id, public_url, safe_name, label))
+            VALUES (%s, %s, %s, %s, %s)
+         RETURNING id""", (iv['id'], file_id, public_url, safe_name, label))
         conn.commit()
         return jsonify({'ok': True, 'public_url': public_url, 'filename': safe_name})
     except Exception as e:
@@ -11287,7 +11358,7 @@ def upload_mockup(project_id):
 @admin_required
 def delete_mockup(project_id, mockup_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM iv_mockups WHERE id = ?", (mockup_id,))
+    conn.execute("DELETE FROM iv_mockups WHERE id = %s", (mockup_id,))
     conn.commit()
     conn.close()
     return jsonify({'ok': True})
@@ -11300,11 +11371,11 @@ def save_palette(project_id):
     conn = get_db_connection()
     try:
         palette_json = request.form.get('palette_json', '')
-        iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = ?", (project_id,)).fetchone()
+        iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = %s", (project_id,)).fetchone()
         if not iv:
-            conn.execute("INSERT INTO identite_visuelle (id_projet, is_complete, palette_json) VALUES (?, 0, ?)", (project_id, palette_json))
+            conn.execute("INSERT INTO identite_visuelle (id_projet, is_complete, palette_json) VALUES (%s, 0, %s) RETURNING id", (project_id, palette_json))
         else:
-            conn.execute("UPDATE identite_visuelle SET palette_json = ? WHERE id_projet = ?", (palette_json, project_id))
+            conn.execute("UPDATE identite_visuelle SET palette_json = %s WHERE id_projet = %s", (palette_json, project_id))
         conn.commit()
         return jsonify({'ok': True})
     except Exception as e:
@@ -11319,17 +11390,17 @@ def upload_svg_genere(project_id):
     conn = get_db_connection()
     try:
         iv = conn.execute(
-            "SELECT * FROM identite_visuelle WHERE id_projet = ?", (project_id,)
+            "SELECT * FROM identite_visuelle WHERE id_projet = %s", (project_id,)
         ).fetchone()
 
         # Créer le dossier IV si pas encore fait
         iv_folder_id = iv['iv_folder_id'] if iv and iv['iv_folder_id'] else None
         if not iv_folder_id:
-            projet = conn.execute("SELECT * FROM projets WHERE id = ?", (project_id,)).fetchone()
+            projet = conn.execute("SELECT * FROM projets WHERE id = %s", (project_id,)).fetchone()
             parent = projet['drive_folder_id'] if projet and projet['drive_folder_id'] else os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID')
             iv_folder_id = create_folder("Identité visuelle", parent_id=parent)
             if iv:
-                conn.execute("UPDATE identite_visuelle SET iv_folder_id = ? WHERE id_projet = ?", (iv_folder_id, project_id))
+                conn.execute("UPDATE identite_visuelle SET iv_folder_id = %s WHERE id_projet = %s", (iv_folder_id, project_id))
             conn.commit()
 
         fichier = request.files.get('fichier')
@@ -11356,7 +11427,7 @@ def telecharger_zip_identite(project_id):
     import io, zipfile
 
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id = ?", (project_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id = %s", (project_id,)).fetchone()
     if not projet:
         conn.close()
         flash("Projet introuvable.", "error")
@@ -11370,7 +11441,7 @@ def telecharger_zip_identite(project_id):
         return redirect(url_for('dashboard'))
 
     iv = conn.execute("""
-        SELECT * FROM identite_visuelle WHERE id_projet = ? AND is_complete = 1
+        SELECT * FROM identite_visuelle WHERE id_projet = %s AND is_complete = 1
     """, (project_id,)).fetchone()
 
     if not iv or not iv['iv_folder_id']:
@@ -11378,9 +11449,9 @@ def telecharger_zip_identite(project_id):
         flash("Aucun fichier disponible.", "error")
         return redirect(url_for('client_identite_visuelle', project_id=project_id))
 
-    logos = conn.execute("SELECT * FROM iv_logos WHERE id_iv = ?", (iv['id'],)).fetchall()
-    declinaisons = conn.execute("SELECT * FROM iv_declinaisons WHERE id_iv = ?", (iv['id'],)).fetchall()
-    mockups = conn.execute("SELECT * FROM iv_mockups WHERE id_iv = ?", (iv['id'],)).fetchall()
+    logos = conn.execute("SELECT * FROM iv_logos WHERE id_iv = %s", (iv['id'],)).fetchall()
+    declinaisons = conn.execute("SELECT * FROM iv_declinaisons WHERE id_iv = %s", (iv['id'],)).fetchall()
+    mockups = conn.execute("SELECT * FROM iv_mockups WHERE id_iv = %s", (iv['id'],)).fetchall()
     nom_projet = projet['nom_projet']
     conn.close()
 
@@ -11469,20 +11540,20 @@ def telecharger_zip_identite(project_id):
 
 def _todo_assignees(conn, todo_id) -> list:
     rows = conn.execute(
-        "SELECT c.id, c.nom_complet FROM todo_assignees ta JOIN clients c ON c.id = ta.admin_id WHERE ta.todo_id = ?",
+        "SELECT c.id, c.nom_complet FROM todo_assignees ta JOIN clients c ON c.id = ta.admin_id WHERE ta.todo_id = %s",
         (todo_id,)
     ).fetchall()
     return [{'id': r['id'], 'nom_complet': r['nom_complet']} for r in rows]
 
 def _roadmap_todo_assignees(conn, roadmap_todo_id) -> list:
     rows = conn.execute(
-        "SELECT c.id, c.nom_complet FROM roadmap_todo_assignees ra JOIN clients c ON c.id = ra.admin_id WHERE ra.roadmap_todo_id = ?",
+        "SELECT c.id, c.nom_complet FROM roadmap_todo_assignees ra JOIN clients c ON c.id = ra.admin_id WHERE ra.roadmap_todo_id = %s",
         (roadmap_todo_id,)
     ).fetchall()
     return [{'id': r['id'], 'nom_complet': r['nom_complet']} for r in rows]
 
 def _admin_id_for_role(conn, role):
-    row = conn.execute("SELECT id FROM clients WHERE role = ? AND is_admin = 1 LIMIT 1", (role,)).fetchone()
+    row = conn.execute("SELECT id FROM clients WHERE role = %s AND is_admin = 1 LIMIT 1", (role,)).fetchone()
     return row['id'] if row else None
 
 def _sync_roadmap_todo_completion(conn, roadmap_todo_id, done):
@@ -11490,23 +11561,23 @@ def _sync_roadmap_todo_completion(conn, roadmap_todo_id, done):
     perso liée et son post marketing lié (si présents) — appelée peu importe lequel
     des 3 endroits (roadmap, Mes tâches, calendrier marketing) a été coché, pour que
     les trois restent synchronisés."""
-    rt = conn.execute("SELECT * FROM roadmap_todos WHERE id = ?", (roadmap_todo_id,)).fetchone()
+    rt = conn.execute("SELECT * FROM roadmap_todos WHERE id = %s", (roadmap_todo_id,)).fetchone()
     if not rt:
         return
     val = 1 if done else 0
-    conn.execute("UPDATE roadmap_todos SET est_coche = ? WHERE id = ?", (val, roadmap_todo_id))
+    conn.execute("UPDATE roadmap_todos SET est_coche = %s WHERE id = %s", (val, roadmap_todo_id))
     if rt['linked_todo_perso_id']:
-        conn.execute("UPDATE todos_perso SET est_coche = ? WHERE id = ?", (val, rt['linked_todo_perso_id']))
+        conn.execute("UPDATE todos_perso SET est_coche = %s WHERE id = %s", (val, rt['linked_todo_perso_id']))
     if rt['linked_marketing_post_id']:
         assignee_ids = {r['admin_id'] for r in conn.execute(
-            "SELECT admin_id FROM roadmap_todo_assignees WHERE roadmap_todo_id = ?", (roadmap_todo_id,)
+            "SELECT admin_id FROM roadmap_todo_assignees WHERE roadmap_todo_id = %s", (roadmap_todo_id,)
         ).fetchall()}
         production_id = _admin_id_for_role(conn, 'production')
         gestion_id = _admin_id_for_role(conn, 'gestion')
         if production_id in assignee_ids:
-            conn.execute("UPDATE marketing_posts SET todo_felix_done = ? WHERE id = ?", (val, rt['linked_marketing_post_id']))
+            conn.execute("UPDATE marketing_posts SET todo_felix_done = %s WHERE id = %s", (val, rt['linked_marketing_post_id']))
         if gestion_id in assignee_ids:
-            conn.execute("UPDATE marketing_posts SET todo_marie_done = ? WHERE id = ?", (val, rt['linked_marketing_post_id']))
+            conn.execute("UPDATE marketing_posts SET todo_marie_done = %s WHERE id = %s", (val, rt['linked_marketing_post_id']))
     conn.commit()
 
 @app.route('/admin/roadmap')
@@ -11534,8 +11605,8 @@ def admin_roadmap_new():
         description = request.form.get('description', '').strip()
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("INSERT INTO roadmaps (titre, description) VALUES (?, ?)", (titre, description))
-        id_roadmap = cur.lastrowid
+        cur.execute("INSERT INTO roadmaps (titre, description) VALUES (%s, %s) RETURNING id", (titre, description))
+        id_roadmap = cur.fetchone()['id']
         conn.commit()
         conn.close()
         flash(f"Roadmap '{titre}' créée.", "success")
@@ -11546,21 +11617,21 @@ def admin_roadmap_new():
 @admin_required
 def admin_roadmap_detail(roadmap_id):
     conn = get_db_connection()
-    roadmap = conn.execute("SELECT * FROM roadmaps WHERE id = ?", (roadmap_id,)).fetchone()
+    roadmap = conn.execute("SELECT * FROM roadmaps WHERE id = %s", (roadmap_id,)).fetchone()
     if not roadmap:
         conn.close()
         flash("Roadmap introuvable.", "error")
         return redirect(url_for('admin_roadmaps'))
     phases = conn.execute("""
-        SELECT * FROM roadmap_phases WHERE id_roadmap = ? ORDER BY position ASC
+        SELECT * FROM roadmap_phases WHERE id_roadmap = %s ORDER BY position ASC
     """, (roadmap_id,)).fetchall()
     phases_avec_todos = []
     for phase in phases:
         todos = conn.execute("""
-            SELECT * FROM roadmap_todos WHERE id_phase = ? ORDER BY position ASC
+            SELECT * FROM roadmap_todos WHERE id_phase = %s ORDER BY position ASC
         """, (phase['id'],)).fetchall()
         notes = conn.execute("""
-            SELECT * FROM roadmap_phase_notes WHERE id_phase = ? ORDER BY created_at ASC
+            SELECT * FROM roadmap_phase_notes WHERE id_phase = %s ORDER BY created_at ASC
         """, (phase['id'],)).fetchall()
         phases_avec_todos.append({'phase': phase, 'todos': todos, 'notes': notes})
     conn.close()
@@ -11576,11 +11647,11 @@ def admin_roadmap_add_phase(roadmap_id):
     badge = request.form.get('badge', 'Planifiee').strip()
     description = request.form.get('description', '').strip()
     conn = get_db_connection()
-    max_pos = conn.execute("SELECT MAX(position) FROM roadmap_phases WHERE id_roadmap = ?", (roadmap_id,)).fetchone()[0] or 0
+    max_pos = conn.execute("SELECT MAX(position) FROM roadmap_phases WHERE id_roadmap = %s", (roadmap_id,)).fetchone()[0] or 0
     conn.execute("""
         INSERT INTO roadmap_phases (id_roadmap, titre, date_debut, date_fin, couleur, badge, position, description)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (roadmap_id, titre, date_debut, date_fin, couleur, badge, max_pos + 1, description))
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+     RETURNING id""", (roadmap_id, titre, date_debut, date_fin, couleur, badge, max_pos + 1, description))
     conn.commit()
     conn.close()
     return redirect(url_for('admin_roadmap_detail', roadmap_id=roadmap_id))
@@ -11590,10 +11661,10 @@ def admin_roadmap_add_phase(roadmap_id):
 def admin_roadmap_add_todo(phase_id):
     texte = request.form.get('texte', '').strip()
     conn = get_db_connection()
-    phase = conn.execute("SELECT * FROM roadmap_phases WHERE id = ?", (phase_id,)).fetchone()
+    phase = conn.execute("SELECT * FROM roadmap_phases WHERE id = %s", (phase_id,)).fetchone()
     if texte:
-        max_pos = conn.execute("SELECT MAX(position) FROM roadmap_todos WHERE id_phase = ?", (phase_id,)).fetchone()[0] or 0
-        conn.execute("INSERT INTO roadmap_todos (id_phase, texte, position) VALUES (?, ?, ?)", (phase_id, texte, max_pos + 1))
+        max_pos = conn.execute("SELECT MAX(position) FROM roadmap_todos WHERE id_phase = %s", (phase_id,)).fetchone()[0] or 0
+        conn.execute("INSERT INTO roadmap_todos (id_phase, texte, position) VALUES (%s, %s, %s) RETURNING id", (phase_id, texte, max_pos + 1))
         conn.commit()
     conn.close()
     return redirect(url_for('admin_roadmap_detail', roadmap_id=phase['id_roadmap']))
@@ -11602,10 +11673,10 @@ def admin_roadmap_add_todo(phase_id):
 @admin_required
 def admin_roadmap_toggle_todo(todo_id):
     conn = get_db_connection()
-    todo = conn.execute("SELECT * FROM roadmap_todos WHERE id = ?", (todo_id,)).fetchone()
-    phase = conn.execute("SELECT * FROM roadmap_phases WHERE id = ?", (todo['id_phase'],)).fetchone()
+    todo = conn.execute("SELECT * FROM roadmap_todos WHERE id = %s", (todo_id,)).fetchone()
+    phase = conn.execute("SELECT * FROM roadmap_phases WHERE id = %s", (todo['id_phase'],)).fetchone()
     new_val = 0 if int(todo['est_coche']) else 1
-    conn.execute("UPDATE roadmap_todos SET est_coche = ? WHERE id = ?", (new_val, todo_id))
+    conn.execute("UPDATE roadmap_todos SET est_coche = %s WHERE id = %s", (new_val, todo_id))
     conn.commit()
     conn.close()
     return redirect(url_for('admin_roadmap_detail', roadmap_id=phase['id_roadmap']))
@@ -11614,9 +11685,9 @@ def admin_roadmap_toggle_todo(todo_id):
 @admin_required
 def admin_roadmap_delete_todo(todo_id):
     conn = get_db_connection()
-    todo = conn.execute("SELECT * FROM roadmap_todos WHERE id = ?", (todo_id,)).fetchone()
-    phase = conn.execute("SELECT * FROM roadmap_phases WHERE id = ?", (todo['id_phase'],)).fetchone()
-    conn.execute("DELETE FROM roadmap_todos WHERE id = ?", (todo_id,))
+    todo = conn.execute("SELECT * FROM roadmap_todos WHERE id = %s", (todo_id,)).fetchone()
+    phase = conn.execute("SELECT * FROM roadmap_phases WHERE id = %s", (todo['id_phase'],)).fetchone()
+    conn.execute("DELETE FROM roadmap_todos WHERE id = %s", (todo_id,))
     conn.commit()
     conn.close()
     return redirect(url_for('admin_roadmap_detail', roadmap_id=phase['id_roadmap']))
@@ -11625,7 +11696,7 @@ def admin_roadmap_delete_todo(todo_id):
 @admin_required
 def admin_roadmap_delete(roadmap_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM roadmaps WHERE id = ?", (roadmap_id,))
+    conn.execute("DELETE FROM roadmaps WHERE id = %s", (roadmap_id,))
     conn.commit()
     conn.close()
     flash("Roadmap supprimée.", "success")
@@ -11635,7 +11706,7 @@ def admin_roadmap_delete(roadmap_id):
 @admin_required
 def admin_roadmap_archive(roadmap_id):
     conn = get_db_connection()
-    conn.execute("UPDATE roadmaps SET is_archived = 1 WHERE id = ?", (roadmap_id,))
+    conn.execute("UPDATE roadmaps SET is_archived = 1 WHERE id = %s", (roadmap_id,))
     conn.commit()
     conn.close()
     flash("Roadmap archivée.", "success")
@@ -11645,7 +11716,7 @@ def admin_roadmap_archive(roadmap_id):
 @admin_required
 def admin_roadmap_unarchive(roadmap_id):
     conn = get_db_connection()
-    conn.execute("UPDATE roadmaps SET is_archived = 0 WHERE id = ?", (roadmap_id,))
+    conn.execute("UPDATE roadmaps SET is_archived = 0 WHERE id = %s", (roadmap_id,))
     conn.commit()
     conn.close()
     flash("Roadmap désarchivée.", "success")
@@ -11659,7 +11730,7 @@ def admin_roadmap_edit(roadmap_id):
     description = request.form.get('description', '').strip()
     notes = request.form.get('notes', '').strip()
     conn = get_db_connection()
-    conn.execute("UPDATE roadmaps SET titre=?, description=?, notes=? WHERE id=?", (titre, description, notes, roadmap_id))
+    conn.execute("UPDATE roadmaps SET titre=%s, description=%s, notes=%s WHERE id=%s", (titre, description, notes, roadmap_id))
     conn.commit()
     conn.close()
     flash("Projet mis à jour.", "success")
@@ -11675,8 +11746,8 @@ def admin_roadmap_edit_phase(phase_id):
     badge = request.form.get('badge', 'Planifiee').strip()
     couleur = request.form.get('couleur', '#3498db').strip()
     conn = get_db_connection()
-    phase = conn.execute("SELECT * FROM roadmap_phases WHERE id=?", (phase_id,)).fetchone()
-    conn.execute("UPDATE roadmap_phases SET titre=?, description=?, date_debut=?, date_fin=?, badge=?, couleur=? WHERE id=?",
+    phase = conn.execute("SELECT * FROM roadmap_phases WHERE id=%s", (phase_id,)).fetchone()
+    conn.execute("UPDATE roadmap_phases SET titre=%s, description=%s, date_debut=%s, date_fin=%s, badge=%s, couleur=%s WHERE id=%s",
         (titre, description, date_debut, date_fin, badge, couleur, phase_id))
     conn.commit()
     conn.close()
@@ -11687,8 +11758,8 @@ def admin_roadmap_edit_phase(phase_id):
 @admin_required
 def admin_roadmap_delete_phase(phase_id):
     conn = get_db_connection()
-    phase = conn.execute("SELECT * FROM roadmap_phases WHERE id=?", (phase_id,)).fetchone()
-    conn.execute("DELETE FROM roadmap_phases WHERE id=?", (phase_id,))
+    phase = conn.execute("SELECT * FROM roadmap_phases WHERE id=%s", (phase_id,)).fetchone()
+    conn.execute("DELETE FROM roadmap_phases WHERE id=%s", (phase_id,))
     conn.commit()
     conn.close()
     flash("Phase supprimée.", "success")
@@ -11700,8 +11771,8 @@ def admin_roadmap_delete_phase(phase_id):
 def admin_roadmap_save_notes(phase_id):
     notes = request.form.get('notes', '').strip()
     conn = get_db_connection()
-    phase = conn.execute("SELECT * FROM roadmap_phases WHERE id=?", (phase_id,)).fetchone()
-    conn.execute("UPDATE roadmap_phases SET notes=? WHERE id=?", (notes, phase_id))
+    phase = conn.execute("SELECT * FROM roadmap_phases WHERE id=%s", (phase_id,)).fetchone()
+    conn.execute("UPDATE roadmap_phases SET notes=%s WHERE id=%s", (notes, phase_id))
     conn.commit()
     conn.close()
     flash("Notes sauvegardées.", "success")
@@ -11713,9 +11784,9 @@ def admin_roadmap_save_notes(phase_id):
 def admin_roadmap_add_note(phase_id):
     texte = request.form.get('texte', '').strip()
     conn = get_db_connection()
-    phase = conn.execute("SELECT * FROM roadmap_phases WHERE id=?", (phase_id,)).fetchone()
+    phase = conn.execute("SELECT * FROM roadmap_phases WHERE id=%s", (phase_id,)).fetchone()
     if texte:
-        conn.execute("INSERT INTO roadmap_phase_notes (id_phase, texte) VALUES (?, ?)", (phase_id, texte))
+        conn.execute("INSERT INTO roadmap_phase_notes (id_phase, texte) VALUES (%s, %s) RETURNING id", (phase_id, texte))
         conn.commit()
     conn.close()
     return redirect(url_for('admin_roadmap_detail', roadmap_id=phase['id_roadmap']))
@@ -11724,9 +11795,9 @@ def admin_roadmap_add_note(phase_id):
 @admin_required
 def admin_roadmap_delete_note(note_id):
     conn = get_db_connection()
-    note = conn.execute("SELECT * FROM roadmap_phase_notes WHERE id=?", (note_id,)).fetchone()
-    phase = conn.execute("SELECT * FROM roadmap_phases WHERE id=?", (note['id_phase'],)).fetchone()
-    conn.execute("DELETE FROM roadmap_phase_notes WHERE id=?", (note_id,))
+    note = conn.execute("SELECT * FROM roadmap_phase_notes WHERE id=%s", (note_id,)).fetchone()
+    phase = conn.execute("SELECT * FROM roadmap_phases WHERE id=%s", (note['id_phase'],)).fetchone()
+    conn.execute("DELETE FROM roadmap_phase_notes WHERE id=%s", (note_id,))
     conn.commit()
     conn.close()
     return redirect(url_for('admin_roadmap_detail', roadmap_id=phase['id_roadmap']))
@@ -11752,8 +11823,8 @@ def api_roadmap_new():
         return jsonify({'error': 'Titre obligatoire'}), 400
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("INSERT INTO roadmaps (titre, description) VALUES (?,?)", (titre, description))
-    rid = cur.lastrowid
+    cur.execute("INSERT INTO roadmaps (titre, description) VALUES (%s,%s) RETURNING id", (titre, description))
+    rid = cur.fetchone()['id']
     conn.commit()
     conn.close()
     return jsonify({'id': rid})
@@ -11762,15 +11833,15 @@ def api_roadmap_new():
 @admin_required
 def api_roadmap_detail(roadmap_id):
     conn = get_db_connection()
-    roadmap = conn.execute("SELECT * FROM roadmaps WHERE id=?", (roadmap_id,)).fetchone()
+    roadmap = conn.execute("SELECT * FROM roadmaps WHERE id=%s", (roadmap_id,)).fetchone()
     if not roadmap:
         conn.close()
         return jsonify({'error': 'Introuvable'}), 404
-    phases = conn.execute("SELECT * FROM roadmap_phases WHERE id_roadmap=? ORDER BY position ASC", (roadmap_id,)).fetchall()
+    phases = conn.execute("SELECT * FROM roadmap_phases WHERE id_roadmap=%s ORDER BY position ASC", (roadmap_id,)).fetchall()
     result = []
     for phase in phases:
-        todos = conn.execute("SELECT * FROM roadmap_todos WHERE id_phase=? ORDER BY position ASC", (phase['id'],)).fetchall()
-        journal = conn.execute("SELECT * FROM roadmap_phase_notes WHERE id_phase=? ORDER BY created_at ASC", (phase['id'],)).fetchall()
+        todos = conn.execute("SELECT * FROM roadmap_todos WHERE id_phase=%s ORDER BY position ASC", (phase['id'],)).fetchall()
+        journal = conn.execute("SELECT * FROM roadmap_phase_notes WHERE id_phase=%s ORDER BY created_at ASC", (phase['id'],)).fetchall()
         todos_out = []
         for t in todos:
             td = dict(t)
@@ -11785,7 +11856,7 @@ def api_roadmap_detail(roadmap_id):
 def api_roadmap_edit(roadmap_id):
     data = request.get_json() or {}
     conn = get_db_connection()
-    conn.execute("UPDATE roadmaps SET titre=?,description=?,notes=? WHERE id=?",
+    conn.execute("UPDATE roadmaps SET titre=%s,description=%s,notes=%s WHERE id=%s",
         (data.get('titre',''), data.get('description',''), data.get('notes',''), roadmap_id))
     conn.commit()
     conn.close()
@@ -11795,7 +11866,7 @@ def api_roadmap_edit(roadmap_id):
 @admin_required
 def api_roadmap_archive(roadmap_id):
     conn = get_db_connection()
-    conn.execute("UPDATE roadmaps SET is_archived=1 WHERE id=?", (roadmap_id,))
+    conn.execute("UPDATE roadmaps SET is_archived=1 WHERE id=%s", (roadmap_id,))
     conn.commit()
     conn.close()
     return jsonify({'ok': True})
@@ -11804,7 +11875,7 @@ def api_roadmap_archive(roadmap_id):
 @admin_required
 def api_roadmap_unarchive(roadmap_id):
     conn = get_db_connection()
-    conn.execute("UPDATE roadmaps SET is_archived=0 WHERE id=?", (roadmap_id,))
+    conn.execute("UPDATE roadmaps SET is_archived=0 WHERE id=%s", (roadmap_id,))
     conn.commit()
     conn.close()
     return jsonify({'ok': True})
@@ -11813,7 +11884,7 @@ def api_roadmap_unarchive(roadmap_id):
 @admin_required
 def api_roadmap_delete(roadmap_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM roadmaps WHERE id=?", (roadmap_id,))
+    conn.execute("DELETE FROM roadmaps WHERE id=%s", (roadmap_id,))
     conn.commit()
     conn.close()
     return jsonify({'ok': True})
@@ -11823,13 +11894,13 @@ def api_roadmap_delete(roadmap_id):
 def api_roadmap_add_phase(roadmap_id):
     data = request.get_json() or {}
     conn = get_db_connection()
-    max_pos = conn.execute("SELECT MAX(position) FROM roadmap_phases WHERE id_roadmap=?", (roadmap_id,)).fetchone()[0] or 0
+    max_pos = conn.execute("SELECT MAX(position) FROM roadmap_phases WHERE id_roadmap=%s", (roadmap_id,)).fetchone()[0] or 0
     cur = conn.cursor()
     sql = "INSERT INTO roadmap_phases (id_roadmap,titre,description,date_debut,date_fin,couleur,badge,position) VALUES (?,?,?,?,?,?,?,?)"
     cur.execute(sql, (roadmap_id, data.get('titre',''), data.get('description',''), data.get('date_debut',''), data.get('date_fin',''), data.get('couleur','#3498db'), data.get('badge','Planifiee'), max_pos+1))
-    pid = cur.lastrowid
+    pid = cur.fetchone()['id']
     conn.commit()
-    phase = conn.execute("SELECT * FROM roadmap_phases WHERE id=?", (pid,)).fetchone()
+    phase = conn.execute("SELECT * FROM roadmap_phases WHERE id=%s", (pid,)).fetchone()
     conn.close()
     return jsonify({'phase': dict(phase)})
 
@@ -11837,7 +11908,7 @@ def api_roadmap_add_phase(roadmap_id):
 @admin_required
 def api_roadmap_phase_delete(phase_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM roadmap_phases WHERE id=?", (phase_id,))
+    conn.execute("DELETE FROM roadmap_phases WHERE id=%s", (phase_id,))
     conn.commit()
     conn.close()
     return jsonify({'ok': True})
@@ -11851,43 +11922,43 @@ def api_roadmap_add_todo(phase_id):
     assigne_admin_ids = [i for i in (data.get('assigne_admin_ids') or []) if i]
     marketing = data.get('marketing') or None  # {date_publication, plateformes}
     conn = get_db_connection()
-    phase = conn.execute("SELECT * FROM roadmap_phases WHERE id = ?", (phase_id,)).fetchone()
-    roadmap = conn.execute("SELECT * FROM roadmaps WHERE id = ?", (phase['id_roadmap'],)).fetchone() if phase else None
-    max_pos = conn.execute("SELECT MAX(position) FROM roadmap_todos WHERE id_phase=?", (phase_id,)).fetchone()[0] or 0
+    phase = conn.execute("SELECT * FROM roadmap_phases WHERE id = %s", (phase_id,)).fetchone()
+    roadmap = conn.execute("SELECT * FROM roadmaps WHERE id = %s", (phase['id_roadmap'],)).fetchone() if phase else None
+    max_pos = conn.execute("SELECT MAX(position) FROM roadmap_todos WHERE id_phase=%s", (phase_id,)).fetchone()[0] or 0
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO roadmap_todos (id_phase,texte,position) VALUES (?,?,?)",
+        "INSERT INTO roadmap_todos (id_phase,texte,position) VALUES (%s,%s,%s) RETURNING id",
         (phase_id, texte, max_pos+1)
     )
-    tid = cur.lastrowid
+    tid = cur.fetchone()['id']
     for admin_id in assigne_admin_ids:
-        conn.execute("INSERT OR IGNORE INTO roadmap_todo_assignees (roadmap_todo_id, admin_id) VALUES (?, ?)", (tid, admin_id))
+        conn.execute("INSERT INTO roadmap_todo_assignees (roadmap_todo_id, admin_id) VALUES (%s, %s)", (tid, admin_id))
     conn.commit()
 
     if assigne_admin_ids and texte:
         contexte = " › ".join(filter(None, [roadmap['titre'] if roadmap else None, phase['titre'] if phase else None]))
         texte_tache = f"[{contexte}] {texte}" if contexte else texte
         cur2 = conn.execute(
-            "INSERT INTO todos_perso (texte, date_echeance, linked_roadmap_todo_id) VALUES (?, ?, ?)",
+            "INSERT INTO todos_perso (texte, date_echeance, linked_roadmap_todo_id) VALUES (%s, %s, %s) RETURNING id",
             (texte_tache, phase['date_fin'] if phase else None, tid)
         )
-        perso_id = cur2.lastrowid
+        perso_id = cur2.fetchone()['id']
         for admin_id in assigne_admin_ids:
-            conn.execute("INSERT OR IGNORE INTO todo_assignees (todo_id, admin_id) VALUES (?, ?)", (perso_id, admin_id))
-        conn.execute("UPDATE roadmap_todos SET linked_todo_perso_id = ? WHERE id = ?", (perso_id, tid))
+            conn.execute("INSERT INTO todo_assignees (todo_id, admin_id) VALUES (%s, %s)", (perso_id, admin_id))
+        conn.execute("UPDATE roadmap_todos SET linked_todo_perso_id = %s WHERE id = %s", (perso_id, tid))
         conn.commit()
 
     if marketing and marketing.get('date_publication') and texte:
         cur3 = conn.execute(
             "INSERT INTO marketing_posts (titre, description, date_publication, plateformes, statut, created_by, linked_roadmap_todo_id) "
-            "VALUES (?, ?, ?, ?, 'planifié', ?, ?)",
+            "VALUES (%s, %s, %s, %s, 'planifié', %s, %s) RETURNING id",
             (texte, roadmap['titre'] if roadmap else '', marketing['date_publication'],
              _json.dumps(marketing.get('plateformes') or []), session.get('user_id'), tid)
         )
-        conn.execute("UPDATE roadmap_todos SET linked_marketing_post_id = ? WHERE id = ?", (cur3.lastrowid, tid))
+        conn.execute("UPDATE roadmap_todos SET linked_marketing_post_id = %s WHERE id = %s", (cur3.fetchone()['id'], tid))
         conn.commit()
 
-    todo = conn.execute("SELECT * FROM roadmap_todos WHERE id=?", (tid,)).fetchone()
+    todo = conn.execute("SELECT * FROM roadmap_todos WHERE id=%s", (tid,)).fetchone()
     d = dict(todo)
     d['assignees'] = _roadmap_todo_assignees(conn, tid)
     conn.close()
@@ -11897,7 +11968,7 @@ def api_roadmap_add_todo(phase_id):
 @admin_required
 def api_roadmap_toggle_todo(todo_id):
     conn = get_db_connection()
-    todo = conn.execute("SELECT * FROM roadmap_todos WHERE id=?", (todo_id,)).fetchone()
+    todo = conn.execute("SELECT * FROM roadmap_todos WHERE id=%s", (todo_id,)).fetchone()
     if not todo:
         conn.close()
         return jsonify({'error': 'Introuvable'}), 404
@@ -11909,7 +11980,7 @@ def api_roadmap_toggle_todo(todo_id):
 @admin_required
 def api_roadmap_delete_todo(todo_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM roadmap_todos WHERE id=?", (todo_id,))
+    conn.execute("DELETE FROM roadmap_todos WHERE id=%s", (todo_id,))
     conn.commit()
     conn.close()
     return jsonify({'ok': True})
@@ -11937,12 +12008,12 @@ def api_vision_todos_create():
     if phase_id is None or not texte:
         return jsonify({'error': 'phase_id et texte requis'}), 400
     conn = get_db_connection()
-    max_pos = conn.execute("SELECT MAX(position) FROM cocktailos_vision_todos WHERE phase_id=?", (phase_id,)).fetchone()[0] or 0
+    max_pos = conn.execute("SELECT MAX(position) FROM cocktailos_vision_todos WHERE phase_id=%s", (phase_id,)).fetchone()[0] or 0
     cur = conn.execute(
-        "INSERT INTO cocktailos_vision_todos (phase_id, texte, position) VALUES (?, ?, ?)",
+        "INSERT INTO cocktailos_vision_todos (phase_id, texte, position) VALUES (%s, %s, %s) RETURNING id",
         (phase_id, texte, max_pos + 1)
     )
-    todo_id = cur.lastrowid
+    todo_id = cur.fetchone()['id']
     conn.commit()
     conn.close()
     return jsonify({'id': todo_id, 'phase_id': phase_id, 'texte': texte, 'done': False}), 201
@@ -11951,12 +12022,12 @@ def api_vision_todos_create():
 @admin_required
 def api_vision_todos_toggle(todo_id):
     conn = get_db_connection()
-    todo = conn.execute("SELECT est_coche FROM cocktailos_vision_todos WHERE id=?", (todo_id,)).fetchone()
+    todo = conn.execute("SELECT est_coche FROM cocktailos_vision_todos WHERE id=%s", (todo_id,)).fetchone()
     if not todo:
         conn.close()
         return jsonify({'error': 'Introuvable'}), 404
     new_val = 0 if todo['est_coche'] else 1
-    conn.execute("UPDATE cocktailos_vision_todos SET est_coche=? WHERE id=?", (new_val, todo_id))
+    conn.execute("UPDATE cocktailos_vision_todos SET est_coche=%s WHERE id=%s", (new_val, todo_id))
     conn.commit()
     conn.close()
     return jsonify({'done': bool(new_val)})
@@ -11965,7 +12036,7 @@ def api_vision_todos_toggle(todo_id):
 @admin_required
 def api_vision_todos_delete(todo_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM cocktailos_vision_todos WHERE id=?", (todo_id,))
+    conn.execute("DELETE FROM cocktailos_vision_todos WHERE id=%s", (todo_id,))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -11977,10 +12048,10 @@ def api_roadmap_add_note(phase_id):
     texte = data.get('texte','').strip()
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("INSERT INTO roadmap_phase_notes (id_phase,texte) VALUES (?,?)", (phase_id, texte))
-    nid = cur.lastrowid
+    cur.execute("INSERT INTO roadmap_phase_notes (id_phase,texte) VALUES (%s,%s) RETURNING id", (phase_id, texte))
+    nid = cur.fetchone()['id']
     conn.commit()
-    note = conn.execute("SELECT * FROM roadmap_phase_notes WHERE id=?", (nid,)).fetchone()
+    note = conn.execute("SELECT * FROM roadmap_phase_notes WHERE id=%s", (nid,)).fetchone()
     conn.close()
     return jsonify({'note': dict(note)})
 
@@ -11988,7 +12059,7 @@ def api_roadmap_add_note(phase_id):
 @admin_required
 def api_roadmap_delete_note(note_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM roadmap_phase_notes WHERE id=?", (note_id,))
+    conn.execute("DELETE FROM roadmap_phase_notes WHERE id=%s", (note_id,))
     conn.commit()
     conn.close()
     return jsonify({'ok': True})
@@ -12002,11 +12073,11 @@ def api_roadmap_delete_note(note_id):
 def api_admin_get_identite(project_id):
     import json as _json
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id = ?", (project_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id = %s", (project_id,)).fetchone()
     if not projet:
         conn.close()
         return jsonify({'error': 'Projet introuvable'}), 404
-    iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = ?", (project_id,)).fetchone()
+    iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = %s", (project_id,)).fetchone()
     result = {
         'id': iv['id'] if iv else None,
         'is_complete': bool(iv['is_complete']) if iv else False,
@@ -12025,18 +12096,18 @@ def api_admin_get_identite(project_id):
                 result['palette'] = _json.loads(iv['palette_json'])
             except Exception:
                 result['palette'] = []
-        logos_rows = conn.execute("SELECT * FROM iv_logos WHERE id_iv = ?", (iv['id'],)).fetchall()
+        logos_rows = conn.execute("SELECT * FROM iv_logos WHERE id_iv = %s", (iv['id'],)).fetchall()
         for l in logos_rows:
             result['logos'][l['variante']] = {
                 'public_url': l['public_url'],
                 'preview_url': l['preview_url'] if 'preview_url' in l.keys() else None,
                 'filename': l['filename'],
             }
-        fonts = conn.execute("SELECT * FROM iv_fonts WHERE id_iv = ?", (iv['id'],)).fetchall()
+        fonts = conn.execute("SELECT * FROM iv_fonts WHERE id_iv = %s", (iv['id'],)).fetchall()
         result['fonts'] = [{'nom_font': f['nom_font'], 'usage': f['usage']} for f in fonts]
-        declinaisons = conn.execute("SELECT * FROM iv_declinaisons WHERE id_iv = ? ORDER BY position, id", (iv['id'],)).fetchall()
+        declinaisons = conn.execute("SELECT * FROM iv_declinaisons WHERE id_iv = %s ORDER BY position, id", (iv['id'],)).fetchall()
         result['declinaisons'] = [{'id': d['id'], 'public_url': d['public_url'], 'label': d['label'], 'filename': d['filename']} for d in declinaisons]
-        mockups = conn.execute("SELECT * FROM iv_mockups WHERE id_iv = ? ORDER BY position, id", (iv['id'],)).fetchall()
+        mockups = conn.execute("SELECT * FROM iv_mockups WHERE id_iv = %s ORDER BY position, id", (iv['id'],)).fetchall()
         result['mockups'] = [{'id': m['id'], 'public_url': m['public_url'], 'label': m['label'], 'filename': m['filename']} for m in mockups]
     conn.close()
     return jsonify(result)
@@ -12055,11 +12126,11 @@ def api_admin_save_identite(project_id):
     fonts = data.get('fonts', [])
     palette_json = _json.dumps(palette)
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id = ?", (project_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id = %s", (project_id,)).fetchone()
     if not projet:
         conn.close()
         return jsonify({'error': 'Projet introuvable'}), 404
-    iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = ?", (project_id,)).fetchone()
+    iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = %s", (project_id,)).fetchone()
     iv_was_complete = bool(iv and int(iv['is_complete'] or 0))
     iv_folder_id = iv['iv_folder_id'] if iv and iv['iv_folder_id'] else None
     if not iv_folder_id:
@@ -12071,31 +12142,31 @@ def api_admin_save_identite(project_id):
     if not iv:
         conn.execute("""
             INSERT INTO identite_visuelle (id_projet, is_complete, iv_folder_id, nom_compagnie, sous_titre, palette_json, contexte)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (project_id, is_complete, iv_folder_id, nom_compagnie, sous_titre, palette_json, contexte))
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+         RETURNING id""", (project_id, is_complete, iv_folder_id, nom_compagnie, sous_titre, palette_json, contexte))
         conn.commit()
-        iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = ?", (project_id,)).fetchone()
+        iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = %s", (project_id,)).fetchone()
     else:
         conn.execute("""
             UPDATE identite_visuelle
-            SET is_complete = ?, iv_folder_id = ?, nom_compagnie = ?, sous_titre = ?, palette_json = ?, contexte = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
+            SET is_complete = %s, iv_folder_id = %s, nom_compagnie = %s, sous_titre = %s, palette_json = %s, contexte = %s, updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
         """, (is_complete, iv_folder_id, nom_compagnie, sous_titre, palette_json, contexte, iv['id']))
         conn.commit()
-        iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = ?", (project_id,)).fetchone()
+        iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = %s", (project_id,)).fetchone()
     if is_complete and not iv_was_complete:
         push_notification(conn, projet['id_client'], project_id,
             f"Votre identité visuelle pour « {projet['nom_projet']} » est prête !", type='identite_visuelle')
         conn.commit()
     id_iv = iv['id']
-    conn.execute("DELETE FROM iv_fonts WHERE id_iv = ?", (id_iv,))
+    conn.execute("DELETE FROM iv_fonts WHERE id_iv = %s", (id_iv,))
     for font in fonts:
         nom = (font.get('nom_font') or '').strip()
         if not nom:
             continue
         usage = (font.get('usage') or '').strip()
         google_url = f"https://fonts.google.com/specimen/{nom.replace(' ', '+')}"
-        conn.execute("INSERT INTO iv_fonts (id_iv, nom_font, google_font_url, usage) VALUES (?, ?, ?, ?)",
+        conn.execute("INSERT INTO iv_fonts (id_iv, nom_font, google_font_url, usage) VALUES (%s, %s, %s, %s) RETURNING id",
                      (id_iv, nom, google_url, usage))
     conn.commit()
     conn.close()
@@ -12108,17 +12179,17 @@ def api_admin_upload_logo(project_id):
     import tempfile
     conn = get_db_connection()
     try:
-        iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = ?", (project_id,)).fetchone()
+        iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = %s", (project_id,)).fetchone()
         if not iv:
-            conn.execute("INSERT INTO identite_visuelle (id_projet, is_complete) VALUES (?, 0)", (project_id,))
+            conn.execute("INSERT INTO identite_visuelle (id_projet, is_complete) VALUES (%s, 0) RETURNING id", (project_id,))
             conn.commit()
-            iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = ?", (project_id,)).fetchone()
+            iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = %s", (project_id,)).fetchone()
         iv_folder_id = iv['iv_folder_id']
         if not iv_folder_id:
-            projet = conn.execute("SELECT * FROM projets WHERE id = ?", (project_id,)).fetchone()
+            projet = conn.execute("SELECT * FROM projets WHERE id = %s", (project_id,)).fetchone()
             parent = projet['drive_folder_id'] if projet and projet['drive_folder_id'] else os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID')
             iv_folder_id = create_folder("Identité visuelle", parent_id=parent)
-            conn.execute("UPDATE identite_visuelle SET iv_folder_id = ? WHERE id = ?", (iv_folder_id, iv['id']))
+            conn.execute("UPDATE identite_visuelle SET iv_folder_id = %s WHERE id = %s", (iv_folder_id, iv['id']))
             conn.commit()
         variante = request.form.get('variante', 'principal')
         fichier = request.files.get('fichier')
@@ -12132,12 +12203,12 @@ def api_admin_upload_logo(project_id):
         file_id, _ = upload_file(tmp.name, safe_name, iv_folder_id)
         os.unlink(tmp.name)
         public_url = make_file_public(file_id)
-        existing = conn.execute("SELECT id FROM iv_logos WHERE id_iv = ? AND variante = ?", (iv['id'], variante)).fetchone()
+        existing = conn.execute("SELECT id FROM iv_logos WHERE id_iv = %s AND variante = %s", (iv['id'], variante)).fetchone()
         if existing:
-            conn.execute("UPDATE iv_logos SET drive_file_id=?, public_url=?, filename=? WHERE id=?",
+            conn.execute("UPDATE iv_logos SET drive_file_id=%s, public_url=%s, filename=%s WHERE id=%s",
                          (file_id, public_url, safe_name, existing['id']))
         else:
-            conn.execute("INSERT INTO iv_logos (id_iv, variante, drive_file_id, public_url, filename) VALUES (?, ?, ?, ?, ?)",
+            conn.execute("INSERT INTO iv_logos (id_iv, variante, drive_file_id, public_url, filename) VALUES (%s, %s, %s, %s, %s) RETURNING id",
                          (iv['id'], variante, file_id, public_url, safe_name))
         conn.commit()
         return jsonify({'ok': True, 'public_url': public_url, 'filename': safe_name, 'variante': variante})
@@ -12153,7 +12224,7 @@ def api_admin_upload_declinaison(project_id):
     import tempfile
     conn = get_db_connection()
     try:
-        iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = ?", (project_id,)).fetchone()
+        iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = %s", (project_id,)).fetchone()
         if not iv:
             return jsonify({'ok': False, 'error': 'IV non trouvée'}), 404
         fichier = request.files.get('fichier')
@@ -12162,10 +12233,10 @@ def api_admin_upload_declinaison(project_id):
             return jsonify({'ok': False, 'error': 'Fichier manquant'}), 400
         iv_folder_id = iv['iv_folder_id']
         if not iv_folder_id:
-            projet = conn.execute("SELECT * FROM projets WHERE id = ?", (project_id,)).fetchone()
+            projet = conn.execute("SELECT * FROM projets WHERE id = %s", (project_id,)).fetchone()
             parent = projet['drive_folder_id'] if projet and projet['drive_folder_id'] else os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID')
             iv_folder_id = create_folder("Identité visuelle", parent_id=parent)
-            conn.execute("UPDATE identite_visuelle SET iv_folder_id = ? WHERE id = ?", (iv_folder_id, iv['id']))
+            conn.execute("UPDATE identite_visuelle SET iv_folder_id = %s WHERE id = %s", (iv_folder_id, iv['id']))
             conn.commit()
         ext = fichier.filename.rsplit('.', 1)[-1].lower()
         safe_name = secure_filename(fichier.filename)
@@ -12175,10 +12246,10 @@ def api_admin_upload_declinaison(project_id):
         file_id, _ = upload_file(tmp.name, safe_name, iv_folder_id)
         os.unlink(tmp.name)
         public_url = make_file_public(file_id)
-        cur = conn.execute("INSERT INTO iv_declinaisons (id_iv, drive_file_id, public_url, filename, label) VALUES (?, ?, ?, ?, ?)",
+        cur = conn.execute("INSERT INTO iv_declinaisons (id_iv, drive_file_id, public_url, filename, label) VALUES (%s, %s, %s, %s, %s) RETURNING id",
                            (iv['id'], file_id, public_url, safe_name, label))
         conn.commit()
-        return jsonify({'ok': True, 'id': cur.lastrowid, 'public_url': public_url, 'filename': safe_name, 'label': label})
+        return jsonify({'ok': True, 'id': cur.fetchone()['id'], 'public_url': public_url, 'filename': safe_name, 'label': label})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
     finally:
@@ -12189,7 +12260,7 @@ def api_admin_upload_declinaison(project_id):
 @admin_required
 def api_admin_delete_declinaison(project_id, decl_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM iv_declinaisons WHERE id = ?", (decl_id,))
+    conn.execute("DELETE FROM iv_declinaisons WHERE id = %s", (decl_id,))
     conn.commit()
     conn.close()
     return jsonify({'ok': True})
@@ -12201,7 +12272,7 @@ def api_admin_upload_mockup(project_id):
     import tempfile
     conn = get_db_connection()
     try:
-        iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = ?", (project_id,)).fetchone()
+        iv = conn.execute("SELECT * FROM identite_visuelle WHERE id_projet = %s", (project_id,)).fetchone()
         if not iv:
             return jsonify({'ok': False, 'error': 'IV non trouvée'}), 404
         fichier = request.files.get('fichier')
@@ -12210,10 +12281,10 @@ def api_admin_upload_mockup(project_id):
             return jsonify({'ok': False, 'error': 'Fichier manquant'}), 400
         iv_folder_id = iv['iv_folder_id']
         if not iv_folder_id:
-            projet = conn.execute("SELECT * FROM projets WHERE id = ?", (project_id,)).fetchone()
+            projet = conn.execute("SELECT * FROM projets WHERE id = %s", (project_id,)).fetchone()
             parent = projet['drive_folder_id'] if projet and projet['drive_folder_id'] else os.getenv('GOOGLE_DRIVE_ROOT_FOLDER_ID')
             iv_folder_id = create_folder("Identité visuelle", parent_id=parent)
-            conn.execute("UPDATE identite_visuelle SET iv_folder_id = ? WHERE id = ?", (iv_folder_id, iv['id']))
+            conn.execute("UPDATE identite_visuelle SET iv_folder_id = %s WHERE id = %s", (iv_folder_id, iv['id']))
             conn.commit()
         ext = fichier.filename.rsplit('.', 1)[-1].lower()
         safe_name = secure_filename(fichier.filename)
@@ -12223,10 +12294,10 @@ def api_admin_upload_mockup(project_id):
         file_id, _ = upload_file(tmp.name, safe_name, iv_folder_id)
         os.unlink(tmp.name)
         public_url = make_file_public(file_id)
-        cur = conn.execute("INSERT INTO iv_mockups (id_iv, drive_file_id, public_url, filename, label) VALUES (?, ?, ?, ?, ?)",
+        cur = conn.execute("INSERT INTO iv_mockups (id_iv, drive_file_id, public_url, filename, label) VALUES (%s, %s, %s, %s, %s) RETURNING id",
                            (iv['id'], file_id, public_url, safe_name, label))
         conn.commit()
-        return jsonify({'ok': True, 'id': cur.lastrowid, 'public_url': public_url, 'filename': safe_name, 'label': label})
+        return jsonify({'ok': True, 'id': cur.fetchone()['id'], 'public_url': public_url, 'filename': safe_name, 'label': label})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
     finally:
@@ -12237,7 +12308,7 @@ def api_admin_upload_mockup(project_id):
 @admin_required
 def api_admin_delete_mockup(project_id, mockup_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM iv_mockups WHERE id = ?", (mockup_id,))
+    conn.execute("DELETE FROM iv_mockups WHERE id = %s", (mockup_id,))
     conn.commit()
     conn.close()
     return jsonify({'ok': True})
@@ -12253,18 +12324,18 @@ def _generer_numero_facture_pigiste(conn) -> str:
     from datetime import datetime as _dt
     year = _dt.now().year
     row = conn.execute(
-        "SELECT COUNT(*) as n FROM factures_pigiste WHERE numero LIKE ?",
+        "SELECT COUNT(*) as n FROM factures_pigiste WHERE numero LIKE %s",
         (f"FP-{year}-%",)
     ).fetchone()
     seq = (row['n'] if row else 0) + 1
     numero = f"FP-{year}-{str(seq).zfill(3)}"
-    while conn.execute("SELECT 1 FROM factures_pigiste WHERE numero = ?", (numero,)).fetchone():
+    while conn.execute("SELECT 1 FROM factures_pigiste WHERE numero = %s", (numero,)).fetchone():
         seq += 1
         numero = f"FP-{year}-{str(seq).zfill(3)}"
     return numero
 
 def _pigiste_est_producteur_principal(conn, id_pigiste) -> bool:
-    row = conn.execute("SELECT is_producteur_principal FROM pigistes WHERE id = ?", (id_pigiste,)).fetchone()
+    row = conn.execute("SELECT is_producteur_principal FROM pigistes WHERE id = %s", (id_pigiste,)).fetchone()
     return bool(row and int(row['is_producteur_principal'] or 0) == 1)
 
 def _pigiste_to_dict(p) -> dict:
@@ -12340,7 +12411,7 @@ def _facture_pigiste_to_dict(f, lignes=None) -> dict:
 @pigiste_required
 def api_pigiste_me():
     conn = get_db_connection()
-    p = conn.execute("SELECT * FROM pigistes WHERE id = ?", (session['pigiste_id'],)).fetchone()
+    p = conn.execute("SELECT * FROM pigistes WHERE id = %s", (session['pigiste_id'],)).fetchone()
     conn.close()
     if not p:
         return jsonify({'error': 'Introuvable'}), 404
@@ -12356,12 +12427,12 @@ def api_pigiste_dashboard():
         SELECT m.*, p.nom_projet
         FROM mandats m
         LEFT JOIN projets p ON p.id = m.id_projet
-        WHERE m.id_pigiste = ? AND m.statut NOT IN ('annulé','approuvé')
+        WHERE m.id_pigiste = %s AND m.statut NOT IN ('annulé','approuvé')
         ORDER BY m.date_echeance ASC
     """, (pid,)).fetchall()
     factures_en_attente = conn.execute("""
         SELECT * FROM factures_pigiste
-        WHERE id_pigiste = ? AND statut IN ('brouillon','soumise')
+        WHERE id_pigiste = %s AND statut IN ('brouillon','soumise')
         ORDER BY created_at DESC
     """, (pid,)).fetchall()
     conn.close()
@@ -12382,7 +12453,7 @@ def api_pigiste_mandats():
         SELECT m.*, p.nom_projet
         FROM mandats m
         LEFT JOIN projets p ON p.id = m.id_projet
-        WHERE m.id_pigiste = ?
+        WHERE m.id_pigiste = %s
         ORDER BY m.created_at DESC
     """, (pid,)).fetchall()
     conn.close()
@@ -12398,13 +12469,13 @@ def api_pigiste_mandat_detail(mandat_id):
         SELECT m.*, p.nom_projet, p.statut as statut_projet
         FROM mandats m
         LEFT JOIN projets p ON p.id = m.id_projet
-        WHERE m.id = ? AND m.id_pigiste = ?
+        WHERE m.id = %s AND m.id_pigiste = %s
     """, (mandat_id, pid)).fetchone()
     if not m:
         conn.close()
         return jsonify({'error': 'Mandat introuvable'}), 404
     livrables = conn.execute(
-        "SELECT * FROM mandats_livrables WHERE id_mandat = ? ORDER BY uploaded_at DESC",
+        "SELECT * FROM mandats_livrables WHERE id_mandat = %s ORDER BY uploaded_at DESC",
         (mandat_id,)
     ).fetchall()
     conn.close()
@@ -12420,7 +12491,7 @@ def api_pigiste_remettre_mandat(mandat_id):
     import tempfile
     pid = session['pigiste_id']
     conn = get_db_connection()
-    m = conn.execute("SELECT * FROM mandats WHERE id = ? AND id_pigiste = ?", (mandat_id, pid)).fetchone()
+    m = conn.execute("SELECT * FROM mandats WHERE id = %s AND id_pigiste = %s", (mandat_id, pid)).fetchone()
     if not m:
         conn.close()
         return jsonify({'error': 'Mandat introuvable'}), 404
@@ -12449,13 +12520,13 @@ def api_pigiste_remettre_mandat(mandat_id):
                 pass
         conn.execute("""
             INSERT INTO mandats_livrables (id_mandat, filename, drive_file_id, public_url)
-            VALUES (?, ?, ?, ?)
-        """, (mandat_id, safe_name, drive_file_id, public_url))
+            VALUES (%s, %s, %s, %s)
+         RETURNING id""", (mandat_id, safe_name, drive_file_id, public_url))
         uploaded.append({'filename': safe_name, 'public_url': public_url})
 
     if uploaded:
         conn.execute(
-            "UPDATE mandats SET statut = 'remis', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            "UPDATE mandats SET statut = 'remis', updated_at = CURRENT_TIMESTAMP WHERE id = %s",
             (mandat_id,)
         )
     conn.commit()
@@ -12469,7 +12540,7 @@ def api_pigiste_factures():
     pid = session['pigiste_id']
     conn = get_db_connection()
     factures = conn.execute(
-        "SELECT * FROM factures_pigiste WHERE id_pigiste = ? ORDER BY created_at DESC",
+        "SELECT * FROM factures_pigiste WHERE id_pigiste = %s ORDER BY created_at DESC",
         (pid,)
     ).fetchall()
     conn.close()
@@ -12482,14 +12553,14 @@ def api_pigiste_facture_detail(facture_id):
     pid = session['pigiste_id']
     conn = get_db_connection()
     f = conn.execute(
-        "SELECT * FROM factures_pigiste WHERE id = ? AND id_pigiste = ?",
+        "SELECT * FROM factures_pigiste WHERE id = %s AND id_pigiste = %s",
         (facture_id, pid)
     ).fetchone()
     if not f:
         conn.close()
         return jsonify({'error': 'Facture introuvable'}), 404
     lignes = conn.execute(
-        "SELECT * FROM factures_pigiste_lignes WHERE id_facture = ? ORDER BY id",
+        "SELECT * FROM factures_pigiste_lignes WHERE id_facture = %s ORDER BY id",
         (facture_id,)
     ).fetchall()
     conn.close()
@@ -12512,7 +12583,7 @@ def api_pigiste_creer_facture():
     montant_ht = sum(float(l.get('montant', 0)) for l in lignes_data)
 
     conn = get_db_connection()
-    pigiste = conn.execute("SELECT * FROM pigistes WHERE id = ?", (pid,)).fetchone()
+    pigiste = conn.execute("SELECT * FROM pigistes WHERE id = %s", (pid,)).fetchone()
     taux_tps = 0.05 if pigiste['numero_tps'] else 0.0
     taux_tvq = 0.09975 if pigiste['numero_tvq'] else 0.0
     tps = round(montant_ht * taux_tps, 2)
@@ -12522,9 +12593,9 @@ def api_pigiste_creer_facture():
     numero = _generer_numero_facture_pigiste(conn)
     cur = conn.execute("""
         INSERT INTO factures_pigiste (id_pigiste, numero, date_emission, date_echeance, statut, montant_ht, tps, tvq, montant_total, notes)
-        VALUES (?, ?, ?, ?, 'brouillon', ?, ?, ?, ?, ?)
-    """, (pid, numero, date_emission, date_echeance, montant_ht, tps, tvq, montant_total, notes))
-    facture_id = cur.lastrowid
+        VALUES (%s, %s, %s, %s, 'brouillon', %s, %s, %s, %s, %s)
+     RETURNING id""", (pid, numero, date_emission, date_echeance, montant_ht, tps, tvq, montant_total, notes))
+    facture_id = cur.fetchone()['id']
 
     for l in lignes_data:
         desc = (l.get('description') or '').strip()
@@ -12536,8 +12607,8 @@ def api_pigiste_creer_facture():
         id_mandat = l.get('id_mandat') or None
         conn.execute("""
             INSERT INTO factures_pigiste_lignes (id_facture, id_mandat, description, quantite, taux, montant)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (facture_id, id_mandat, desc, qte, taux, montant))
+            VALUES (%s, %s, %s, %s, %s, %s)
+         RETURNING id""", (facture_id, id_mandat, desc, qte, taux, montant))
 
     conn.commit()
     conn.close()
@@ -12549,8 +12620,8 @@ def _generer_et_sauver_pdf_pigiste(facture_id: int, conn) -> str | None:
     import pathlib
     from invoice_service import generer_pdf_facture_pigiste
     try:
-        f       = conn.execute("SELECT * FROM factures_pigiste WHERE id = ?", (facture_id,)).fetchone()
-        pigiste = conn.execute("SELECT * FROM pigistes WHERE id = ?", (f['id_pigiste'],)).fetchone()
+        f       = conn.execute("SELECT * FROM factures_pigiste WHERE id = %s", (facture_id,)).fetchone()
+        pigiste = conn.execute("SELECT * FROM pigistes WHERE id = %s", (f['id_pigiste'],)).fetchone()
         lignes  = conn.execute("""
             SELECT fl.*,
                    m.titre       AS mandat_titre,
@@ -12562,7 +12633,7 @@ def _generer_et_sauver_pdf_pigiste(facture_id: int, conn) -> str | None:
             LEFT JOIN mandats m  ON m.id  = fl.id_mandat
             LEFT JOIN projets p  ON p.id  = m.id_projet
             LEFT JOIN clients c  ON c.id  = p.id_client
-            WHERE fl.id_facture = ?
+            WHERE fl.id_facture = %s
             ORDER BY fl.id
         """, (facture_id,)).fetchall()
 
@@ -12597,7 +12668,7 @@ def _generer_et_sauver_pdf_pigiste(facture_id: int, conn) -> str | None:
         } for l in lignes]
 
         generer_pdf_facture_pigiste(facture_dict, lignes_dict, dict(pigiste), pdf_path)
-        conn.execute("UPDATE factures_pigiste SET pdf_path = ? WHERE id = ?", (pdf_path, facture_id))
+        conn.execute("UPDATE factures_pigiste SET pdf_path = %s WHERE id = %s", (pdf_path, facture_id))
         return pdf_path
     except Exception as e:
         print(f"[INVOICE] Génération PDF pigiste: {e}")
@@ -12610,14 +12681,14 @@ def api_pigiste_soumettre_facture(facture_id):
     pid = session['pigiste_id']
     conn = get_db_connection()
     f = conn.execute(
-        "SELECT * FROM factures_pigiste WHERE id = ? AND id_pigiste = ? AND statut = 'brouillon'",
+        "SELECT * FROM factures_pigiste WHERE id = %s AND id_pigiste = %s AND statut = 'brouillon'",
         (facture_id, pid)
     ).fetchone()
     if not f:
         conn.close()
         return jsonify({'error': 'Facture introuvable ou déjà soumise'}), 404
 
-    conn.execute("UPDATE factures_pigiste SET statut = 'soumise' WHERE id = ?", (facture_id,))
+    conn.execute("UPDATE factures_pigiste SET statut = 'soumise' WHERE id = %s", (facture_id,))
     conn.commit()
     _generer_et_sauver_pdf_pigiste(facture_id, conn)
     conn.close()
@@ -12631,7 +12702,7 @@ def api_pigiste_ajouter_ligne(facture_id):
     data = request.get_json(force=True)
     conn = get_db_connection()
     f = conn.execute(
-        "SELECT * FROM factures_pigiste WHERE id = ? AND id_pigiste = ? AND statut = 'brouillon'",
+        "SELECT * FROM factures_pigiste WHERE id = %s AND id_pigiste = %s AND statut = 'brouillon'",
         (facture_id, pid)
     ).fetchone()
     if not f:
@@ -12644,23 +12715,23 @@ def api_pigiste_ajouter_ligne(facture_id):
     id_mandat = data.get('id_mandat') or None
     cur = conn.execute("""
         INSERT INTO factures_pigiste_lignes (id_facture, id_mandat, description, quantite, taux, montant)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (facture_id, id_mandat, desc, qte, taux, montant))
+        VALUES (%s, %s, %s, %s, %s, %s)
+     RETURNING id""", (facture_id, id_mandat, desc, qte, taux, montant))
     # Recalcul totaux
-    lignes = conn.execute("SELECT montant FROM factures_pigiste_lignes WHERE id_facture = ?", (facture_id,)).fetchall()
-    pigiste = conn.execute("SELECT * FROM pigistes WHERE id = ?", (pid,)).fetchone()
+    lignes = conn.execute("SELECT montant FROM factures_pigiste_lignes WHERE id_facture = %s", (facture_id,)).fetchall()
+    pigiste = conn.execute("SELECT * FROM pigistes WHERE id = %s", (pid,)).fetchone()
     montant_ht = sum(l['montant'] for l in lignes)
     taux_tps = 0.05 if pigiste['numero_tps'] else 0.0
     taux_tvq = 0.09975 if pigiste['numero_tvq'] else 0.0
     tps = round(montant_ht * taux_tps, 2)
     tvq = round(montant_ht * taux_tvq, 2)
     conn.execute(
-        "UPDATE factures_pigiste SET montant_ht=?, tps=?, tvq=?, montant_total=? WHERE id=?",
+        "UPDATE factures_pigiste SET montant_ht=%s, tps=%s, tvq=%s, montant_total=%s WHERE id=%s",
         (montant_ht, tps, tvq, round(montant_ht + tps + tvq, 2), facture_id)
     )
     conn.commit()
     conn.close()
-    return jsonify({'ok': True, 'id': cur.lastrowid, 'montant': montant})
+    return jsonify({'ok': True, 'id': cur.fetchone()['id'], 'montant': montant})
 
 
 @app.route('/api/v1/pigiste/factures/<int:facture_id>/lignes/<int:ligne_id>', methods=['DELETE'])
@@ -12669,22 +12740,22 @@ def api_pigiste_supprimer_ligne(facture_id, ligne_id):
     pid = session['pigiste_id']
     conn = get_db_connection()
     f = conn.execute(
-        "SELECT * FROM factures_pigiste WHERE id = ? AND id_pigiste = ? AND statut = 'brouillon'",
+        "SELECT * FROM factures_pigiste WHERE id = %s AND id_pigiste = %s AND statut = 'brouillon'",
         (facture_id, pid)
     ).fetchone()
     if not f:
         conn.close()
         return jsonify({'error': 'Non modifiable'}), 403
-    conn.execute("DELETE FROM factures_pigiste_lignes WHERE id = ? AND id_facture = ?", (ligne_id, facture_id))
-    lignes = conn.execute("SELECT montant FROM factures_pigiste_lignes WHERE id_facture = ?", (facture_id,)).fetchall()
-    pigiste = conn.execute("SELECT * FROM pigistes WHERE id = ?", (pid,)).fetchone()
+    conn.execute("DELETE FROM factures_pigiste_lignes WHERE id = %s AND id_facture = %s", (ligne_id, facture_id))
+    lignes = conn.execute("SELECT montant FROM factures_pigiste_lignes WHERE id_facture = %s", (facture_id,)).fetchall()
+    pigiste = conn.execute("SELECT * FROM pigistes WHERE id = %s", (pid,)).fetchone()
     montant_ht = sum(l['montant'] for l in lignes)
     taux_tps = 0.05 if pigiste['numero_tps'] else 0.0
     taux_tvq = 0.09975 if pigiste['numero_tvq'] else 0.0
     tps = round(montant_ht * taux_tps, 2)
     tvq = round(montant_ht * taux_tvq, 2)
     conn.execute(
-        "UPDATE factures_pigiste SET montant_ht=?, tps=?, tvq=?, montant_total=? WHERE id=?",
+        "UPDATE factures_pigiste SET montant_ht=%s, tps=%s, tvq=%s, montant_total=%s WHERE id=%s",
         (montant_ht, tps, tvq, round(montant_ht + tps + tvq, 2), facture_id)
     )
     conn.commit()
@@ -12728,13 +12799,13 @@ def api_admin_pigistes_create():
     try:
         cur = conn.execute("""
             INSERT INTO pigistes (nom_complet, email, mot_de_passe_hash, telephone, adresse, ville, province, code_postal, numero_tps, numero_tvq)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (nom, email, hashed,
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+         RETURNING id""", (nom, email, hashed,
               data.get('telephone', ''), data.get('adresse', ''), data.get('ville', ''),
               data.get('province', 'Québec'), data.get('code_postal', ''),
               data.get('numero_tps', ''), data.get('numero_tvq', '')))
         conn.commit()
-        pid = cur.lastrowid
+        pid = cur.fetchone()['id']
     except Exception as e:
         conn.close()
         return jsonify({'error': str(e)}), 409
@@ -12746,7 +12817,7 @@ def api_admin_pigistes_create():
 @admin_required
 def api_admin_pigiste_detail(pigiste_id):
     conn = get_db_connection()
-    p = conn.execute("SELECT * FROM pigistes WHERE id = ?", (pigiste_id,)).fetchone()
+    p = conn.execute("SELECT * FROM pigistes WHERE id = %s", (pigiste_id,)).fetchone()
     if not p:
         conn.close()
         return jsonify({'error': 'Introuvable'}), 404
@@ -12754,11 +12825,11 @@ def api_admin_pigiste_detail(pigiste_id):
         SELECT m.*, p.nom_projet
         FROM mandats m
         LEFT JOIN projets p ON p.id = m.id_projet
-        WHERE m.id_pigiste = ?
+        WHERE m.id_pigiste = %s
         ORDER BY m.created_at DESC
     """, (pigiste_id,)).fetchall()
     factures = conn.execute(
-        "SELECT * FROM factures_pigiste WHERE id_pigiste = ? ORDER BY created_at DESC",
+        "SELECT * FROM factures_pigiste WHERE id_pigiste = %s ORDER BY created_at DESC",
         (pigiste_id,)
     ).fetchall()
     conn.close()
@@ -12773,7 +12844,7 @@ def api_admin_pigiste_detail(pigiste_id):
 def api_admin_pigiste_update(pigiste_id):
     data = request.get_json(force=True)
     conn = get_db_connection()
-    p = conn.execute("SELECT * FROM pigistes WHERE id = ?", (pigiste_id,)).fetchone()
+    p = conn.execute("SELECT * FROM pigistes WHERE id = %s", (pigiste_id,)).fetchone()
     if not p:
         conn.close()
         return jsonify({'error': 'Introuvable'}), 404
@@ -12782,13 +12853,13 @@ def api_admin_pigiste_update(pigiste_id):
     if data.get('password'):
         updates['mot_de_passe_hash'] = bcrypt.generate_password_hash(data['password']).decode('utf-8')
         conn.execute("""
-            UPDATE pigistes SET nom_complet=?, email=?, telephone=?, adresse=?, ville=?, province=?, code_postal=?, numero_tps=?, numero_tvq=?, is_active=?, mot_de_passe_hash=?
-            WHERE id=?
+            UPDATE pigistes SET nom_complet=%s, email=%s, telephone=%s, adresse=%s, ville=%s, province=%s, code_postal=%s, numero_tps=%s, numero_tvq=%s, is_active=%s, mot_de_passe_hash=%s
+            WHERE id=%s
         """, (*[updates[f] for f in fields], updates['mot_de_passe_hash'], pigiste_id))
     else:
         conn.execute("""
-            UPDATE pigistes SET nom_complet=?, email=?, telephone=?, adresse=?, ville=?, province=?, code_postal=?, numero_tps=?, numero_tvq=?, is_active=?
-            WHERE id=?
+            UPDATE pigistes SET nom_complet=%s, email=%s, telephone=%s, adresse=%s, ville=%s, province=%s, code_postal=%s, numero_tps=%s, numero_tvq=%s, is_active=%s
+            WHERE id=%s
         """, (*[updates[f] for f in fields], pigiste_id))
     conn.commit()
     conn.close()
@@ -12799,7 +12870,7 @@ def api_admin_pigiste_update(pigiste_id):
 @admin_required
 def api_admin_pigiste_delete(pigiste_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM pigistes WHERE id = ?", (pigiste_id,))
+    conn.execute("DELETE FROM pigistes WHERE id = %s", (pigiste_id,))
     conn.commit()
     conn.close()
     return jsonify({'ok': True})
@@ -12813,7 +12884,7 @@ def api_admin_projet_mandats(projet_id):
         SELECT m.*, pg.nom_complet as nom_pigiste
         FROM mandats m
         LEFT JOIN pigistes pg ON pg.id = m.id_pigiste
-        WHERE m.id_projet = ?
+        WHERE m.id_projet = %s
         ORDER BY m.created_at DESC
     """, (projet_id,)).fetchall()
     conn.close()
@@ -12850,15 +12921,15 @@ def api_admin_mandats_create():
         return jsonify({'error': "Ce pigiste ne peut pas recevoir de mandat (producteur principal requis)"}), 403
     cur = conn.execute("""
         INSERT INTO mandats (id_pigiste, id_projet, titre, description, date_debut, date_echeance, montant_convenu, statut, notes_admin)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'en_attente', ?)
-    """, (id_pigiste, id_projet, titre,
+        VALUES (%s, %s, %s, %s, %s, %s, %s, 'en_attente', %s)
+     RETURNING id""", (id_pigiste, id_projet, titre,
           data.get('description', ''), data.get('date_debut'), data.get('date_echeance'),
           float(data.get('montant_convenu', 0)), data.get('notes_admin', '')))
     conn.commit()
-    mandat_id = cur.lastrowid
+    mandat_id = cur.fetchone()['id']
     # Mettre à jour id_pigiste sur le projet si fourni
     if id_projet:
-        conn.execute("UPDATE projets SET id_pigiste = ? WHERE id = ?", (id_pigiste, id_projet))
+        conn.execute("UPDATE projets SET id_pigiste = %s WHERE id = %s", (id_pigiste, id_projet))
         conn.commit()
     conn.close()
     return jsonify({'ok': True, 'id': mandat_id}), 201
@@ -12873,13 +12944,13 @@ def api_admin_mandat_detail(mandat_id):
         FROM mandats m
         LEFT JOIN projets p ON p.id = m.id_projet
         LEFT JOIN pigistes pg ON pg.id = m.id_pigiste
-        WHERE m.id = ?
+        WHERE m.id = %s
     """, (mandat_id,)).fetchone()
     if not m:
         conn.close()
         return jsonify({'error': 'Introuvable'}), 404
     livrables = conn.execute(
-        "SELECT * FROM mandats_livrables WHERE id_mandat = ? ORDER BY uploaded_at DESC",
+        "SELECT * FROM mandats_livrables WHERE id_mandat = %s ORDER BY uploaded_at DESC",
         (mandat_id,)
     ).fetchall()
     conn.close()
@@ -12893,13 +12964,13 @@ def api_admin_mandat_detail(mandat_id):
 def api_admin_mandat_update(mandat_id):
     data = request.get_json(force=True)
     conn = get_db_connection()
-    m = conn.execute("SELECT * FROM mandats WHERE id = ?", (mandat_id,)).fetchone()
+    m = conn.execute("SELECT * FROM mandats WHERE id = %s", (mandat_id,)).fetchone()
     if not m:
         conn.close()
         return jsonify({'error': 'Introuvable'}), 404
     conn.execute("""
-        UPDATE mandats SET titre=?, description=?, date_debut=?, date_echeance=?, montant_convenu=?, statut=?, notes_admin=?, updated_at=CURRENT_TIMESTAMP
-        WHERE id=?
+        UPDATE mandats SET titre=%s, description=%s, date_debut=%s, date_echeance=%s, montant_convenu=%s, statut=%s, notes_admin=%s, updated_at=CURRENT_TIMESTAMP
+        WHERE id=%s
     """, (
         data.get('titre', m['titre']),
         data.get('description', m['description']),
@@ -12920,7 +12991,7 @@ def api_admin_mandat_update(mandat_id):
 def api_admin_mandat_approuver(mandat_id):
     conn = get_db_connection()
     conn.execute(
-        "UPDATE mandats SET statut='approuvé', updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        "UPDATE mandats SET statut='approuvé', updated_at=CURRENT_TIMESTAMP WHERE id=%s",
         (mandat_id,)
     )
     conn.commit()
@@ -12950,13 +13021,13 @@ def api_admin_facture_pigiste_detail(facture_id):
         SELECT f.*, pg.nom_complet as nom_pigiste
         FROM factures_pigiste f
         JOIN pigistes pg ON pg.id = f.id_pigiste
-        WHERE f.id = ?
+        WHERE f.id = %s
     """, (facture_id,)).fetchone()
     if not f:
         conn.close()
         return jsonify({'error': 'Introuvable'}), 404
     lignes = conn.execute(
-        "SELECT * FROM factures_pigiste_lignes WHERE id_facture = ? ORDER BY id",
+        "SELECT * FROM factures_pigiste_lignes WHERE id_facture = %s ORDER BY id",
         (facture_id,)
     ).fetchall()
     conn.close()
@@ -12967,7 +13038,7 @@ def api_admin_facture_pigiste_detail(facture_id):
 @admin_required
 def api_admin_facture_pigiste_payer(facture_id):
     conn = get_db_connection()
-    conn.execute("UPDATE factures_pigiste SET statut='payée' WHERE id=?", (facture_id,))
+    conn.execute("UPDATE factures_pigiste SET statut='payée' WHERE id=%s", (facture_id,))
     # Facture pigiste payée → entre dans les dépenses (grand livre)
     materialiser_depense_pigiste(conn, facture_id)
     conn.commit()
@@ -12979,7 +13050,7 @@ def api_admin_facture_pigiste_payer(facture_id):
 @admin_required
 def api_admin_facture_pigiste_approuver(facture_id):
     conn = get_db_connection()
-    conn.execute("UPDATE factures_pigiste SET statut='approuvée' WHERE id=?", (facture_id,))
+    conn.execute("UPDATE factures_pigiste SET statut='approuvée' WHERE id=%s", (facture_id,))
     conn.commit()
     conn.close()
     return jsonify({'ok': True})
@@ -13031,14 +13102,14 @@ def api_admin_mandats_pigistes_create():
     cur = conn.execute("""
         INSERT INTO mandats (id_pigiste, id_projet, titre, description, date_debut, date_echeance,
                              montant_convenu, statut, notes_admin, type_prestation, quantite)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, ?)
-    """, (id_pigiste, id_projet, titre,
+        VALUES (%s, %s, %s, %s, %s, %s, %s, 'en_attente', %s, %s, %s)
+     RETURNING id""", (id_pigiste, id_projet, titre,
           data.get('description', ''), data.get('date_debut'), data.get('date_echeance'),
           montant, data.get('notes_admin', ''), type_prestation, quantite))
     conn.commit()
-    mandat_id = cur.lastrowid
+    mandat_id = cur.fetchone()['id']
     if id_projet:
-        conn.execute("UPDATE projets SET id_pigiste = ? WHERE id = ?", (id_pigiste, id_projet))
+        conn.execute("UPDATE projets SET id_pigiste = %s WHERE id = %s", (id_pigiste, id_projet))
         conn.commit()
     conn.close()
     return jsonify({'ok': True, 'id': mandat_id}), 201
@@ -13053,13 +13124,13 @@ def api_admin_mandats_pigistes_detail(mandat_id):
         FROM mandats m
         LEFT JOIN projets p ON p.id = m.id_projet
         LEFT JOIN pigistes pg ON pg.id = m.id_pigiste
-        WHERE m.id = ?
+        WHERE m.id = %s
     """, (mandat_id,)).fetchone()
     if not m:
         conn.close()
         return jsonify({'error': 'Introuvable'}), 404
     livrables = conn.execute(
-        "SELECT * FROM mandats_livrables WHERE id_mandat = ? ORDER BY uploaded_at DESC",
+        "SELECT * FROM mandats_livrables WHERE id_mandat = %s ORDER BY uploaded_at DESC",
         (mandat_id,)
     ).fetchall()
     conn.close()
@@ -13073,13 +13144,13 @@ def api_admin_mandats_pigistes_detail(mandat_id):
 def api_admin_mandats_pigistes_update(mandat_id):
     data = request.get_json(force=True)
     conn = get_db_connection()
-    m = conn.execute("SELECT * FROM mandats WHERE id = ?", (mandat_id,)).fetchone()
+    m = conn.execute("SELECT * FROM mandats WHERE id = %s", (mandat_id,)).fetchone()
     if not m:
         conn.close()
         return jsonify({'error': 'Introuvable'}), 404
     conn.execute("""
-        UPDATE mandats SET titre=?, description=?, date_debut=?, date_echeance=?, montant_convenu=?, statut=?, notes_admin=?, updated_at=CURRENT_TIMESTAMP
-        WHERE id=?
+        UPDATE mandats SET titre=%s, description=%s, date_debut=%s, date_echeance=%s, montant_convenu=%s, statut=%s, notes_admin=%s, updated_at=CURRENT_TIMESTAMP
+        WHERE id=%s
     """, (
         data.get('titre', m['titre']),
         data.get('description', m['description']),
@@ -13100,12 +13171,12 @@ def api_admin_mandats_pigistes_update(mandat_id):
 def api_admin_mandats_pigistes_assigner(mandat_id):
     """Passe le mandat à 'en_cours' (travaux assignés et démarrés)."""
     conn = get_db_connection()
-    m = conn.execute("SELECT id FROM mandats WHERE id = ?", (mandat_id,)).fetchone()
+    m = conn.execute("SELECT id FROM mandats WHERE id = %s", (mandat_id,)).fetchone()
     if not m:
         conn.close()
         return jsonify({'error': 'Introuvable'}), 404
     conn.execute(
-        "UPDATE mandats SET statut='en_cours', updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        "UPDATE mandats SET statut='en_cours', updated_at=CURRENT_TIMESTAMP WHERE id=%s",
         (mandat_id,)
     )
     conn.commit()
@@ -13123,7 +13194,7 @@ def api_admin_mandats_pigistes_approuver(mandat_id):
         SELECT m.*, pg.numero_tps, pg.numero_tvq
         FROM mandats m
         JOIN pigistes pg ON pg.id = m.id_pigiste
-        WHERE m.id = ?
+        WHERE m.id = %s
     """, (mandat_id,)).fetchone()
     if not m:
         conn.close()
@@ -13131,7 +13202,7 @@ def api_admin_mandats_pigistes_approuver(mandat_id):
 
     # Marquer le mandat approuvé
     conn.execute(
-        "UPDATE mandats SET statut='approuvé', updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        "UPDATE mandats SET statut='approuvé', updated_at=CURRENT_TIMESTAMP WHERE id=%s",
         (mandat_id,)
     )
 
@@ -13158,7 +13229,7 @@ def api_admin_mandats_pigistes_approuver(mandat_id):
     now     = _dt.datetime.now()
     mois    = now.strftime('%Y%m')
     count   = conn.execute(
-        "SELECT COUNT(*) FROM factures_pigiste WHERE strftime('%Y%m', created_at) = ?", (mois,)
+        "SELECT COUNT(*) FROM factures_pigiste WHERE REPLACE(LEFT(created_at, 7), '-', '') = %s", (mois,)
     ).fetchone()[0] + 1
     numero  = f"FPIG-{mois}-{count:04d}"
 
@@ -13166,16 +13237,16 @@ def api_admin_mandats_pigistes_approuver(mandat_id):
     cur = conn.execute("""
         INSERT INTO factures_pigiste
             (id_pigiste, numero, date_emission, statut, montant_ht, tps, tvq, montant_total, notes)
-        VALUES (?, ?, ?, 'soumise', ?, ?, ?, ?, ?)
-    """, (m['id_pigiste'], numero, now.strftime('%Y-%m-%d'),
+        VALUES (%s, %s, %s, 'soumise', %s, %s, %s, %s, %s)
+     RETURNING id""", (m['id_pigiste'], numero, now.strftime('%Y-%m-%d'),
           montant_ht, tps, tvq, montant_total,
           f"Générée automatiquement — mandat #{mandat_id}"))
-    facture_id = cur.lastrowid
+    facture_id = cur.fetchone()['id']
 
     conn.execute("""
         INSERT INTO factures_pigiste_lignes (id_facture, id_mandat, description, quantite, taux, montant)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (facture_id, mandat_id, description, quantite, taux, montant_ht))
+        VALUES (%s, %s, %s, %s, %s, %s)
+     RETURNING id""", (facture_id, mandat_id, description, quantite, taux, montant_ht))
 
     conn.commit()
     conn.close()
@@ -13189,12 +13260,12 @@ def api_admin_mandats_pigistes_corrections(mandat_id):
     data = request.get_json(force=True)
     note = (data.get('note') or '').strip()
     conn = get_db_connection()
-    m = conn.execute("SELECT * FROM mandats WHERE id = ?", (mandat_id,)).fetchone()
+    m = conn.execute("SELECT * FROM mandats WHERE id = %s", (mandat_id,)).fetchone()
     if not m:
         conn.close()
         return jsonify({'error': 'Introuvable'}), 404
     conn.execute(
-        "UPDATE mandats SET statut='en_cours', notes_admin=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        "UPDATE mandats SET statut='en_cours', notes_admin=%s, updated_at=CURRENT_TIMESTAMP WHERE id=%s",
         (note if note else m['notes_admin'], mandat_id)
     )
     conn.commit()
@@ -13226,13 +13297,13 @@ def api_admin_factures_pigistes_detail(facture_id):
         SELECT f.*, pg.nom_complet as nom_pigiste
         FROM factures_pigiste f
         JOIN pigistes pg ON pg.id = f.id_pigiste
-        WHERE f.id = ?
+        WHERE f.id = %s
     """, (facture_id,)).fetchone()
     if not f:
         conn.close()
         return jsonify({'error': 'Introuvable'}), 404
     lignes = conn.execute(
-        "SELECT * FROM factures_pigiste_lignes WHERE id_facture = ? ORDER BY id",
+        "SELECT * FROM factures_pigiste_lignes WHERE id_facture = %s ORDER BY id",
         (facture_id,)
     ).fetchall()
     conn.close()
@@ -13243,7 +13314,7 @@ def api_admin_factures_pigistes_detail(facture_id):
 @admin_required
 def api_admin_factures_pigistes_pdf(facture_id):
     conn = get_db_connection()
-    f = conn.execute("SELECT pdf_path, numero FROM factures_pigiste WHERE id = ?", (facture_id,)).fetchone()
+    f = conn.execute("SELECT pdf_path, numero FROM factures_pigiste WHERE id = %s", (facture_id,)).fetchone()
     conn.close()
     if not f or not f['pdf_path'] or not os.path.exists(f['pdf_path']):
         return jsonify({'error': 'PDF non disponible'}), 404
@@ -13258,7 +13329,7 @@ def api_pigiste_facture_pdf(facture_id):
     pid = session['pigiste_id']
     conn = get_db_connection()
     f = conn.execute(
-        "SELECT pdf_path, numero FROM factures_pigiste WHERE id = ? AND id_pigiste = ?",
+        "SELECT pdf_path, numero FROM factures_pigiste WHERE id = %s AND id_pigiste = %s",
         (facture_id, pid)
     ).fetchone()
     conn.close()
@@ -13273,11 +13344,11 @@ def api_pigiste_facture_pdf(facture_id):
 @admin_required
 def api_admin_factures_pigistes_approuver(facture_id):
     conn = get_db_connection()
-    f = conn.execute("SELECT id, pdf_path FROM factures_pigiste WHERE id = ?", (facture_id,)).fetchone()
+    f = conn.execute("SELECT id, pdf_path FROM factures_pigiste WHERE id = %s", (facture_id,)).fetchone()
     if not f:
         conn.close()
         return jsonify({'error': 'Introuvable'}), 404
-    conn.execute("UPDATE factures_pigiste SET statut='approuvée' WHERE id=?", (facture_id,))
+    conn.execute("UPDATE factures_pigiste SET statut='approuvée' WHERE id=%s", (facture_id,))
     conn.commit()
     if not f['pdf_path'] or not os.path.exists(f['pdf_path'] or ''):
         _generer_et_sauver_pdf_pigiste(facture_id, conn)
@@ -13289,11 +13360,11 @@ def api_admin_factures_pigistes_approuver(facture_id):
 @admin_required
 def api_admin_factures_pigistes_payer(facture_id):
     conn = get_db_connection()
-    f = conn.execute("SELECT id FROM factures_pigiste WHERE id = ?", (facture_id,)).fetchone()
+    f = conn.execute("SELECT id FROM factures_pigiste WHERE id = %s", (facture_id,)).fetchone()
     if not f:
         conn.close()
         return jsonify({'error': 'Introuvable'}), 404
-    conn.execute("UPDATE factures_pigiste SET statut='payée' WHERE id=?", (facture_id,))
+    conn.execute("UPDATE factures_pigiste SET statut='payée' WHERE id=%s", (facture_id,))
     # Facture pigiste payée → entre dans les dépenses (grand livre)
     materialiser_depense_pigiste(conn, facture_id)
     conn.commit()
@@ -13421,7 +13492,7 @@ def _ressource_to_dict(r, sections=None):
 
 def _guide_sections_brief(conn, ressource_id):
     rows = conn.execute(
-        "SELECT id, titre FROM guide_sections WHERE id_ressource=? ORDER BY ordre ASC, id ASC",
+        "SELECT id, titre FROM guide_sections WHERE id_ressource=%s ORDER BY ordre ASC, id ASC",
         (ressource_id,)
     ).fetchall()
     return [{'id': str(s['id']), 'label': s['titre']} for s in rows]
@@ -13462,7 +13533,7 @@ def _parse_etapes(raw):
 def api_admin_guide_sections_list(ressource_id):
     conn = get_db_connection()
     rows = conn.execute(
-        "SELECT * FROM guide_sections WHERE id_ressource=? ORDER BY ordre ASC, id ASC",
+        "SELECT * FROM guide_sections WHERE id_ressource=%s ORDER BY ordre ASC, id ASC",
         (ressource_id,)
     ).fetchall()
     conn.close()
@@ -13472,7 +13543,7 @@ def api_admin_guide_sections_list(ressource_id):
 @admin_required
 def api_admin_guide_sections_create(ressource_id):
     conn = get_db_connection()
-    ressource = conn.execute("SELECT id FROM client_ressources WHERE id=?", (ressource_id,)).fetchone()
+    ressource = conn.execute("SELECT id FROM client_ressources WHERE id=%s", (ressource_id,)).fetchone()
     if not ressource:
         conn.close()
         return jsonify({'error': 'Ressource introuvable'}), 404
@@ -13487,17 +13558,17 @@ def api_admin_guide_sections_create(ressource_id):
     etapes = _parse_etapes(data.get('etapes'))
 
     max_ordre = conn.execute(
-        "SELECT COALESCE(MAX(ordre), -1) AS m FROM guide_sections WHERE id_ressource=?",
+        "SELECT COALESCE(MAX(ordre), -1) AS m FROM guide_sections WHERE id_ressource=%s",
         (ressource_id,)
     ).fetchone()['m']
 
     cur = conn.execute("""
         INSERT INTO guide_sections (id_ressource, ordre, titre, intro, astuce, etapes_json)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (ressource_id, max_ordre + 1, titre, intro, astuce, json.dumps(etapes)))
-    section_id = cur.lastrowid
+        VALUES (%s, %s, %s, %s, %s, %s)
+     RETURNING id""", (ressource_id, max_ordre + 1, titre, intro, astuce, json.dumps(etapes)))
+    section_id = cur.fetchone()['id']
     conn.commit()
-    row = conn.execute("SELECT * FROM guide_sections WHERE id=?", (section_id,)).fetchone()
+    row = conn.execute("SELECT * FROM guide_sections WHERE id=%s", (section_id,)).fetchone()
     conn.close()
     return jsonify(_guide_section_to_dict(row))
 
@@ -13506,7 +13577,7 @@ def api_admin_guide_sections_create(ressource_id):
 def api_admin_guide_sections_update(ressource_id, section_id):
     conn = get_db_connection()
     row = conn.execute(
-        "SELECT * FROM guide_sections WHERE id=? AND id_ressource=?",
+        "SELECT * FROM guide_sections WHERE id=%s AND id_ressource=%s",
         (section_id, ressource_id)
     ).fetchone()
     if not row:
@@ -13529,11 +13600,11 @@ def api_admin_guide_sections_update(ressource_id, section_id):
         ordre = row['ordre']
 
     conn.execute("""
-        UPDATE guide_sections SET titre=?, intro=?, astuce=?, etapes_json=?, ordre=?
-        WHERE id=?
+        UPDATE guide_sections SET titre=%s, intro=%s, astuce=%s, etapes_json=%s, ordre=%s
+        WHERE id=%s
     """, (titre, intro, astuce, json.dumps(etapes), ordre, section_id))
     conn.commit()
-    row = conn.execute("SELECT * FROM guide_sections WHERE id=?", (section_id,)).fetchone()
+    row = conn.execute("SELECT * FROM guide_sections WHERE id=%s", (section_id,)).fetchone()
     conn.close()
     return jsonify(_guide_section_to_dict(row))
 
@@ -13542,15 +13613,15 @@ def api_admin_guide_sections_update(ressource_id, section_id):
 def api_admin_guide_sections_delete(ressource_id, section_id):
     conn = get_db_connection()
     row = conn.execute(
-        "SELECT * FROM guide_sections WHERE id=? AND id_ressource=?",
+        "SELECT * FROM guide_sections WHERE id=%s AND id_ressource=%s",
         (section_id, ressource_id)
     ).fetchone()
     if not row:
         conn.close()
         return jsonify({'error': 'Section introuvable'}), 404
-    conn.execute("DELETE FROM guide_sections WHERE id=?", (section_id,))
+    conn.execute("DELETE FROM guide_sections WHERE id=%s", (section_id,))
     conn.execute(
-        "UPDATE ressource_images SET section_id=NULL WHERE id_ressource=? AND section_id=?",
+        "UPDATE ressource_images SET section_id=NULL WHERE id_ressource=%s AND section_id=%s",
         (ressource_id, str(section_id))
     )
     conn.commit()
@@ -13567,7 +13638,7 @@ def api_admin_guide_sections_reorder(ressource_id):
     conn = get_db_connection()
     for index, sid in enumerate(ordre_ids):
         conn.execute(
-            "UPDATE guide_sections SET ordre=? WHERE id=? AND id_ressource=?",
+            "UPDATE guide_sections SET ordre=%s WHERE id=%s AND id_ressource=%s",
             (index, sid, ressource_id)
         )
     conn.commit()
@@ -13578,7 +13649,7 @@ def api_admin_guide_sections_reorder(ressource_id):
 def api_guide_sections_public(ressource_id):
     conn = get_db_connection()
     rows = conn.execute(
-        "SELECT * FROM guide_sections WHERE id_ressource=? ORDER BY ordre ASC, id ASC",
+        "SELECT * FROM guide_sections WHERE id_ressource=%s ORDER BY ordre ASC, id ASC",
         (ressource_id,)
     ).fetchall()
     conn.close()
@@ -13639,11 +13710,11 @@ def api_admin_ressources_create():
     conn = get_db_connection()
     cur = conn.execute("""
         INSERT INTO client_ressources (id_client, titre, description, categorie, type_source, drive_file_id, url)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (id_client, titre, description, categorie, type_source, drive_file_id, url))
-    ressource_id = cur.lastrowid
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+     RETURNING id""", (id_client, titre, description, categorie, type_source, drive_file_id, url))
+    ressource_id = cur.fetchone()['id']
     conn.commit()
-    row = conn.execute("SELECT * FROM client_ressources WHERE id=?", (ressource_id,)).fetchone()
+    row = conn.execute("SELECT * FROM client_ressources WHERE id=%s", (ressource_id,)).fetchone()
     conn.close()
     return jsonify(_ressource_to_dict(row))
 
@@ -13651,7 +13722,7 @@ def api_admin_ressources_create():
 @admin_required
 def api_admin_ressources_delete(ressource_id):
     conn = get_db_connection()
-    row = conn.execute("SELECT * FROM client_ressources WHERE id=?", (ressource_id,)).fetchone()
+    row = conn.execute("SELECT * FROM client_ressources WHERE id=%s", (ressource_id,)).fetchone()
     if not row:
         conn.close()
         return jsonify({'error': 'Ressource introuvable'}), 404
@@ -13660,7 +13731,7 @@ def api_admin_ressources_delete(ressource_id):
             delete_drive_file(row['drive_file_id'])
         except Exception as e:
             print(f"[RESSOURCES] Suppression fichier Drive échouée: {e}")
-    conn.execute("DELETE FROM client_ressources WHERE id=?", (ressource_id,))
+    conn.execute("DELETE FROM client_ressources WHERE id=%s", (ressource_id,))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -13671,12 +13742,12 @@ def api_admin_ressources_set_bundle(ressource_id):
     data = request.get_json(silent=True) or {}
     bundle_id = data.get('bundle_id')  # None = retirer du bundle
     conn = get_db_connection()
-    if not conn.execute("SELECT id FROM client_ressources WHERE id=?", (ressource_id,)).fetchone():
+    if not conn.execute("SELECT id FROM client_ressources WHERE id=%s", (ressource_id,)).fetchone():
         conn.close()
         return jsonify({'error': 'Ressource introuvable'}), 404
-    conn.execute("UPDATE client_ressources SET bundle_id=? WHERE id=?", (bundle_id, ressource_id))
+    conn.execute("UPDATE client_ressources SET bundle_id=%s WHERE id=%s", (bundle_id, ressource_id))
     conn.commit()
-    row = conn.execute("SELECT * FROM client_ressources WHERE id=?", (ressource_id,)).fetchone()
+    row = conn.execute("SELECT * FROM client_ressources WHERE id=%s", (ressource_id,)).fetchone()
     conn.close()
     return jsonify(_ressource_to_dict(row))
 
@@ -13684,7 +13755,7 @@ def api_admin_ressources_set_bundle(ressource_id):
 @admin_required
 def api_admin_projet_ressources_disponibles(project_id):
     conn = get_db_connection()
-    projet = conn.execute("SELECT id_client FROM projets WHERE id=?", (project_id,)).fetchone()
+    projet = conn.execute("SELECT id_client FROM projets WHERE id=%s", (project_id,)).fetchone()
     if not projet:
         conn.close()
         return jsonify({'error': 'Projet introuvable'}), 404
@@ -13693,10 +13764,10 @@ def api_admin_projet_ressources_disponibles(project_id):
         SELECT r.id, r.titre, r.categorie, r.bundle_id, r.id_client,
                EXISTS(
                    SELECT 1 FROM ressource_assignations a
-                   WHERE a.id_ressource = r.id AND a.id_client = ?
+                   WHERE a.id_ressource = r.id AND a.id_client = %s
                ) AS deja_assignee
         FROM client_ressources r
-        WHERE r.id_client IS NULL OR r.id_client = ?
+        WHERE r.id_client IS NULL OR r.id_client = %s
         ORDER BY r.created_at DESC
     """, (id_client, id_client)).fetchall()
     bundles = conn.execute("SELECT id, nom, icone FROM ressource_bundles ORDER BY ordre ASC, id ASC").fetchall()
@@ -13732,11 +13803,11 @@ def api_admin_bundles_create():
     icone = (data.get('icone') or 'folder').strip()
     conn = get_db_connection()
     max_ordre = conn.execute("SELECT COALESCE(MAX(ordre), -1) FROM ressource_bundles").fetchone()[0]
-    cur = conn.execute("INSERT INTO ressource_bundles (nom, description, icone, ordre) VALUES (?, ?, ?, ?)",
+    cur = conn.execute("INSERT INTO ressource_bundles (nom, description, icone, ordre) VALUES (%s, %s, %s, %s) RETURNING id",
         (nom, description, icone, max_ordre + 1))
-    bundle_id = cur.lastrowid
+    bundle_id = cur.fetchone()['id']
     conn.commit()
-    row = conn.execute("SELECT * FROM ressource_bundles WHERE id=?", (bundle_id,)).fetchone()
+    row = conn.execute("SELECT * FROM ressource_bundles WHERE id=%s", (bundle_id,)).fetchone()
     conn.close()
     return jsonify({'id': row['id'], 'nom': row['nom'], 'description': row['description'], 'icone': row['icone'], 'ordre': row['ordre']})
 
@@ -13750,13 +13821,13 @@ def api_admin_bundles_update(bundle_id):
     description = (data.get('description') or '').strip() or None
     icone = (data.get('icone') or 'folder').strip()
     conn = get_db_connection()
-    if not conn.execute("SELECT id FROM ressource_bundles WHERE id=?", (bundle_id,)).fetchone():
+    if not conn.execute("SELECT id FROM ressource_bundles WHERE id=%s", (bundle_id,)).fetchone():
         conn.close()
         return jsonify({'error': 'Bundle introuvable'}), 404
-    conn.execute("UPDATE ressource_bundles SET nom=?, description=?, icone=? WHERE id=?",
+    conn.execute("UPDATE ressource_bundles SET nom=%s, description=%s, icone=%s WHERE id=%s",
         (nom, description, icone, bundle_id))
     conn.commit()
-    row = conn.execute("SELECT * FROM ressource_bundles WHERE id=?", (bundle_id,)).fetchone()
+    row = conn.execute("SELECT * FROM ressource_bundles WHERE id=%s", (bundle_id,)).fetchone()
     conn.close()
     return jsonify({'id': row['id'], 'nom': row['nom'], 'description': row['description'], 'icone': row['icone'], 'ordre': row['ordre']})
 
@@ -13764,11 +13835,11 @@ def api_admin_bundles_update(bundle_id):
 @admin_required
 def api_admin_bundles_delete(bundle_id):
     conn = get_db_connection()
-    if not conn.execute("SELECT id FROM ressource_bundles WHERE id=?", (bundle_id,)).fetchone():
+    if not conn.execute("SELECT id FROM ressource_bundles WHERE id=%s", (bundle_id,)).fetchone():
         conn.close()
         return jsonify({'error': 'Bundle introuvable'}), 404
-    conn.execute("UPDATE client_ressources SET bundle_id=NULL WHERE bundle_id=?", (bundle_id,))
-    conn.execute("DELETE FROM ressource_bundles WHERE id=?", (bundle_id,))
+    conn.execute("UPDATE client_ressources SET bundle_id=NULL WHERE bundle_id=%s", (bundle_id,))
+    conn.execute("DELETE FROM ressource_bundles WHERE id=%s", (bundle_id,))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -13780,7 +13851,7 @@ def api_client_factures_list():
     conn = get_db_connection()
     rows = conn.execute(
         "SELECT id, numero, statut, total, date_emission, date_echeance "
-        "FROM factures WHERE id_client = ? AND statut NOT IN ('ouverte', 'annulee') "
+        "FROM factures WHERE id_client = %s AND statut NOT IN ('ouverte', 'annulee') "
         "ORDER BY date_emission DESC",
         (client_id,)
     ).fetchall()
@@ -13818,7 +13889,7 @@ def api_client_facture_pdf(facture_id):
     client_id = session['user_id']
     conn = get_db_connection()
     f = conn.execute(
-        "SELECT pdf_path, numero FROM factures WHERE id = ? AND id_client = ?",
+        "SELECT pdf_path, numero FROM factures WHERE id = %s AND id_client = %s",
         (facture_id, client_id)
     ).fetchone()
     conn.close()
@@ -13838,13 +13909,13 @@ def api_client_facture_correction(facture_id):
         return jsonify({'error': 'Message requis'}), 400
     conn = get_db_connection()
     f = conn.execute(
-        "SELECT numero FROM factures WHERE id = ? AND id_client = ?",
+        "SELECT numero FROM factures WHERE id = %s AND id_client = %s",
         (facture_id, client_id)
     ).fetchone()
     if not f:
         conn.close()
         return jsonify({'error': 'Facture introuvable'}), 404
-    client = conn.execute("SELECT nom_complet FROM clients WHERE id = ?", (client_id,)).fetchone()
+    client = conn.execute("SELECT nom_complet FROM clients WHERE id = %s", (client_id,)).fetchone()
     nom_client = client['nom_complet'] if client else 'Client'
     push_admin_notif(
         conn,
@@ -13872,11 +13943,11 @@ def api_client_notifications_list():
     user_id = session['user_id']
     conn = get_db_connection()
     rows = conn.execute(
-        "SELECT * FROM notifications WHERE id_client = ? ORDER BY created_at DESC LIMIT 50",
+        "SELECT * FROM notifications WHERE id_client = %s ORDER BY created_at DESC LIMIT 50",
         (user_id,)
     ).fetchall()
     unread = conn.execute(
-        "SELECT COUNT(*) FROM notifications WHERE id_client = ? AND is_read = 0", (user_id,)
+        "SELECT COUNT(*) FROM notifications WHERE id_client = %s AND is_read = 0", (user_id,)
     ).fetchone()[0]
     conn.close()
     return jsonify({
@@ -13894,7 +13965,7 @@ def api_client_notifications_list():
 def api_client_notification_read(notif_id):
     user_id = session['user_id']
     conn = get_db_connection()
-    conn.execute("UPDATE notifications SET is_read=1 WHERE id=? AND id_client=?", (notif_id, user_id))
+    conn.execute("UPDATE notifications SET is_read=1 WHERE id=%s AND id_client=%s", (notif_id, user_id))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -13905,7 +13976,7 @@ def api_client_notification_read(notif_id):
 def api_client_notifications_read_all():
     user_id = session['user_id']
     conn = get_db_connection()
-    conn.execute("UPDATE notifications SET is_read=1 WHERE id_client=? AND is_read=0", (user_id,))
+    conn.execute("UPDATE notifications SET is_read=1 WHERE id_client=%s AND is_read=0", (user_id,))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -13918,8 +13989,8 @@ def api_client_ressources_list():
     conn = get_db_connection()
     rows = conn.execute("""
         SELECT * FROM client_ressources
-        WHERE id_client IS NULL OR id_client = ?
-           OR id IN (SELECT id_ressource FROM ressource_assignations WHERE id_client = ?)
+        WHERE id_client IS NULL OR id_client = %s
+           OR id IN (SELECT id_ressource FROM ressource_assignations WHERE id_client = %s)
         ORDER BY created_at DESC
     """, (session['user_id'], session['user_id'])).fetchall()
     conn.close()
@@ -13948,7 +14019,7 @@ def _ressource_image_to_dict(img):
 def api_admin_ressource_images_list(ressource_id):
     conn = get_db_connection()
     rows = conn.execute(
-        "SELECT * FROM ressource_images WHERE id_ressource=? ORDER BY ordre ASC, id ASC",
+        "SELECT * FROM ressource_images WHERE id_ressource=%s ORDER BY ordre ASC, id ASC",
         (ressource_id,)
     ).fetchall()
     conn.close()
@@ -13958,7 +14029,7 @@ def api_admin_ressource_images_list(ressource_id):
 @admin_required
 def api_admin_ressource_images_create(ressource_id):
     conn = get_db_connection()
-    ressource = conn.execute("SELECT * FROM client_ressources WHERE id=?", (ressource_id,)).fetchone()
+    ressource = conn.execute("SELECT * FROM client_ressources WHERE id=%s", (ressource_id,)).fetchone()
     if not ressource:
         conn.close()
         return jsonify({'error': 'Ressource introuvable'}), 404
@@ -13988,11 +14059,11 @@ def api_admin_ressource_images_create(ressource_id):
 
     cur = conn.execute("""
         INSERT INTO ressource_images (id_ressource, drive_file_id, nom_fichier, legende, section_id, ordre)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (ressource_id, drive_file_id, nom_fichier, legende, section_id, ordre))
-    image_id = cur.lastrowid
+        VALUES (%s, %s, %s, %s, %s, %s)
+     RETURNING id""", (ressource_id, drive_file_id, nom_fichier, legende, section_id, ordre))
+    image_id = cur.fetchone()['id']
     conn.commit()
-    row = conn.execute("SELECT * FROM ressource_images WHERE id=?", (image_id,)).fetchone()
+    row = conn.execute("SELECT * FROM ressource_images WHERE id=%s", (image_id,)).fetchone()
     conn.close()
     return jsonify(_ressource_image_to_dict(row))
 
@@ -14001,7 +14072,7 @@ def api_admin_ressource_images_create(ressource_id):
 def api_admin_ressource_images_update(ressource_id, image_id):
     conn = get_db_connection()
     row = conn.execute(
-        "SELECT * FROM ressource_images WHERE id=? AND id_ressource=?",
+        "SELECT * FROM ressource_images WHERE id=%s AND id_ressource=%s",
         (image_id, ressource_id)
     ).fetchone()
     if not row:
@@ -14015,11 +14086,11 @@ def api_admin_ressource_images_update(ressource_id, image_id):
     if isinstance(section_id, str):
         section_id = section_id.strip() or None
     conn.execute(
-        "UPDATE ressource_images SET legende=?, section_id=? WHERE id=?",
+        "UPDATE ressource_images SET legende=%s, section_id=%s WHERE id=%s",
         (legende, section_id, image_id)
     )
     conn.commit()
-    row = conn.execute("SELECT * FROM ressource_images WHERE id=?", (image_id,)).fetchone()
+    row = conn.execute("SELECT * FROM ressource_images WHERE id=%s", (image_id,)).fetchone()
     conn.close()
     return jsonify(_ressource_image_to_dict(row))
 
@@ -14028,7 +14099,7 @@ def api_admin_ressource_images_update(ressource_id, image_id):
 def api_admin_ressource_images_delete(ressource_id, image_id):
     conn = get_db_connection()
     row = conn.execute(
-        "SELECT * FROM ressource_images WHERE id=? AND id_ressource=?",
+        "SELECT * FROM ressource_images WHERE id=%s AND id_ressource=%s",
         (image_id, ressource_id)
     ).fetchone()
     if not row:
@@ -14039,7 +14110,7 @@ def api_admin_ressource_images_delete(ressource_id, image_id):
             delete_drive_file(row['drive_file_id'])
         except Exception as e:
             print(f"[RESSOURCES] Suppression image Drive échouée: {e}")
-    conn.execute("DELETE FROM ressource_images WHERE id=?", (image_id,))
+    conn.execute("DELETE FROM ressource_images WHERE id=%s", (image_id,))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -14048,7 +14119,7 @@ def api_admin_ressource_images_delete(ressource_id, image_id):
 def api_ressource_images_public(ressource_id):
     conn = get_db_connection()
     rows = conn.execute(
-        "SELECT * FROM ressource_images WHERE id_ressource=? ORDER BY ordre ASC, id ASC",
+        "SELECT * FROM ressource_images WHERE id_ressource=%s ORDER BY ordre ASC, id ASC",
         (ressource_id,)
     ).fetchall()
     conn.close()
@@ -14087,10 +14158,10 @@ def mediatech_admin_creer():
     except Exception:
         drive_folder_id = None
     conn = get_db_connection()
-    conn.execute("INSERT INTO mediatech_gabarits (nom, description, drive_folder_id) VALUES (?, ?, ?)",
+    conn.execute("INSERT INTO mediatech_gabarits (nom, description, drive_folder_id) VALUES (%s, %s, %s) RETURNING id",
                  (nom, description, drive_folder_id))
     conn.commit()
-    gabarit_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    gabarit_id = conn.execute("SELECT lastval()").fetchone()[0]
     if 'preview' in request.files and drive_folder_id:
         f = request.files['preview']
         if f and f.filename:
@@ -14098,7 +14169,7 @@ def mediatech_admin_creer():
                 content = f.read()
                 mimetype = f.content_type or 'image/jpeg'
                 uploaded = upload_bytes(drive_folder_id, f'_preview_{secure_filename(f.filename)}', content, mimetype)
-                conn.execute("UPDATE mediatech_gabarits SET preview_drive_id = ? WHERE id = ?",
+                conn.execute("UPDATE mediatech_gabarits SET preview_drive_id = %s WHERE id = %s",
                              (uploaded['id'], gabarit_id))
                 conn.commit()
             except Exception as e:
@@ -14111,7 +14182,7 @@ def mediatech_admin_creer():
 @admin_required
 def mediatech_admin_supprimer(gabarit_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM mediatech_gabarits WHERE id = ?", (gabarit_id,))
+    conn.execute("DELETE FROM mediatech_gabarits WHERE id = %s", (gabarit_id,))
     conn.commit()
     conn.close()
     flash("Dossier supprimé.", "success")
@@ -14121,7 +14192,7 @@ def mediatech_admin_supprimer(gabarit_id):
 @admin_required
 def mediatech_admin_upload_fichier(gabarit_id):
     conn = get_db_connection()
-    row = conn.execute("SELECT * FROM mediatech_gabarits WHERE id = ?", (gabarit_id,)).fetchone()
+    row = conn.execute("SELECT * FROM mediatech_gabarits WHERE id = %s", (gabarit_id,)).fetchone()
     conn.close()
     if not row:
         flash("Dossier introuvable.", "error")
@@ -14135,7 +14206,7 @@ def mediatech_admin_upload_fichier(gabarit_id):
         if not folder_id:
             folder_id = create_folder(row['nom'], parent_id=_gabarits_root())
             conn = get_db_connection()
-            conn.execute("UPDATE mediatech_gabarits SET drive_folder_id = ? WHERE id = ?",
+            conn.execute("UPDATE mediatech_gabarits SET drive_folder_id = %s WHERE id = %s",
                          (folder_id, gabarit_id))
             conn.commit()
             conn.close()
@@ -14153,9 +14224,9 @@ def mediatech_admin_supprimer_fichier(gabarit_id, file_id):
     try:
         delete_drive_file(file_id)
         conn = get_db_connection()
-        row = conn.execute("SELECT preview_drive_id FROM mediatech_gabarits WHERE id = ?", (gabarit_id,)).fetchone()
+        row = conn.execute("SELECT preview_drive_id FROM mediatech_gabarits WHERE id = %s", (gabarit_id,)).fetchone()
         if row and row['preview_drive_id'] == file_id:
-            conn.execute("UPDATE mediatech_gabarits SET preview_drive_id = NULL WHERE id = ?", (gabarit_id,))
+            conn.execute("UPDATE mediatech_gabarits SET preview_drive_id = NULL WHERE id = %s", (gabarit_id,))
             conn.commit()
         conn.close()
         flash("Fichier supprimé.", "success")
@@ -14167,7 +14238,7 @@ def mediatech_admin_supprimer_fichier(gabarit_id, file_id):
 @admin_required
 def mediatech_admin_set_preview(gabarit_id):
     conn = get_db_connection()
-    row = conn.execute("SELECT * FROM mediatech_gabarits WHERE id = ?", (gabarit_id,)).fetchone()
+    row = conn.execute("SELECT * FROM mediatech_gabarits WHERE id = %s", (gabarit_id,)).fetchone()
     conn.close()
     if not row:
         flash("Dossier introuvable.", "error")
@@ -14181,7 +14252,7 @@ def mediatech_admin_set_preview(gabarit_id):
         if not folder_id:
             folder_id = create_folder(row['nom'], parent_id=_gabarits_root())
             conn = get_db_connection()
-            conn.execute("UPDATE mediatech_gabarits SET drive_folder_id = ? WHERE id = ?",
+            conn.execute("UPDATE mediatech_gabarits SET drive_folder_id = %s WHERE id = %s",
                          (folder_id, gabarit_id))
             conn.commit()
             conn.close()
@@ -14194,7 +14265,7 @@ def mediatech_admin_set_preview(gabarit_id):
         mimetype = f.content_type or 'image/jpeg'
         uploaded = upload_bytes(folder_id, f'_preview_{secure_filename(f.filename)}', content, mimetype)
         conn = get_db_connection()
-        conn.execute("UPDATE mediatech_gabarits SET preview_drive_id = ? WHERE id = ?",
+        conn.execute("UPDATE mediatech_gabarits SET preview_drive_id = %s WHERE id = %s",
                      (uploaded['id'], gabarit_id))
         conn.commit()
         conn.close()
@@ -14215,7 +14286,7 @@ def mediatech_galerie():
 @login_required
 def mediatech_dossier(gabarit_id):
     conn = get_db_connection()
-    row = conn.execute("SELECT * FROM mediatech_gabarits WHERE id = ?", (gabarit_id,)).fetchone()
+    row = conn.execute("SELECT * FROM mediatech_gabarits WHERE id = %s", (gabarit_id,)).fetchone()
     conn.close()
     if not row:
         flash("Dossier introuvable.", "error")
@@ -14284,11 +14355,11 @@ def api_gabarits_create():
         drive_folder_id = None
     conn = get_db_connection()
     conn.execute(
-        "INSERT INTO mediatech_gabarits (nom, description, drive_folder_id) VALUES (?, ?, ?)",
+        "INSERT INTO mediatech_gabarits (nom, description, drive_folder_id) VALUES (%s, %s, %s) RETURNING id",
         (nom, description, drive_folder_id)
     )
     conn.commit()
-    gabarit_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    gabarit_id = conn.execute("SELECT lastval()").fetchone()[0]
     preview_drive_id = None
     if 'preview' in request.files:
         f = request.files['preview']
@@ -14298,7 +14369,7 @@ def api_gabarits_create():
                 mimetype = f.content_type or 'image/jpeg'
                 uploaded = upload_bytes(drive_folder_id, f'_preview_{secure_filename(f.filename)}', content, mimetype)
                 preview_drive_id = uploaded['id']
-                conn.execute("UPDATE mediatech_gabarits SET preview_drive_id = ? WHERE id = ?",
+                conn.execute("UPDATE mediatech_gabarits SET preview_drive_id = %s WHERE id = %s",
                              (preview_drive_id, gabarit_id))
                 conn.commit()
             except Exception as e:
@@ -14311,7 +14382,7 @@ def api_gabarits_create():
 @outils_write_required
 def api_gabarits_delete(gabarit_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM mediatech_gabarits WHERE id = ?", (gabarit_id,))
+    conn.execute("DELETE FROM mediatech_gabarits WHERE id = %s", (gabarit_id,))
     conn.commit()
     conn.close()
     return jsonify({'ok': True})
@@ -14320,7 +14391,7 @@ def api_gabarits_delete(gabarit_id):
 @outils_read_required
 def api_gabarits_files(gabarit_id):
     conn = get_db_connection()
-    row = conn.execute("SELECT * FROM mediatech_gabarits WHERE id = ?", (gabarit_id,)).fetchone()
+    row = conn.execute("SELECT * FROM mediatech_gabarits WHERE id = %s", (gabarit_id,)).fetchone()
     conn.close()
     if not row:
         return jsonify({'error': 'Gabarit introuvable'}), 404
@@ -14347,7 +14418,7 @@ def api_gabarits_files(gabarit_id):
 @outils_write_required
 def api_gabarits_upload_file(gabarit_id):
     conn = get_db_connection()
-    row = conn.execute("SELECT * FROM mediatech_gabarits WHERE id = ?", (gabarit_id,)).fetchone()
+    row = conn.execute("SELECT * FROM mediatech_gabarits WHERE id = %s", (gabarit_id,)).fetchone()
     conn.close()
     if not row:
         return jsonify({'error': 'Gabarit introuvable'}), 404
@@ -14359,7 +14430,7 @@ def api_gabarits_upload_file(gabarit_id):
         if not folder_id:
             folder_id = create_folder(row['nom'], parent_id=_gabarits_root())
             conn = get_db_connection()
-            conn.execute("UPDATE mediatech_gabarits SET drive_folder_id = ? WHERE id = ?", (folder_id, gabarit_id))
+            conn.execute("UPDATE mediatech_gabarits SET drive_folder_id = %s WHERE id = %s", (folder_id, gabarit_id))
             conn.commit()
             conn.close()
         content = file.read()
@@ -14376,9 +14447,9 @@ def api_gabarits_delete_file(gabarit_id, file_id):
     try:
         delete_drive_file(file_id)
         conn = get_db_connection()
-        row = conn.execute("SELECT preview_drive_id FROM mediatech_gabarits WHERE id = ?", (gabarit_id,)).fetchone()
+        row = conn.execute("SELECT preview_drive_id FROM mediatech_gabarits WHERE id = %s", (gabarit_id,)).fetchone()
         if row and row['preview_drive_id'] == file_id:
-            conn.execute("UPDATE mediatech_gabarits SET preview_drive_id = NULL WHERE id = ?", (gabarit_id,))
+            conn.execute("UPDATE mediatech_gabarits SET preview_drive_id = NULL WHERE id = %s", (gabarit_id,))
             conn.commit()
         conn.close()
         return jsonify({'ok': True})
@@ -14389,7 +14460,7 @@ def api_gabarits_delete_file(gabarit_id, file_id):
 @outils_write_required
 def api_gabarits_set_preview(gabarit_id):
     conn = get_db_connection()
-    row = conn.execute("SELECT * FROM mediatech_gabarits WHERE id = ?", (gabarit_id,)).fetchone()
+    row = conn.execute("SELECT * FROM mediatech_gabarits WHERE id = %s", (gabarit_id,)).fetchone()
     conn.close()
     if not row:
         return jsonify({'error': 'Gabarit introuvable'}), 404
@@ -14398,7 +14469,7 @@ def api_gabarits_set_preview(gabarit_id):
     file_id = data.get('file_id') or request.form.get('file_id')
     if file_id:
         conn = get_db_connection()
-        conn.execute("UPDATE mediatech_gabarits SET preview_drive_id = ? WHERE id = ?", (file_id, gabarit_id))
+        conn.execute("UPDATE mediatech_gabarits SET preview_drive_id = %s WHERE id = %s", (file_id, gabarit_id))
         conn.commit()
         conn.close()
         return jsonify({'ok': True, 'preview_url': f'/api/v1/tools/file/{file_id}'})
@@ -14411,7 +14482,7 @@ def api_gabarits_set_preview(gabarit_id):
         if not folder_id:
             folder_id = create_folder(row['nom'], parent_id=_gabarits_root())
             conn = get_db_connection()
-            conn.execute("UPDATE mediatech_gabarits SET drive_folder_id = ? WHERE id = ?", (folder_id, gabarit_id))
+            conn.execute("UPDATE mediatech_gabarits SET drive_folder_id = %s WHERE id = %s", (folder_id, gabarit_id))
             conn.commit()
             conn.close()
         # Supprimer l'ancienne preview si elle existe
@@ -14424,7 +14495,7 @@ def api_gabarits_set_preview(gabarit_id):
         mimetype = file.content_type or 'image/jpeg'
         uploaded = upload_bytes(folder_id, f'_preview_{secure_filename(file.filename)}', content, mimetype)
         conn = get_db_connection()
-        conn.execute("UPDATE mediatech_gabarits SET preview_drive_id = ? WHERE id = ?",
+        conn.execute("UPDATE mediatech_gabarits SET preview_drive_id = %s WHERE id = %s",
                      (uploaded['id'], gabarit_id))
         conn.commit()
         conn.close()
@@ -14440,7 +14511,7 @@ def api_tools_config():
         if session.get('is_admin'):
             return jsonify({'role': 'admin', 'social': None, 'pdf': None})
         conn = get_db_connection()
-        row = conn.execute("SELECT outils_config FROM clients WHERE id = ?",
+        row = conn.execute("SELECT outils_config FROM clients WHERE id = %s",
                            (session['user_id'],)).fetchone()
         conn.close()
         cfg = {}
@@ -14454,7 +14525,7 @@ def api_tools_config():
                         'pdf':    cfg.get('pdf',    None)})
     if session.get('pigiste_id'):
         conn = get_db_connection()
-        pig = conn.execute("SELECT tools_config FROM pigistes WHERE id = ?",
+        pig = conn.execute("SELECT tools_config FROM pigistes WHERE id = %s",
                            (session['pigiste_id'],)).fetchone()
         conn.close()
         cfg = {}
@@ -14473,7 +14544,7 @@ def api_tools_config():
 def api_admin_get_pigiste_tools(pigiste_id):
     import json as _json
     conn = get_db_connection()
-    row = conn.execute("SELECT tools_config FROM pigistes WHERE id = ?", (pigiste_id,)).fetchone()
+    row = conn.execute("SELECT tools_config FROM pigistes WHERE id = %s", (pigiste_id,)).fetchone()
     conn.close()
     if not row:
         return jsonify({'error': 'Pigiste introuvable'}), 404
@@ -14491,7 +14562,7 @@ def api_admin_pigiste_tools(pigiste_id):
     import json as _json
     data = request.get_json(force=True) or {}
     conn = get_db_connection()
-    conn.execute("UPDATE pigistes SET tools_config = ? WHERE id = ?",
+    conn.execute("UPDATE pigistes SET tools_config = %s WHERE id = %s",
                  (_json.dumps(data), pigiste_id))
     conn.commit()
     conn.close()
@@ -14600,7 +14671,7 @@ def _current_admin_email(conn):
     uid = session.get('user_id')
     if not uid:
         return None
-    row = conn.execute("SELECT email FROM clients WHERE id=?", (uid,)).fetchone()
+    row = conn.execute("SELECT email FROM clients WHERE id=%s", (uid,)).fetchone()
     return row['email'] if row else None
 
 @app.route('/api/v1/admin/notifications', methods=['GET'])
@@ -14610,13 +14681,13 @@ def api_admin_notifications_list():
     email = _current_admin_email(conn)
     rows = conn.execute("""
         SELECT * FROM admin_notifications
-        WHERE destinataire IS NULL OR destinataire = '' OR destinataire = ?
+        WHERE destinataire IS NULL OR destinataire = '' OR destinataire = %s
         ORDER BY is_read ASC, created_at DESC
         LIMIT 50
     """, (email,)).fetchall()
     unread = conn.execute("""
         SELECT COUNT(*) FROM admin_notifications
-        WHERE is_read = 0 AND (destinataire IS NULL OR destinataire = '' OR destinataire = ?)
+        WHERE is_read = 0 AND (destinataire IS NULL OR destinataire = '' OR destinataire = %s)
     """, (email,)).fetchone()[0]
     conn.close()
     return jsonify({'items': [dict(r) for r in rows], 'unread': unread})
@@ -14625,7 +14696,7 @@ def api_admin_notifications_list():
 @admin_required
 def api_admin_notifications_read(notif_id):
     conn = get_db_connection()
-    conn.execute("UPDATE admin_notifications SET is_read=1 WHERE id=?", (notif_id,))
+    conn.execute("UPDATE admin_notifications SET is_read=1 WHERE id=%s", (notif_id,))
     conn.close()
     return jsonify({'success': True})
 
@@ -14636,7 +14707,7 @@ def api_admin_notifications_read_all():
     email = _current_admin_email(conn)
     conn.execute("""
         UPDATE admin_notifications SET is_read=1
-        WHERE is_read=0 AND (destinataire IS NULL OR destinataire = '' OR destinataire = ?)
+        WHERE is_read=0 AND (destinataire IS NULL OR destinataire = '' OR destinataire = %s)
     """, (email,))
     conn.close()
     return jsonify({'success': True})
@@ -14658,8 +14729,8 @@ def api_push_subscribe():
     conn = get_db_connection()
     email = _current_admin_email(conn)
     conn.execute(
-        "INSERT INTO push_subscriptions (email, endpoint, p256dh, auth) VALUES (?, ?, ?, ?) "
-        "ON CONFLICT(endpoint) DO UPDATE SET email=excluded.email, p256dh=excluded.p256dh, auth=excluded.auth",
+        "INSERT INTO push_subscriptions (email, endpoint, p256dh, auth) VALUES (%s, %s, %s, %s) "
+        "ON CONFLICT(endpoint) DO UPDATE SET email=excluded.email, p256dh=excluded.p256dh, auth=excluded.auth RETURNING id",
         (email, endpoint, p256dh, auth)
     )
     conn.close()
@@ -14672,7 +14743,7 @@ def api_push_unsubscribe():
     endpoint = data.get('endpoint')
     if endpoint:
         conn = get_db_connection()
-        conn.execute("DELETE FROM push_subscriptions WHERE endpoint=?", (endpoint,))
+        conn.execute("DELETE FROM push_subscriptions WHERE endpoint=%s", (endpoint,))
         conn.close()
     return jsonify({'success': True})
 
@@ -14734,7 +14805,7 @@ def _todos_query(user_id, view='mine'):
     todo_ids = [t['id'] for t in todos]
     assignees_by_todo: dict = {}
     if todo_ids:
-        placeholders = ','.join('?' * len(todo_ids))
+        placeholders = ','.join(['%s'] * len(todo_ids))
         rows = conn.execute(
             f"SELECT ta.todo_id, c.id, c.nom_complet FROM todo_assignees ta "
             f"JOIN clients c ON c.id = ta.admin_id WHERE ta.todo_id IN ({placeholders})",
@@ -14787,12 +14858,12 @@ def _create_todo(default_assignee_id, data):
             print(f"[QUICKADD] parse échoué: {e}")
     conn = get_db_connection()
     cur = conn.execute(
-        "INSERT INTO todos_perso (texte, priorite, date_echeance, is_titre, parent_titre_id) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO todos_perso (texte, priorite, date_echeance, is_titre, parent_titre_id) VALUES (%s, %s, %s, %s, %s) RETURNING id",
         (texte, priorite, date_echeance, is_titre, parent_titre_id)
     )
-    todo_id = cur.lastrowid
+    todo_id = cur.fetchone()['id']
     for admin_id in assigne_admin_ids:
-        conn.execute("INSERT OR IGNORE INTO todo_assignees (todo_id, admin_id) VALUES (?, ?)", (todo_id, admin_id))
+        conn.execute("INSERT INTO todo_assignees (todo_id, admin_id) VALUES (%s, %s)", (todo_id, admin_id))
     conn.commit()
     cal_event_id = ''
     if agenda_date and agenda_heure and not is_titre:
@@ -14800,7 +14871,7 @@ def _create_todo(default_assignee_id, data):
             from calendar_service import create_task_block
             cal_event_id = create_task_block(texte, agenda_date, agenda_heure, agenda_duree, priorite)
             if cal_event_id:
-                conn.execute("UPDATE todos_perso SET calendar_event_id=?, date_echeance=? WHERE id=?",
+                conn.execute("UPDATE todos_perso SET calendar_event_id=%s, date_echeance=%s WHERE id=%s",
                              (cal_event_id, agenda_date, todo_id))
         except Exception as e:
             print(f"[CALENDAR] Task block: {e}")
@@ -14809,13 +14880,13 @@ def _create_todo(default_assignee_id, data):
             from calendar_service import create_todo_reminder
             cal_event_id = create_todo_reminder(texte, date_echeance)
             if cal_event_id:
-                conn.execute("UPDATE todos_perso SET calendar_event_id=? WHERE id=?", (cal_event_id, todo_id))
+                conn.execute("UPDATE todos_perso SET calendar_event_id=%s WHERE id=%s", (cal_event_id, todo_id))
         except Exception as e:
             print(f"[CALENDAR] Todo reminder: {e}")
     if not is_titre:
         push_admin_notif(conn, "Nouvelle tâche", texte, type='todo', lien='/admin')
     conn.commit()
-    todo = conn.execute("SELECT * FROM todos_perso WHERE id=?", (todo_id,)).fetchone()
+    todo = conn.execute("SELECT * FROM todos_perso WHERE id=%s", (todo_id,)).fetchone()
     d = dict(todo)
     d['assignees'] = _todo_assignees(conn, todo_id)
     conn.close()
@@ -14831,12 +14902,12 @@ def _toggle_todo(todo_id):
     """Bascule coché/décoché — utilisée par la session CRM et par le jeton d'appareil de
     la PWA Tâches. Répercute sur la roadmap liée si applicable."""
     conn = get_db_connection()
-    todo = conn.execute("SELECT * FROM todos_perso WHERE id=?", (todo_id,)).fetchone()
+    todo = conn.execute("SELECT * FROM todos_perso WHERE id=%s", (todo_id,)).fetchone()
     if not todo:
         conn.close()
         return {'error': 'Todo introuvable'}, 404
     new_val = 0 if todo['est_coche'] else 1
-    conn.execute("UPDATE todos_perso SET est_coche=? WHERE id=?", (new_val, todo_id))
+    conn.execute("UPDATE todos_perso SET est_coche=%s WHERE id=%s", (new_val, todo_id))
     conn.commit()
     linked_roadmap_todo_id = todo['linked_roadmap_todo_id'] if 'linked_roadmap_todo_id' in todo.keys() else None
     if linked_roadmap_todo_id:
@@ -14867,49 +14938,49 @@ def _update_todo(todo_id, data):
     """Mise à jour partagée d'une tâche — utilisée par la session CRM et par le jeton
     d'appareil de la PWA Tâches."""
     conn = get_db_connection()
-    todo = conn.execute("SELECT * FROM todos_perso WHERE id=?", (todo_id,)).fetchone()
+    todo = conn.execute("SELECT * FROM todos_perso WHERE id=%s", (todo_id,)).fetchone()
     if not todo:
         conn.close()
         return {'error': 'Todo introuvable'}, 404
     if 'priorite' in data:
-        conn.execute("UPDATE todos_perso SET priorite=? WHERE id=?", (data['priorite'], todo_id))
+        conn.execute("UPDATE todos_perso SET priorite=%s WHERE id=%s", (data['priorite'], todo_id))
     if 'texte' in data:
         txt = (data.get('texte') or '').strip()
         if txt:
-            conn.execute("UPDATE todos_perso SET texte=? WHERE id=?", (txt, todo_id))
+            conn.execute("UPDATE todos_perso SET texte=%s WHERE id=%s", (txt, todo_id))
     if 'date_echeance' in data:
-        conn.execute("UPDATE todos_perso SET date_echeance=? WHERE id=?", (data.get('date_echeance') or None, todo_id))
+        conn.execute("UPDATE todos_perso SET date_echeance=%s WHERE id=%s", (data.get('date_echeance') or None, todo_id))
     if 'contact_nom' in data:
-        conn.execute("UPDATE todos_perso SET contact_nom=? WHERE id=?", (data.get('contact_nom') or None, todo_id))
+        conn.execute("UPDATE todos_perso SET contact_nom=%s WHERE id=%s", (data.get('contact_nom') or None, todo_id))
     if 'contact_telephone' in data:
-        conn.execute("UPDATE todos_perso SET contact_telephone=? WHERE id=?", (data.get('contact_telephone') or None, todo_id))
+        conn.execute("UPDATE todos_perso SET contact_telephone=%s WHERE id=%s", (data.get('contact_telephone') or None, todo_id))
     if 'contact_courriel' in data:
-        conn.execute("UPDATE todos_perso SET contact_courriel=? WHERE id=?", (data.get('contact_courriel') or None, todo_id))
+        conn.execute("UPDATE todos_perso SET contact_courriel=%s WHERE id=%s", (data.get('contact_courriel') or None, todo_id))
     # Assignation à un projet (le client est déduit du projet). On sort la tâche de sa section.
     if 'projet_id' in data:
         pid = data['projet_id']
         if pid:
-            proj = conn.execute("SELECT id, nom_projet, id_client FROM projets WHERE id=?", (pid,)).fetchone()
+            proj = conn.execute("SELECT id, nom_projet, id_client FROM projets WHERE id=%s", (pid,)).fetchone()
             if proj:
                 conn.execute(
-                    "UPDATE todos_perso SET projet_id=?, projet_nom=?, client_id=?, parent_titre_id=NULL WHERE id=?",
+                    "UPDATE todos_perso SET projet_id=%s, projet_nom=%s, client_id=%s, parent_titre_id=NULL WHERE id=%s",
                     (proj['id'], proj['nom_projet'], proj['id_client'], todo_id)
                 )
         else:
-            conn.execute("UPDATE todos_perso SET projet_id=NULL, projet_nom=NULL WHERE id=?", (todo_id,))
+            conn.execute("UPDATE todos_perso SET projet_id=NULL, projet_nom=NULL WHERE id=%s", (todo_id,))
     # Assignation à un client seul (retire le projet éventuel). On sort la tâche de sa section.
     if 'client_id' in data:
         cid = data['client_id']
         if cid:
             conn.execute(
-                "UPDATE todos_perso SET client_id=?, projet_id=NULL, projet_nom=NULL, parent_titre_id=NULL WHERE id=?",
+                "UPDATE todos_perso SET client_id=%s, projet_id=NULL, projet_nom=NULL, parent_titre_id=NULL WHERE id=%s",
                 (cid, todo_id)
             )
         else:
-            conn.execute("UPDATE todos_perso SET client_id=NULL WHERE id=?", (todo_id,))
+            conn.execute("UPDATE todos_perso SET client_id=NULL WHERE id=%s", (todo_id,))
     # Déplacer sous une section existante (titre)
     if 'parent_titre_id' in data:
-        conn.execute("UPDATE todos_perso SET parent_titre_id=? WHERE id=?",
+        conn.execute("UPDATE todos_perso SET parent_titre_id=%s WHERE id=%s",
                      (data['parent_titre_id'] or None, todo_id))
     # Assignation à un ou plusieurs comptes admin (liste vide = tâche partagée,
     # visible par toute l'équipe) — remplace le set complet des assigné·es. Notifie
@@ -14918,16 +14989,16 @@ def _update_todo(todo_id, data):
     if 'assigne_admin_ids' in data:
         old_ids = {a['id'] for a in _todo_assignees(conn, todo_id)}
         new_ids = {i for i in (data.get('assigne_admin_ids') or []) if i}
-        conn.execute("DELETE FROM todo_assignees WHERE todo_id=?", (todo_id,))
+        conn.execute("DELETE FROM todo_assignees WHERE todo_id=%s", (todo_id,))
         for admin_id in new_ids:
-            conn.execute("INSERT OR IGNORE INTO todo_assignees (todo_id, admin_id) VALUES (?, ?)", (todo_id, admin_id))
+            conn.execute("INSERT INTO todo_assignees (todo_id, admin_id) VALUES (%s, %s)", (todo_id, admin_id))
         added = new_ids - old_ids
         if added:
             texte_notif = (data.get('texte') or todo['texte'] or '').strip()
-            for row in conn.execute(f"SELECT email FROM clients WHERE id IN ({','.join('?' * len(added))})", tuple(added)).fetchall():
+            for row in conn.execute(f"SELECT email FROM clients WHERE id IN ({','.join('%s' * len(added))})", tuple(added)).fetchall():
                 push_admin_notif(conn, "Tâche assignée", texte_notif, type='assignation', lien='/taches', destinataire=row['email'])
     conn.commit()
-    todo = conn.execute("SELECT * FROM todos_perso WHERE id=?", (todo_id,)).fetchone()
+    todo = conn.execute("SELECT * FROM todos_perso WHERE id=%s", (todo_id,)).fetchone()
     d = dict(todo)
     d['assignees'] = _todo_assignees(conn, todo_id)
     conn.close()
@@ -14938,7 +15009,7 @@ def _delete_todo(todo_id):
     """Suppression partagée — utilisée par la session CRM et par le jeton d'appareil de
     la PWA Tâches."""
     conn = get_db_connection()
-    todo = conn.execute("SELECT * FROM todos_perso WHERE id=?", (todo_id,)).fetchone()
+    todo = conn.execute("SELECT * FROM todos_perso WHERE id=%s", (todo_id,)).fetchone()
     if not todo:
         conn.close()
         return {'error': 'Todo introuvable'}, 404
@@ -14948,7 +15019,7 @@ def _delete_todo(todo_id):
             delete_calendar_event(todo['calendar_event_id'])
         except Exception as e:
             print(f"[CALENDAR] Delete todo event: {e}")
-    conn.execute("DELETE FROM todos_perso WHERE id=?", (todo_id,))
+    conn.execute("DELETE FROM todos_perso WHERE id=%s", (todo_id,))
     conn.commit()
     conn.close()
     return {'success': True}, 200
@@ -14966,7 +15037,7 @@ def _planifier_todo(todo_id, data):
     if not date_str:
         return {'error': 'Date requise'}, 400
     conn = get_db_connection()
-    todo = conn.execute("SELECT * FROM todos_perso WHERE id=?", (todo_id,)).fetchone()
+    todo = conn.execute("SELECT * FROM todos_perso WHERE id=%s", (todo_id,)).fetchone()
     if not todo:
         conn.close()
         return {'error': 'Todo introuvable'}, 404
@@ -14983,7 +15054,7 @@ def _planifier_todo(todo_id, data):
     except Exception as e:
         conn.close()
         return {'error': f'Calendrier: {e}'}, 500
-    conn.execute("UPDATE todos_perso SET calendar_event_id=?, date_echeance=? WHERE id=?",
+    conn.execute("UPDATE todos_perso SET calendar_event_id=%s, date_echeance=%s WHERE id=%s",
                  (cal_id, date_str, todo_id))
     conn.commit()
     conn.close()
@@ -14994,7 +15065,7 @@ def _deplanifier_todo(todo_id):
     """Retrait du calendrier partagé — utilisée par la session CRM et par le jeton
     d'appareil de la PWA Tâches."""
     conn = get_db_connection()
-    todo = conn.execute("SELECT * FROM todos_perso WHERE id=?", (todo_id,)).fetchone()
+    todo = conn.execute("SELECT * FROM todos_perso WHERE id=%s", (todo_id,)).fetchone()
     if not todo:
         conn.close()
         return {'error': 'Todo introuvable'}, 404
@@ -15004,7 +15075,7 @@ def _deplanifier_todo(todo_id):
             delete_calendar_event(todo['calendar_event_id'])
         except Exception as e:
             print(f"[CALENDAR] déplanification: {e}")
-    conn.execute("UPDATE todos_perso SET calendar_event_id=NULL WHERE id=?", (todo_id,))
+    conn.execute("UPDATE todos_perso SET calendar_event_id=NULL WHERE id=%s", (todo_id,))
     conn.commit()
     conn.close()
     return {'success': True}, 200
@@ -15043,12 +15114,12 @@ def api_projet_rename(projet_id):
     if not nom:
         return jsonify({'error': 'Nom requis'}), 400
     conn = get_db_connection()
-    proj = conn.execute("SELECT id FROM projets WHERE id=?", (projet_id,)).fetchone()
+    proj = conn.execute("SELECT id FROM projets WHERE id=%s", (projet_id,)).fetchone()
     if not proj:
         conn.close()
         return jsonify({'error': 'Projet introuvable'}), 404
-    conn.execute("UPDATE projets SET nom_projet=? WHERE id=?", (nom, projet_id))
-    conn.execute("UPDATE todos_perso SET projet_nom=? WHERE projet_id=?", (nom, projet_id))
+    conn.execute("UPDATE projets SET nom_projet=%s WHERE id=%s", (nom, projet_id))
+    conn.execute("UPDATE todos_perso SET projet_nom=%s WHERE projet_id=%s", (nom, projet_id))
     conn.commit()
     conn.close()
     return jsonify({'success': True, 'nom_projet': nom})
@@ -15063,14 +15134,14 @@ def api_todos_bulk_assign():
         return jsonify({'error': 'ids requis'}), 400
     ids = [int(i) for i in ids]
     conn = get_db_connection()
-    placeholders = ",".join("?" * len(ids))
+    placeholders = ",".join(["%s"] * len(ids))
     if 'projet_id' in data:
         pid = data['projet_id']
         if pid:
-            proj = conn.execute("SELECT id, nom_projet, id_client FROM projets WHERE id=?", (pid,)).fetchone()
+            proj = conn.execute("SELECT id, nom_projet, id_client FROM projets WHERE id=%s", (pid,)).fetchone()
             if proj:
                 conn.execute(
-                    f"UPDATE todos_perso SET projet_id=?, projet_nom=?, client_id=?, parent_titre_id=NULL WHERE id IN ({placeholders})",
+                    f"UPDATE todos_perso SET projet_id=%s, projet_nom=%s, client_id=%s, parent_titre_id=NULL WHERE id IN ({placeholders})",
                     (proj['id'], proj['nom_projet'], proj['id_client'], *ids))
         else:
             conn.execute(f"UPDATE todos_perso SET projet_id=NULL, projet_nom=NULL WHERE id IN ({placeholders})", ids)
@@ -15078,7 +15149,7 @@ def api_todos_bulk_assign():
         cid = data['client_id']
         if cid:
             conn.execute(
-                f"UPDATE todos_perso SET client_id=?, projet_id=NULL, projet_nom=NULL, parent_titre_id=NULL WHERE id IN ({placeholders})",
+                f"UPDATE todos_perso SET client_id=%s, projet_id=NULL, projet_nom=NULL, parent_titre_id=NULL WHERE id IN ({placeholders})",
                 (cid, *ids))
         else:
             conn.execute(f"UPDATE todos_perso SET client_id=NULL WHERE id IN ({placeholders})", ids)
@@ -15424,7 +15495,7 @@ def _push_checklist_content_to_sanity(projet_id: int, sanity_project_id: str):
         items = conn.execute(
             """SELECT ci.content_key, ci.text_value
                FROM checklist_items ci JOIN checklistes ck ON ck.id = ci.id_checklist
-               WHERE ck.id_projet = ? AND ci.content_key IS NOT NULL
+               WHERE ck.id_projet = %s AND ci.content_key IS NOT NULL
                      AND ci.text_value IS NOT NULL AND ci.text_value != ''""",
             (projet_id,)
         ).fetchall()
@@ -15513,20 +15584,20 @@ def _deploy_to_vercel(repo_full_name: str, project_name: str, env_vars: dict, ve
 @admin_required
 def api_admin_projet_site_prefill(projet_id):
     conn = get_db_connection()
-    projet = conn.execute("SELECT * FROM projets WHERE id=?", (projet_id,)).fetchone()
+    projet = conn.execute("SELECT * FROM projets WHERE id=%s", (projet_id,)).fetchone()
     if not projet:
         conn.close()
         return jsonify({'error': 'Projet introuvable'}), 404
 
-    checklist = conn.execute("SELECT id FROM checklistes WHERE id_projet=?", (projet_id,)).fetchone()
+    checklist = conn.execute("SELECT id FROM checklistes WHERE id_projet=%s", (projet_id,)).fetchone()
     items = []
     if checklist:
         items = conn.execute(
-            "SELECT nom_item, field_type, text_value FROM checklist_items WHERE id_checklist=? AND text_value IS NOT NULL AND text_value != ''",
+            "SELECT nom_item, field_type, text_value FROM checklist_items WHERE id_checklist=%s AND text_value IS NOT NULL AND text_value != ''",
             (checklist['id'],)
         ).fetchall()
 
-    client = conn.execute("SELECT * FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
+    client = conn.execute("SELECT * FROM clients WHERE id=%s", (projet['id_client'],)).fetchone()
     conn.close()
 
     # Normaliser les noms d'items pour le lookup
@@ -15608,7 +15679,7 @@ def api_admin_sites_list():
 @admin_required
 def api_admin_site_get(site_id):
     conn = get_db_connection()
-    site = conn.execute("SELECT * FROM sites WHERE id=?", (site_id,)).fetchone()
+    site = conn.execute("SELECT * FROM sites WHERE id=%s", (site_id,)).fetchone()
     conn.close()
     if not site:
         return jsonify({'error': 'Site introuvable'}), 404
@@ -15620,7 +15691,7 @@ def api_admin_site_get(site_id):
 def api_admin_site_status(site_id):
     conn = get_db_connection()
     site = conn.execute(
-        "SELECT id, status, github_repo, sanity_project_id, vercel_project_id, vercel_url, error_message FROM sites WHERE id=?",
+        "SELECT id, status, github_repo, sanity_project_id, vercel_project_id, vercel_url, error_message FROM sites WHERE id=%s",
         (site_id,)
     ).fetchone()
     conn.close()
@@ -15648,18 +15719,18 @@ def _ensure_test_shadow_site(conn, source_site_id):
        toucher au client_email réel du site d'origine. Ne fait rien si le site source appartient
        déjà à ce compte test, ou si une copie test existe déjà pour lui."""
     row = conn.execute(
-        f"SELECT {','.join(_SITE_CLONE_COLUMNS)}, client_email FROM sites WHERE id=?", (source_site_id,)
+        f"SELECT {','.join(_SITE_CLONE_COLUMNS)}, client_email FROM sites WHERE id=%s", (source_site_id,)
     ).fetchone()
     if not row or (row['client_email'] or '').lower() == TEST_CLIENT_EMAIL.lower():
         return
     existing = conn.execute(
-        "SELECT id FROM sites WHERE LOWER(client_email)=LOWER(?) AND slug=? AND id != ?",
+        "SELECT id FROM sites WHERE LOWER(client_email)=LOWER(%s) AND slug=%s AND id != %s",
         (TEST_CLIENT_EMAIL, row['slug'], source_site_id)
     ).fetchone()
     if existing:
         return
     values = [row[c] for c in _SITE_CLONE_COLUMNS] + [TEST_CLIENT_EMAIL]
-    placeholders = ','.join(['?'] * (len(_SITE_CLONE_COLUMNS) + 1))
+    placeholders = ','.join(['%s'] * (len(_SITE_CLONE_COLUMNS) + 1))
     conn.execute(
         f"INSERT INTO sites ({','.join(_SITE_CLONE_COLUMNS)}, client_email) VALUES ({placeholders})",
         values
@@ -15708,8 +15779,8 @@ def api_admin_sites_create():
                 seo_meta_title, seo_meta_description, seo_keywords,
                 seo_og_image, seo_twitter_handle, seo_logo_url, seo_business_type, seo_price_range,
                 client_email, resend_api_key, site_url, id_projet, status)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'creating')
-        """, (
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'creating')
+         RETURNING id""", (
             template, slug, data['business_name'], data['owner_name'],
             owner_title_db, tagline_db, description_db,
             data.get('address'), data.get('city'), data.get('province', 'QC'), data.get('postal_code'),
@@ -15721,7 +15792,7 @@ def api_admin_sites_create():
             data.get('seo_business_type'), data.get('seo_price_range', '$$'),
             data['client_email'], data.get('resend_api_key', ''), data.get('site_url', ''), _id_projet,
         ))
-        site_id = cur.lastrowid
+        site_id = cur.fetchone()['id']
         conn.commit()
     finally:
         conn.close()
@@ -15740,7 +15811,7 @@ def api_admin_sites_create():
                     _push_checklist_content_to_sanity(_id_projet, sanity_id)
             conn2 = get_db_connection()
             conn2.execute(
-                "UPDATE sites SET github_repo=?, sanity_project_id=?, status='active', updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                "UPDATE sites SET github_repo=%s, sanity_project_id=%s, status='active', updated_at=CURRENT_TIMESTAMP WHERE id=%s",
                 (repo_name, sanity_id, site_id)
             )
             _ensure_test_shadow_site(conn2, site_id)
@@ -15749,7 +15820,7 @@ def api_admin_sites_create():
         except Exception as exc:
             print(f"[SITES] build error site {site_id}: {exc}")
             conn2 = get_db_connection()
-            conn2.execute("UPDATE sites SET status='error', error_message=? WHERE id=?", (str(exc), site_id))
+            conn2.execute("UPDATE sites SET status='error', error_message=%s WHERE id=%s", (str(exc), site_id))
             conn2.commit()
             conn2.close()
 
@@ -15761,7 +15832,7 @@ def api_admin_sites_create():
 @admin_required
 def api_admin_site_deploy(site_id):
     conn = get_db_connection()
-    site = conn.execute("SELECT * FROM sites WHERE id=?", (site_id,)).fetchone()
+    site = conn.execute("SELECT * FROM sites WHERE id=%s", (site_id,)).fetchone()
     conn.close()
     if not site:
         return jsonify({'error': 'Site introuvable'}), 404
@@ -15789,7 +15860,7 @@ def api_admin_site_deploy(site_id):
         vercel = _deploy_to_vercel(site['github_repo'], project_name, env_vars, _VERCEL_TOKEN)
         conn2 = get_db_connection()
         conn2.execute(
-            "UPDATE sites SET vercel_project_id=?, vercel_url=?, site_url=?, resend_api_key=?, status='deployed', updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            "UPDATE sites SET vercel_project_id=%s, vercel_url=%s, site_url=%s, resend_api_key=%s, status='deployed', updated_at=CURRENT_TIMESTAMP WHERE id=%s",
             (vercel['id'], vercel['url'], site_url, resend_key, site_id)
         )
         conn2.commit()
@@ -15801,9 +15872,9 @@ def api_admin_site_deploy(site_id):
         if site['id_projet']:
             try:
                 conn3 = get_db_connection()
-                projet = conn3.execute("SELECT * FROM projets WHERE id=?", (site['id_projet'],)).fetchone()
+                projet = conn3.execute("SELECT * FROM projets WHERE id=%s", (site['id_projet'],)).fetchone()
                 if projet and projet['statut'] in ('En attente de rendez-vous', 'Documents à donner', 'Documents reçus'):
-                    client = conn3.execute("SELECT * FROM clients WHERE id=?", (projet['id_client'],)).fetchone()
+                    client = conn3.execute("SELECT * FROM clients WHERE id=%s", (projet['id_client'],)).fetchone()
                     _do_start_travaux(conn3, projet, client)
                 conn3.close()
             except Exception as e:
@@ -15888,7 +15959,7 @@ def api_admin_site_assets(site_id):
     try:
         print(f"[ASSETS] Requête reçue site_id={site_id} content_length={request.content_length}", flush=True)
         conn = get_db_connection()
-        site = conn.execute("SELECT github_repo FROM sites WHERE id=?", (site_id,)).fetchone()
+        site = conn.execute("SELECT github_repo FROM sites WHERE id=%s", (site_id,)).fetchone()
         conn.close()
         if not site or not site['github_repo']:
             return jsonify({'error': 'Repo GitHub non disponible'}), 400
@@ -15941,7 +16012,7 @@ def api_admin_site_assets(site_id):
 @admin_required
 def api_admin_site_commit(site_id):
     conn = get_db_connection()
-    site = conn.execute("SELECT github_repo FROM sites WHERE id=?", (site_id,)).fetchone()
+    site = conn.execute("SELECT github_repo FROM sites WHERE id=%s", (site_id,)).fetchone()
     conn.close()
     if not site or not site['github_repo']:
         return jsonify({'error': 'Repo GitHub non disponible'}), 400
@@ -15964,11 +16035,11 @@ def api_admin_site_commit(site_id):
 @admin_required
 def api_admin_site_delete(site_id):
     conn = get_db_connection()
-    site = conn.execute("SELECT id FROM sites WHERE id=?", (site_id,)).fetchone()
+    site = conn.execute("SELECT id FROM sites WHERE id=%s", (site_id,)).fetchone()
     if not site:
         conn.close()
         return jsonify({'error': 'Site introuvable'}), 404
-    conn.execute("DELETE FROM sites WHERE id=?", (site_id,))
+    conn.execute("DELETE FROM sites WHERE id=%s", (site_id,))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -16010,16 +16081,16 @@ def api_admin_creer_soumission():
         return jsonify({'error': 'id_client et titre requis'}), 400
 
     conn = get_db_connection()
-    client = conn.execute("SELECT id, nom_complet, email, is_email_confirmed FROM clients WHERE id=?", (id_client,)).fetchone()
+    client = conn.execute("SELECT id, nom_complet, email, is_email_confirmed FROM clients WHERE id=%s", (id_client,)).fetchone()
     if not client:
         conn.close()
         return jsonify({'error': 'Client introuvable'}), 404
 
     conn.execute("""
         INSERT INTO soumissions (id_client, titre, message_intro, statut, date_expiration)
-        VALUES (?, ?, ?, 'envoyee', ?)
-    """, (id_client, titre, message_intro, date_expiration))
-    soumission_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        VALUES (%s, %s, %s, 'envoyee', %s)
+     RETURNING id""", (id_client, titre, message_intro, date_expiration))
+    soumission_id = conn.execute("SELECT lastval()").fetchone()[0]
 
     for idx, opt in enumerate(options):
         conn.execute("""
@@ -16028,8 +16099,8 @@ def api_admin_creer_soumission():
                  delai_livraison, conditions_paiement, inclus_json, couts_tiers_json,
                  couts_supplementaires_json, scenarios_json, est_recommande, badge_texte, ordre,
                  features_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+         RETURNING id""", (
             soumission_id,
             (opt.get('nom') or '').strip(),
             (opt.get('description') or '').strip() or None,
@@ -16059,7 +16130,7 @@ def api_admin_creer_soumission():
         _pl.Path(soum_dir).mkdir(parents=True, exist_ok=True)
         soum_pdf_path = os.path.join(soum_dir, f"SOUM-{soumission_id}.pdf")
         opts_rows = conn.execute(
-            "SELECT * FROM soumission_options WHERE id_soumission=? ORDER BY ordre, id",
+            "SELECT * FROM soumission_options WHERE id_soumission=%s ORDER BY ordre, id",
             (soumission_id,)
         ).fetchall()
         opts_dicts = []
@@ -16082,7 +16153,7 @@ def api_admin_creer_soumission():
             'date_expiration': date_expiration,
         }
         _soum_svc.generer_pdf_soumission(soum_dict, opts_dicts, dict(client), soum_pdf_path)
-        conn.execute("UPDATE soumissions SET pdf_path=? WHERE id=?", (soum_pdf_path, soumission_id))
+        conn.execute("UPDATE soumissions SET pdf_path=%s WHERE id=%s", (soum_pdf_path, soumission_id))
         conn.commit()
     except Exception as e:
         print(f"[PDF] Erreur génération soumission: {e}")
@@ -16112,13 +16183,13 @@ def api_admin_get_soumission(soumission_id):
                c.telephone AS telephone_client
         FROM soumissions s
         LEFT JOIN clients c ON c.id = s.id_client
-        WHERE s.id = ?
+        WHERE s.id = %s
     """, (soumission_id,)).fetchone()
     if not s:
         conn.close()
         return jsonify({'error': 'Soumission introuvable'}), 404
     opts = conn.execute(
-        "SELECT * FROM soumission_options WHERE id_soumission=? ORDER BY ordre, id",
+        "SELECT * FROM soumission_options WHERE id_soumission=%s ORDER BY ordre, id",
         (soumission_id,)
     ).fetchall()
     conn.close()
@@ -16146,7 +16217,7 @@ def api_admin_get_soumission(soumission_id):
 @admin_required
 def api_admin_delete_soumission(soumission_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM soumissions WHERE id=?", (soumission_id,))
+    conn.execute("DELETE FROM soumissions WHERE id=%s", (soumission_id,))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -16158,7 +16229,7 @@ def api_admin_renvoyer_soumission(soumission_id):
     conn = get_db_connection()
     row = conn.execute(
         "SELECT s.id, s.titre, s.id_client, c.nom_complet, c.email, c.is_email_confirmed "
-        "FROM soumissions s JOIN clients c ON c.id = s.id_client WHERE s.id=?",
+        "FROM soumissions s JOIN clients c ON c.id = s.id_client WHERE s.id=%s",
         (soumission_id,)
     ).fetchone()
     conn.close()
@@ -16184,7 +16255,7 @@ def api_client_get_soumission(soumission_id):
     user_id = session.get('user_id')
     conn = get_db_connection()
     s = conn.execute(
-        "SELECT s.*, c.nom_complet as nom_client FROM soumissions s JOIN clients c ON c.id = s.id_client WHERE s.id=? AND s.id_client=?",
+        "SELECT s.*, c.nom_complet as nom_client FROM soumissions s JOIN clients c ON c.id = s.id_client WHERE s.id=%s AND s.id_client=%s",
         (soumission_id, user_id)
     ).fetchone()
     if not s:
@@ -16196,14 +16267,14 @@ def api_client_get_soumission(soumission_id):
         try:
             exp = _dt.strptime(s['date_expiration'], '%Y-%m-%d').date()
             if exp < _dt.utcnow().date():
-                conn.execute("UPDATE soumissions SET statut='expiree', updated_at=CURRENT_TIMESTAMP WHERE id=?", (soumission_id,))
+                conn.execute("UPDATE soumissions SET statut='expiree', updated_at=CURRENT_TIMESTAMP WHERE id=%s", (soumission_id,))
                 conn.commit()
                 statut = 'expiree'
         except Exception as e:
             print(f"[SOUMISSION] Vérification expiration échouée (id {soumission_id}): {e}")
 
     opts = conn.execute(
-        "SELECT * FROM soumission_options WHERE id_soumission=? ORDER BY ordre, id",
+        "SELECT * FROM soumission_options WHERE id_soumission=%s ORDER BY ordre, id",
         (soumission_id,)
     ).fetchall()
     conn.close()
@@ -16240,7 +16311,7 @@ def api_client_accepter_soumission(soumission_id):
 
     conn = get_db_connection()
     s = conn.execute(
-        "SELECT s.*, c.nom_complet, c.email FROM soumissions s JOIN clients c ON c.id=s.id_client WHERE s.id=? AND s.id_client=?",
+        "SELECT s.*, c.nom_complet, c.email FROM soumissions s JOIN clients c ON c.id=s.id_client WHERE s.id=%s AND s.id_client=%s",
         (soumission_id, user_id)
     ).fetchone()
     if not s:
@@ -16251,7 +16322,7 @@ def api_client_accepter_soumission(soumission_id):
         return jsonify({'error': f"Soumission non modifiable (statut: {s['statut']})"}), 409
 
     opt = conn.execute(
-        "SELECT * FROM soumission_options WHERE id=? AND id_soumission=?",
+        "SELECT * FROM soumission_options WHERE id=%s AND id_soumission=%s",
         (id_option, soumission_id)
     ).fetchone()
     if not opt:
@@ -16261,8 +16332,8 @@ def api_client_accepter_soumission(soumission_id):
     now_str = _dt.now().strftime('%Y-%m-%d %H:%M:%S')
     conn.execute("""
         UPDATE soumissions
-        SET statut='acceptee', option_acceptee_id=?, updated_at=CURRENT_TIMESTAMP
-        WHERE id=?
+        SET statut='acceptee', option_acceptee_id=%s, updated_at=CURRENT_TIMESTAMP
+        WHERE id=%s
     """, (id_option, soumission_id))
     conn.commit()
 
@@ -16319,7 +16390,7 @@ def api_client_download_soumission_pdf(soumission_id):
     user_id = session.get('user_id')
     conn = get_db_connection()
     s = conn.execute(
-        "SELECT s.pdf_path, s.titre, c.nom_complet FROM soumissions s JOIN clients c ON c.id = s.id_client WHERE s.id=? AND s.id_client=?",
+        "SELECT s.pdf_path, s.titre, c.nom_complet FROM soumissions s JOIN clients c ON c.id = s.id_client WHERE s.id=%s AND s.id_client=%s",
         (soumission_id, user_id)
     ).fetchone()
     conn.close()
@@ -16345,7 +16416,7 @@ def api_client_list_soumissions():
                so.nom AS option_acceptee_nom
         FROM soumissions s
         LEFT JOIN soumission_options so ON so.id = s.option_acceptee_id
-        WHERE s.id_client = ?
+        WHERE s.id_client = %s
         ORDER BY s.created_at DESC
     """, (user_id,)).fetchall()
     result = []
@@ -16355,7 +16426,7 @@ def api_client_list_soumissions():
             try:
                 exp = _dt.strptime(row['date_expiration'], '%Y-%m-%d').date()
                 if exp < _dt.utcnow().date():
-                    conn.execute("UPDATE soumissions SET statut='expiree', updated_at=CURRENT_TIMESTAMP WHERE id=?", (r['id'],))
+                    conn.execute("UPDATE soumissions SET statut='expiree', updated_at=CURRENT_TIMESTAMP WHERE id=%s", (r['id'],))
                     row['statut'] = 'expiree'
             except Exception as e:
                 print(f"[SOUMISSION] Vérification expiration échouée (id {r['id']}): {e}")
@@ -16388,12 +16459,12 @@ def api_admin_list_templates():
 @admin_required
 def api_admin_get_template(template_id):
     conn = get_db_connection()
-    t = conn.execute("SELECT * FROM soumission_templates WHERE id = ?", (template_id,)).fetchone()
+    t = conn.execute("SELECT * FROM soumission_templates WHERE id = %s", (template_id,)).fetchone()
     if not t:
         conn.close()
         return jsonify({'error': 'Template introuvable'}), 404
     options = conn.execute(
-        "SELECT * FROM soumission_template_options WHERE id_template = ? ORDER BY ordre",
+        "SELECT * FROM soumission_template_options WHERE id_template = %s ORDER BY ordre",
         (template_id,)
     ).fetchall()
     conn.close()
@@ -16413,8 +16484,8 @@ def api_admin_creer_template():
     cur = conn.execute("""
         INSERT INTO soumission_templates
             (nom, description, message_intro_template, titre_template, est_actif)
-        VALUES (?, ?, ?, ?, ?)
-    """, (
+        VALUES (%s, %s, %s, %s, %s)
+     RETURNING id""", (
         nom,
         body.get('description'),
         body.get('message_intro_template'),
@@ -16422,7 +16493,7 @@ def api_admin_creer_template():
         1 if body.get('est_actif', True) else 0,
     ))
     conn.commit()
-    new_id = cur.lastrowid
+    new_id = cur.fetchone()['id']
     conn.close()
     return jsonify({'id': new_id, 'message': 'Template cree'}), 201
 
@@ -16432,7 +16503,7 @@ def api_admin_creer_template():
 def api_admin_update_template(template_id):
     body = request.get_json(force=True) or {}
     conn = get_db_connection()
-    t = conn.execute("SELECT id FROM soumission_templates WHERE id = ?", (template_id,)).fetchone()
+    t = conn.execute("SELECT id FROM soumission_templates WHERE id = %s", (template_id,)).fetchone()
     if not t:
         conn.close()
         return jsonify({'error': 'Template introuvable'}), 404
@@ -16450,7 +16521,7 @@ def api_admin_update_template(template_id):
         return jsonify({'error': 'Aucun champ a mettre a jour'}), 400
     fields.append("updated_at = CURRENT_TIMESTAMP")
     values.append(template_id)
-    conn.execute(f"UPDATE soumission_templates SET {', '.join(fields)} WHERE id = ?", values)
+    conn.execute(f"UPDATE soumission_templates SET {', '.join(fields)} WHERE id = %s", values)
     conn.commit()
     conn.close()
     return jsonify({'message': 'Template mis a jour'})
@@ -16460,11 +16531,11 @@ def api_admin_update_template(template_id):
 @admin_required
 def api_admin_delete_template(template_id):
     conn = get_db_connection()
-    t = conn.execute("SELECT id FROM soumission_templates WHERE id = ?", (template_id,)).fetchone()
+    t = conn.execute("SELECT id FROM soumission_templates WHERE id = %s", (template_id,)).fetchone()
     if not t:
         conn.close()
         return jsonify({'error': 'Template introuvable'}), 404
-    conn.execute("DELETE FROM soumission_templates WHERE id = ?", (template_id,))
+    conn.execute("DELETE FROM soumission_templates WHERE id = %s", (template_id,))
     conn.commit()
     conn.close()
     return jsonify({'message': 'Template supprime'})
@@ -16474,7 +16545,7 @@ def api_admin_delete_template(template_id):
 @admin_required
 def api_admin_creer_template_option(template_id):
     conn = get_db_connection()
-    t = conn.execute("SELECT id FROM soumission_templates WHERE id = ?", (template_id,)).fetchone()
+    t = conn.execute("SELECT id FROM soumission_templates WHERE id = %s", (template_id,)).fetchone()
     if not t:
         conn.close()
         return jsonify({'error': 'Template introuvable'}), 404
@@ -16490,8 +16561,8 @@ def api_admin_creer_template_option(template_id):
              delai_livraison, conditions_paiement, badge_texte, est_recommande, ordre,
              features_json, inclus_json, couts_tiers_json, couts_supplementaires_json,
              scenarios_json, rachat_disponible, prix_rachat, inclus_rachat_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+     RETURNING id""", (
         template_id,
         nom,
         body.get('description'),
@@ -16513,7 +16584,7 @@ def api_admin_creer_template_option(template_id):
         body.get('inclus_rachat_json') or '[]',
     ))
     conn.commit()
-    new_id = cur.lastrowid
+    new_id = cur.fetchone()['id']
     conn.close()
     return jsonify({'id': new_id, 'message': 'Option creee'}), 201
 
@@ -16523,7 +16594,7 @@ def api_admin_creer_template_option(template_id):
 def api_admin_update_template_option(template_id, option_id):
     conn = get_db_connection()
     o = conn.execute(
-        "SELECT id FROM soumission_template_options WHERE id = ? AND id_template = ?",
+        "SELECT id FROM soumission_template_options WHERE id = %s AND id_template = %s",
         (option_id, template_id)
     ).fetchone()
     if not o:
@@ -16555,7 +16626,7 @@ def api_admin_update_template_option(template_id, option_id):
         conn.close()
         return jsonify({'error': 'Aucun champ a mettre a jour'}), 400
     values.append(option_id)
-    conn.execute(f"UPDATE soumission_template_options SET {', '.join(fields)} WHERE id = ?", values)
+    conn.execute(f"UPDATE soumission_template_options SET {', '.join(fields)} WHERE id = %s", values)
     conn.commit()
     conn.close()
     return jsonify({'message': 'Option mise a jour'})
@@ -16566,13 +16637,13 @@ def api_admin_update_template_option(template_id, option_id):
 def api_admin_delete_template_option(template_id, option_id):
     conn = get_db_connection()
     o = conn.execute(
-        "SELECT id FROM soumission_template_options WHERE id = ? AND id_template = ?",
+        "SELECT id FROM soumission_template_options WHERE id = %s AND id_template = %s",
         (option_id, template_id)
     ).fetchone()
     if not o:
         conn.close()
         return jsonify({'error': 'Option introuvable'}), 404
-    conn.execute("DELETE FROM soumission_template_options WHERE id = ?", (option_id,))
+    conn.execute("DELETE FROM soumission_template_options WHERE id = %s", (option_id,))
     conn.commit()
     conn.close()
     return jsonify({'message': 'Option supprimee'})
@@ -16582,18 +16653,18 @@ def api_admin_delete_template_option(template_id, option_id):
 @admin_required
 def api_admin_appliquer_template(template_id, id_client):
     conn = get_db_connection()
-    t = conn.execute("SELECT * FROM soumission_templates WHERE id = ?", (template_id,)).fetchone()
+    t = conn.execute("SELECT * FROM soumission_templates WHERE id = %s", (template_id,)).fetchone()
     if not t:
         conn.close()
         return jsonify({'error': 'Template introuvable'}), 404
     client = conn.execute(
-        "SELECT id, nom_complet, nom_entreprise FROM clients WHERE id = ?", (id_client,)
+        "SELECT id, nom_complet, nom_entreprise FROM clients WHERE id = %s", (id_client,)
     ).fetchone()
     if not client:
         conn.close()
         return jsonify({'error': 'Client introuvable'}), 404
     options = conn.execute(
-        "SELECT * FROM soumission_template_options WHERE id_template = ? ORDER BY ordre",
+        "SELECT * FROM soumission_template_options WHERE id_template = %s ORDER BY ordre",
         (template_id,)
     ).fetchall()
     conn.close()
@@ -16662,15 +16733,15 @@ def api_admin_update_parametres_facturation():
     conn = get_db_connection()
     cur = conn.execute("""
         UPDATE parametres_facturation
-        SET charge_taxes = ?, neq = ?, numero_tps = ?, numero_tvq = ?, nom_entreprise = ?, couleur_marque = ?,
-            methode_comptable = ?, base_comptable = ?, updated_at = CURRENT_TIMESTAMP
+        SET charge_taxes = %s, neq = %s, numero_tps = %s, numero_tvq = %s, nom_entreprise = %s, couleur_marque = %s,
+            methode_comptable = %s, base_comptable = %s, updated_at = CURRENT_TIMESTAMP
         WHERE id = 1
     """, (charge_taxes, neq, numero_tps, numero_tvq, nom_entreprise, couleur_marque, methode_comptable, base_comptable))
     if cur.rowcount == 0:
         conn.execute("""
             INSERT INTO parametres_facturation (id, charge_taxes, neq, numero_tps, numero_tvq, nom_entreprise, couleur_marque, methode_comptable, base_comptable)
-            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (charge_taxes, neq, numero_tps, numero_tvq, nom_entreprise, couleur_marque, methode_comptable, base_comptable))
+            VALUES (1, %s, %s, %s, %s, %s, %s, %s, %s)
+         RETURNING id""", (charge_taxes, neq, numero_tps, numero_tvq, nom_entreprise, couleur_marque, methode_comptable, base_comptable))
     conn.commit()
     conn.close()
     return jsonify({
@@ -16744,10 +16815,10 @@ def api_admin_create_depense():
             (type, date_transaction, description, categorie,
              montant_avant_taxes, montant_tps, montant_tvq, montant_total, source,
              ligne_t2125, ligne_tp80, piece_jointe)
-        VALUES ('depense', ?, ?, ?, ?, ?, ?, ?, 'manuel', ?, ?, ?)
-    """, (date_transaction, description, categorie, avant_taxes, tps, tvq, montant_total, ligne_t2125, ligne_tp80, piece_jointe))
+        VALUES ('depense', %s, %s, %s, %s, %s, %s, %s, 'manuel', %s, %s, %s)
+     RETURNING id""", (date_transaction, description, categorie, avant_taxes, tps, tvq, montant_total, ligne_t2125, ligne_tp80, piece_jointe))
     conn.commit()
-    new_id = cur.lastrowid
+    new_id = cur.fetchone()['id']
     conn.close()
 
     return jsonify({
@@ -16774,8 +16845,8 @@ def api_admin_list_depenses():
                    montant_avant_taxes, montant_tps, montant_tvq, montant_total, source, created_at,
                    ligne_t2125, ligne_tp80
             FROM transactions
-            WHERE type = 'depense' AND strftime('%Y', date_transaction) = ?
-              AND COALESCE(organisation_id, ?) = ?
+            WHERE type = 'depense' AND LEFT(date_transaction, 4) = %s
+              AND COALESCE(organisation_id, %s) = %s
             ORDER BY date_transaction DESC, id DESC
         """, (annee, ORG_ID_DEFAUT, org_id)).fetchall()
     else:
@@ -16784,7 +16855,7 @@ def api_admin_list_depenses():
                    montant_avant_taxes, montant_tps, montant_tvq, montant_total, source, created_at,
                    ligne_t2125, ligne_tp80
             FROM transactions
-            WHERE type = 'depense' AND COALESCE(organisation_id, ?) = ?
+            WHERE type = 'depense' AND COALESCE(organisation_id, %s) = %s
             ORDER BY date_transaction DESC, id DESC
         """, (ORG_ID_DEFAUT, org_id)).fetchall()
     conn.close()
@@ -16832,14 +16903,14 @@ def api_admin_list_revenus():
                    montant_avant_taxes, montant_tps, montant_tvq, montant_total,
                    source, source_ref, id_facture, ligne_t2125, ligne_tp80
             FROM transactions
-            WHERE type = 'revenu' AND strftime('%Y', date_transaction) = ?
-              AND COALESCE(organisation_id, ?) = ?
+            WHERE type = 'revenu' AND LEFT(date_transaction, 4) = %s
+              AND COALESCE(organisation_id, %s) = %s
             ORDER BY date_transaction DESC, id DESC
         """, (annee, ORG_ID_DEFAUT, org_id)).fetchall()
         attente = conn.execute("""
             SELECT COALESCE(SUM(f.total), 0) t, COUNT(*) n FROM factures f
             JOIN clients c ON c.id = f.id_client
-            WHERE f.statut IN ('envoyee', 'ouverte') AND strftime('%Y', f.date_emission) = ?
+            WHERE f.statut IN ('envoyee', 'ouverte') AND LEFT(f.date_emission, 4) = %s
               AND c.is_test_client = 0
         """, (annee,)).fetchone()
     else:
@@ -16848,7 +16919,7 @@ def api_admin_list_revenus():
                    montant_avant_taxes, montant_tps, montant_tvq, montant_total,
                    source, source_ref, id_facture, ligne_t2125, ligne_tp80
             FROM transactions
-            WHERE type = 'revenu' AND COALESCE(organisation_id, ?) = ?
+            WHERE type = 'revenu' AND COALESCE(organisation_id, %s) = %s
             ORDER BY date_transaction DESC, id DESC
         """, (ORG_ID_DEFAUT, org_id)).fetchall()
         attente = conn.execute("""
@@ -16896,15 +16967,15 @@ def api_admin_create_revenu():
             (type, date_transaction, description, categorie,
              montant_avant_taxes, montant_tps, montant_tvq, montant_total,
              source, ligne_t2125, ligne_tp80, piece_jointe)
-        VALUES ('revenu', ?, ?, ?, ?, ?, ?, ?, 'manuel', ?, ?, ?)
-    """, (date_transaction, description, categorie, avant_taxes, tps, tvq, montant_total, lg['t2125'], lg['tp80'], piece_jointe))
+        VALUES ('revenu', %s, %s, %s, %s, %s, %s, %s, 'manuel', %s, %s, %s)
+     RETURNING id""", (date_transaction, description, categorie, avant_taxes, tps, tvq, montant_total, lg['t2125'], lg['tp80'], piece_jointe))
     conn.commit()
     row = conn.execute("""
         SELECT id, date_transaction, description, categorie,
                montant_avant_taxes, montant_tps, montant_tvq, montant_total,
                source, source_ref, id_facture, ligne_t2125, ligne_tp80
-        FROM transactions WHERE id = ?
-    """, (cur.lastrowid,)).fetchone()
+        FROM transactions WHERE id = %s
+    """, (cur.fetchone()['id'],)).fetchone()
     conn.close()
     return jsonify({'success': True, **_row_revenu(row)})
 
@@ -16938,8 +17009,8 @@ def api_admin_import_revenus():
                     (type, date_transaction, description, categorie,
                      montant_avant_taxes, montant_tps, montant_tvq, montant_total,
                      source, ligne_t2125, ligne_tp80)
-                VALUES ('revenu', ?, ?, ?, ?, ?, ?, ?, 'manuel', ?, ?)
-            """, (d, desc, cat, avant_taxes, tps, tvq, montant, lg['t2125'], lg['tp80']))
+                VALUES ('revenu', %s, %s, %s, %s, %s, %s, %s, 'manuel', %s, %s)
+             RETURNING id""", (d, desc, cat, avant_taxes, tps, tvq, montant, lg['t2125'], lg['tp80']))
             inserted += 1
         except Exception as e:
             erreurs.append(f"Ligne {i + 1} : {e}")
@@ -16951,14 +17022,14 @@ def api_admin_import_revenus():
 @admin_required
 def api_admin_delete_revenu(revenu_id):
     conn = get_db_connection()
-    row = conn.execute("SELECT source FROM transactions WHERE id = ? AND type = 'revenu'", (revenu_id,)).fetchone()
+    row = conn.execute("SELECT source FROM transactions WHERE id = %s AND type = 'revenu'", (revenu_id,)).fetchone()
     if not row:
         conn.close()
         return jsonify({'error': 'Revenu introuvable'}), 404
     if row['source'] != 'manuel':
         conn.close()
         return jsonify({'error': "Ce revenu provient d'une facture — gérez-le depuis la facture."}), 400
-    conn.execute("DELETE FROM transactions WHERE id = ? AND type = 'revenu' AND source = 'manuel'", (revenu_id,))
+    conn.execute("DELETE FROM transactions WHERE id = %s AND type = 'revenu' AND source = 'manuel'", (revenu_id,))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -17026,11 +17097,11 @@ def _capture_user():
     th = hashlib.sha256(token.encode()).hexdigest()
     conn = get_db_connection()
     row = conn.execute(
-        "SELECT id, user_id, organisation_id FROM capture_devices WHERE token_hash = ? AND revoked = 0",
+        "SELECT id, user_id, organisation_id FROM capture_devices WHERE token_hash = %s AND revoked = 0",
         (th,)
     ).fetchone()
     if row:
-        conn.execute("UPDATE capture_devices SET last_used_at = ? WHERE id = ?",
+        conn.execute("UPDATE capture_devices SET last_used_at = %s WHERE id = %s",
                      (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), row['id']))
         conn.commit()
     conn.close()
@@ -17046,7 +17117,7 @@ def api_capture_pair():
     label = ((request.get_json(silent=True) or {}).get('label') or 'Appareil').strip()[:60]
     conn = get_db_connection()
     conn.execute(
-        "INSERT INTO capture_devices (user_id, organisation_id, token_hash, label) VALUES (?, ?, ?, ?)",
+        "INSERT INTO capture_devices (user_id, organisation_id, token_hash, label) VALUES (%s, %s, %s, %s) RETURNING id",
         (session.get('user_id'), session.get('organisation_id'), th, label)
     )
     conn.commit()
@@ -17068,7 +17139,7 @@ def api_capture_login():
     if email and _redis_login_locked(email):
         return jsonify({'error': 'Trop de tentatives. Réessayez dans 15 min.'}), 429
     conn = get_db_connection()
-    user = conn.execute("SELECT * FROM clients WHERE email = ?", (email,)).fetchone()
+    user = conn.execute("SELECT * FROM clients WHERE email = %s", (email,)).fetchone()
     ok = False
     if user and user['auth_provider'] == 'password' and user['mot_de_passe_hash']:
         try:
@@ -17087,7 +17158,7 @@ def api_capture_login():
     token = secrets.token_urlsafe(32)
     th = hashlib.sha256(token.encode()).hexdigest()
     conn.execute(
-        "INSERT INTO capture_devices (user_id, organisation_id, token_hash, label) VALUES (?, ?, ?, ?)",
+        "INSERT INTO capture_devices (user_id, organisation_id, token_hash, label) VALUES (%s, %s, %s, %s) RETURNING id",
         (user['id'], None, th, 'Appareil')
     )
     conn.commit()
@@ -17102,7 +17173,7 @@ def api_capture_verify():
     if not u:
         return jsonify({'error': 'Appareil non lié'}), 401
     conn = get_db_connection()
-    row = conn.execute("SELECT nom_complet, email FROM clients WHERE id = ?", (u['user_id'],)).fetchone()
+    row = conn.execute("SELECT nom_complet, email FROM clients WHERE id = %s", (u['user_id'],)).fetchone()
     conn.close()
     compte = (row['nom_complet'] or row['email']) if row else None
     resp = jsonify({'success': True, 'compte': compte, 'email': row['email'] if row else None})
@@ -17119,7 +17190,7 @@ def api_capture_logout():
     if token:
         th = hashlib.sha256(token.encode()).hexdigest()
         conn = get_db_connection()
-        conn.execute("UPDATE capture_devices SET revoked = 1 WHERE token_hash = ?", (th,))
+        conn.execute("UPDATE capture_devices SET revoked = 1 WHERE token_hash = %s", (th,))
         conn.commit()
         conn.close()
     resp = jsonify({'success': True})
@@ -17142,11 +17213,11 @@ def _task_user():
     th = hashlib.sha256(token.encode()).hexdigest()
     conn = get_db_connection()
     row = conn.execute(
-        "SELECT id, user_id FROM task_devices WHERE token_hash = ? AND revoked = 0",
+        "SELECT id, user_id FROM task_devices WHERE token_hash = %s AND revoked = 0",
         (th,)
     ).fetchone()
     if row:
-        conn.execute("UPDATE task_devices SET last_used_at = ? WHERE id = ?",
+        conn.execute("UPDATE task_devices SET last_used_at = %s WHERE id = %s",
                      (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), row['id']))
         conn.commit()
     conn.close()
@@ -17166,7 +17237,7 @@ def api_taches_login():
     if email and _redis_login_locked(email):
         return jsonify({'error': 'Trop de tentatives. Réessayez dans 15 min.'}), 429
     conn = get_db_connection()
-    user = conn.execute("SELECT * FROM clients WHERE email = ?", (email,)).fetchone()
+    user = conn.execute("SELECT * FROM clients WHERE email = %s", (email,)).fetchone()
     ok = False
     if user and user['auth_provider'] == 'password' and user['mot_de_passe_hash']:
         try:
@@ -17184,7 +17255,7 @@ def api_taches_login():
     token = secrets.token_urlsafe(32)
     th = hashlib.sha256(token.encode()).hexdigest()
     conn.execute(
-        "INSERT INTO task_devices (user_id, token_hash, label) VALUES (?, ?, ?)",
+        "INSERT INTO task_devices (user_id, token_hash, label) VALUES (%s, %s, %s) RETURNING id",
         (user['id'], th, 'Appareil')
     )
     conn.commit()
@@ -17200,7 +17271,7 @@ def api_taches_verify():
     if not u:
         return jsonify({'error': 'Appareil non lié'}), 401
     conn = get_db_connection()
-    row = conn.execute("SELECT nom_complet, email FROM clients WHERE id = ?", (u['user_id'],)).fetchone()
+    row = conn.execute("SELECT nom_complet, email FROM clients WHERE id = %s", (u['user_id'],)).fetchone()
     conn.close()
     compte = (row['nom_complet'] or row['email']) if row else None
     resp = jsonify({'success': True, 'compte': compte, 'email': row['email'] if row else None})
@@ -17216,7 +17287,7 @@ def api_taches_logout():
     if token:
         th = hashlib.sha256(token.encode()).hexdigest()
         conn = get_db_connection()
-        conn.execute("UPDATE task_devices SET revoked = 1 WHERE token_hash = ?", (th,))
+        conn.execute("UPDATE task_devices SET revoked = 1 WHERE token_hash = %s", (th,))
         conn.commit()
         conn.close()
     resp = jsonify({'success': True})
@@ -17346,10 +17417,10 @@ def api_taches_push_subscribe():
     if not (endpoint and p256dh and auth):
         return jsonify({'error': 'Abonnement invalide'}), 400
     conn = get_db_connection()
-    user = conn.execute("SELECT email FROM clients WHERE id=?", (u['user_id'],)).fetchone()
+    user = conn.execute("SELECT email FROM clients WHERE id=%s", (u['user_id'],)).fetchone()
     conn.execute(
-        "INSERT INTO push_subscriptions (email, endpoint, p256dh, auth) VALUES (?, ?, ?, ?) "
-        "ON CONFLICT(endpoint) DO UPDATE SET email=excluded.email, p256dh=excluded.p256dh, auth=excluded.auth",
+        "INSERT INTO push_subscriptions (email, endpoint, p256dh, auth) VALUES (%s, %s, %s, %s) "
+        "ON CONFLICT(endpoint) DO UPDATE SET email=excluded.email, p256dh=excluded.p256dh, auth=excluded.auth RETURNING id",
         (user['email'] if user else None, endpoint, p256dh, auth)
     )
     conn.commit()
@@ -17365,7 +17436,7 @@ def api_taches_push_unsubscribe():
     endpoint = data.get('endpoint')
     if endpoint:
         conn = get_db_connection()
-        conn.execute("DELETE FROM push_subscriptions WHERE endpoint=?", (endpoint,))
+        conn.execute("DELETE FROM push_subscriptions WHERE endpoint=%s", (endpoint,))
         conn.commit()
         conn.close()
     return jsonify({'success': True})
@@ -17386,7 +17457,7 @@ def api_taches_marketing():
     if not u:
         return jsonify({'error': 'Appareil non lié'}), 401
     conn = get_db_connection()
-    user = conn.execute("SELECT role FROM clients WHERE id=?", (u['user_id'],)).fetchone()
+    user = conn.execute("SELECT role FROM clients WHERE id=%s", (u['user_id'],)).fetchone()
     if not user or user['role'] != 'production':
         conn.close()
         return jsonify([])
@@ -17409,16 +17480,16 @@ def api_taches_marketing_toggle(post_id):
     if not u:
         return jsonify({'error': 'Appareil non lié'}), 401
     conn = get_db_connection()
-    user = conn.execute("SELECT role FROM clients WHERE id=?", (u['user_id'],)).fetchone()
+    user = conn.execute("SELECT role FROM clients WHERE id=%s", (u['user_id'],)).fetchone()
     if not user or user['role'] != 'production':
         conn.close()
         return jsonify({'error': 'Réservé au rôle production'}), 403
-    post = conn.execute("SELECT todo_felix_done FROM marketing_posts WHERE id=?", (post_id,)).fetchone()
+    post = conn.execute("SELECT todo_felix_done FROM marketing_posts WHERE id=%s", (post_id,)).fetchone()
     if not post:
         conn.close()
         return jsonify({'error': 'Post introuvable'}), 404
     new_val = 0 if int(post['todo_felix_done'] or 0) else 1
-    conn.execute("UPDATE marketing_posts SET todo_felix_done=? WHERE id=?", (new_val, post_id))
+    conn.execute("UPDATE marketing_posts SET todo_felix_done=%s WHERE id=%s", (new_val, post_id))
     conn.commit()
     conn.close()
     return jsonify({'done': bool(new_val)})
@@ -17464,8 +17535,8 @@ def api_capture_transaction():
             (organisation_id, type, date_transaction, description, categorie,
              montant_avant_taxes, montant_tps, montant_tvq, montant_total,
              source, ligne_t2125, ligne_tp80, piece_jointe)
-        VALUES (?, ?, ?, ?, ?, 0, 0, 0, ?, 'manuel', ?, ?, ?)
-    """, (u['organisation_id'], type_, date_transaction, description, categorie,
+        VALUES (%s, %s, %s, %s, %s, 0, 0, 0, %s, 'manuel', %s, %s, %s)
+     RETURNING id""", (u['organisation_id'], type_, date_transaction, description, categorie,
           montant_total, lg['t2125'], lg['tp80'], piece_jointe))
     conn.commit()
     conn.close()
@@ -17489,7 +17560,7 @@ def deposer_facture_a_valider(fields, source, source_ref=None, expediteur=None, 
         # anti-doublon explicite (en plus de l'index) pour un retour propre
         if source_ref:
             dup = conn.execute(
-                "SELECT 1 FROM factures_a_valider WHERE source = ? AND source_ref = ?",
+                "SELECT 1 FROM factures_a_valider WHERE source = %s AND source_ref = %s",
                 (source, source_ref)
             ).fetchone()
             if dup:
@@ -17503,8 +17574,8 @@ def deposer_facture_a_valider(fields, source, source_ref=None, expediteur=None, 
                 (organisation_id, source, source_ref, sens, expediteur, date_transaction,
                  fournisseur, description, categorie, montant_avant_taxes, montant_tps,
                  montant_tvq, montant_total, piece_jointe, confiance)
-            VALUES (?, ?, ?, 'recu', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (organisation_id, source, source_ref, expediteur,
+            VALUES (%s, %s, %s, 'recu', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+         RETURNING id""", (organisation_id, source, source_ref, expediteur,
               (fields.get('date_transaction') or '').strip(),
               (fields.get('fournisseur') or '').strip(),
               (fields.get('description') or '').strip(), cat,
@@ -17530,7 +17601,7 @@ def api_admin_list_a_valider():
                description, categorie, montant_avant_taxes, montant_tps, montant_tvq,
                montant_total, piece_jointe, confiance, note, created_at
         FROM factures_a_valider
-        WHERE statut = 'en_attente' AND COALESCE(organisation_id, ?) = ?
+        WHERE statut = 'en_attente' AND COALESCE(organisation_id, %s) = %s
         ORDER BY created_at DESC, id DESC
     """, (ORG_ID_DEFAUT, org_id)).fetchall()
     conn.close()
@@ -17542,7 +17613,7 @@ def api_admin_count_a_valider():
     org_id = session.get('organisation_id', ORG_ID_DEFAUT)
     conn = get_db_connection()
     n = conn.execute(
-        "SELECT COUNT(*) FROM factures_a_valider WHERE statut = 'en_attente' AND COALESCE(organisation_id, ?) = ?",
+        "SELECT COUNT(*) FROM factures_a_valider WHERE statut = 'en_attente' AND COALESCE(organisation_id, %s) = %s",
         (ORG_ID_DEFAUT, org_id)
     ).fetchone()[0]
     conn.close()
@@ -17553,7 +17624,7 @@ def api_admin_count_a_valider():
 def api_admin_approuver_a_valider(item_id):
     data = request.get_json(silent=True) or {}
     conn = get_db_connection()
-    row = conn.execute("SELECT * FROM factures_a_valider WHERE id = ? AND statut = 'en_attente'", (item_id,)).fetchone()
+    row = conn.execute("SELECT * FROM factures_a_valider WHERE id = %s AND statut = 'en_attente'", (item_id,)).fetchone()
     if not row:
         conn.close()
         return jsonify({'error': 'Élément introuvable ou déjà traité'}), 404
@@ -17578,11 +17649,11 @@ def api_admin_approuver_a_valider(item_id):
             (organisation_id, type, date_transaction, description, categorie,
              montant_avant_taxes, montant_tps, montant_tvq, montant_total,
              source, ligne_t2125, ligne_tp80, piece_jointe)
-        VALUES (?, 'depense', ?, ?, ?, ?, ?, ?, ?, 'manuel', ?, ?, ?)
-    """, (row['organisation_id'], date_transaction, description, categorie,
+        VALUES (%s, 'depense', %s, %s, %s, %s, %s, %s, %s, 'manuel', %s, %s, %s)
+     RETURNING id""", (row['organisation_id'], date_transaction, description, categorie,
           row['montant_avant_taxes'] or 0, row['montant_tps'] or 0, row['montant_tvq'] or 0,
           montant_total, lg['t2125'], lg['tp80'], row['piece_jointe']))
-    conn.execute("UPDATE factures_a_valider SET statut = 'approuve', traite_at = ? WHERE id = ?",
+    conn.execute("UPDATE factures_a_valider SET statut = 'approuve', traite_at = %s WHERE id = %s",
                  (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), item_id))
     conn.commit()
     conn.close()
@@ -17592,7 +17663,7 @@ def api_admin_approuver_a_valider(item_id):
 @admin_required
 def api_admin_rejeter_a_valider(item_id):
     conn = get_db_connection()
-    cur = conn.execute("UPDATE factures_a_valider SET statut = 'rejete', traite_at = ? WHERE id = ? AND statut = 'en_attente'",
+    cur = conn.execute("UPDATE factures_a_valider SET statut = 'rejete', traite_at = %s WHERE id = %s AND statut = 'en_attente'",
                        (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), item_id))
     conn.commit()
     n = cur.rowcount
@@ -17619,7 +17690,7 @@ def api_gmail_status():
     conn = get_db_connection()
     row = conn.execute(
         "SELECT merchant_id, last_sync_at FROM integrations "
-        "WHERE provider = 'gmail' AND statut = 'actif' AND COALESCE(organisation_id, ?) = ? "
+        "WHERE provider = 'gmail' AND statut = 'actif' AND COALESCE(organisation_id, %s) = %s "
         "ORDER BY id DESC LIMIT 1",
         (ORG_ID_DEFAUT, session.get('organisation_id', ORG_ID_DEFAUT))
     ).fetchone()
@@ -17681,12 +17752,12 @@ def api_gmail_callback():
         # une seule intégration Gmail active par organisation
         conn.execute(
             "UPDATE integrations SET statut = 'revoque' "
-            "WHERE provider = 'gmail' AND COALESCE(organisation_id, ?) = ?",
+            "WHERE provider = 'gmail' AND COALESCE(organisation_id, %s) = %s",
             (ORG_ID_DEFAUT, org_id)
         )
         conn.execute(
             "INSERT INTO integrations (organisation_id, provider, merchant_id, refresh_token, scopes, statut) "
-            "VALUES (?, 'gmail', ?, ?, ?, 'actif')",
+            "VALUES (%s, 'gmail', %s, %s, %s, 'actif') RETURNING id",
             (org_id, email_compte, refresh, GMAIL_OAUTH_SCOPE)
         )
         conn.commit()
@@ -17702,7 +17773,7 @@ def api_gmail_disconnect():
     conn = get_db_connection()
     conn.execute(
         "UPDATE integrations SET statut = 'revoque' "
-        "WHERE provider = 'gmail' AND statut = 'actif' AND COALESCE(organisation_id, ?) = ?",
+        "WHERE provider = 'gmail' AND statut = 'actif' AND COALESCE(organisation_id, %s) = %s",
         (ORG_ID_DEFAUT, session.get('organisation_id', ORG_ID_DEFAUT))
     )
     conn.commit()
@@ -17731,7 +17802,7 @@ def sync_gmail_factures(app_ref=None):
     # Hors contexte de requête (job planifié) : pas de session, ORG_ID_DEFAUT directement.
     integ = conn.execute(
         "SELECT * FROM integrations WHERE provider = 'gmail' AND statut = 'actif' "
-        "AND COALESCE(organisation_id, ?) = ? ORDER BY id DESC LIMIT 1",
+        "AND COALESCE(organisation_id, %s) = %s ORDER BY id DESC LIMIT 1",
         (ORG_ID_DEFAUT, ORG_ID_DEFAUT)
     ).fetchone()
     if not integ:
@@ -17802,7 +17873,7 @@ def sync_gmail_factures(app_ref=None):
             erreurs += 1
 
     conn = get_db_connection()
-    conn.execute("UPDATE integrations SET last_sync_at = ? WHERE id = ?",
+    conn.execute("UPDATE integrations SET last_sync_at = %s WHERE id = %s",
                  (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), integ['id']))
     conn.commit()
     conn.close()
@@ -17814,11 +17885,13 @@ def _calculer_bilan(annee, mois, org_id=None):
         org_id = session.get('organisation_id', ORG_ID_DEFAUT)
     if mois:
         like_periode = f"{annee}-{mois.zfill(2)}"
-        where_date = "strftime('%Y-%m', date_transaction) = ?"
+        # date_transaction reste TEXT 'YYYY-MM-DD' cette passe (pas de strftime en
+        # Postgres) — comparaison directe sur les 7 premiers caractères.
+        where_date = "LEFT(date_transaction, 7) = %s"
         param_date = like_periode
         periode_label = f"{mois.zfill(2)}/{annee}"
     else:
-        where_date = "strftime('%Y', date_transaction) = ?"
+        where_date = "LEFT(date_transaction, 4) = %s"
         param_date = annee
         periode_label = annee
 
@@ -17833,7 +17906,7 @@ def _calculer_bilan(annee, mois, org_id=None):
                 COALESCE(SUM(montant_total),0)       AS total,
                 COUNT(*)                             AS nb
             FROM transactions
-            WHERE type = ? AND {where_date} AND COALESCE(organisation_id, ?) = ?
+            WHERE type = %s AND {where_date} AND COALESCE(organisation_id, %s) = %s
         """, (type_tx, param_date, ORG_ID_DEFAUT, org_id)).fetchone()
         return {
             'avant_taxes': round(row['avant_taxes'], 2),
@@ -17854,8 +17927,8 @@ def _calculer_bilan(annee, mois, org_id=None):
                 COALESCE(SUM(montant_avant_taxes),0) AS total,
                 COUNT(*) AS nb
             FROM transactions
-            WHERE type = ? AND {where_date} AND COALESCE(organisation_id, ?) = ?
-            GROUP BY categorie
+            WHERE type = %s AND {where_date} AND COALESCE(organisation_id, %s) = %s
+            GROUP BY categorie, ligne_t2125, ligne_tp80
             ORDER BY total DESC
         """, (type_tx, param_date, ORG_ID_DEFAUT, org_id)).fetchall()
         return [{
@@ -18185,12 +18258,12 @@ def _get_client_sites():
     plusieurs mandats)."""
     conn = get_db_connection()
     try:
-        client = conn.execute("SELECT email FROM clients WHERE id = ?", (session['user_id'],)).fetchone()
+        client = conn.execute("SELECT email FROM clients WHERE id = %s", (session['user_id'],)).fetchone()
         if not client or not client['email']:
             return []
         rows = conn.execute(
             "SELECT id, business_name, slug, template, sanity_project_id FROM sites "
-            "WHERE LOWER(client_email) = LOWER(?) AND sanity_project_id IS NOT NULL AND sanity_project_id != '' "
+            "WHERE LOWER(client_email) = LOWER(%s) AND sanity_project_id IS NOT NULL AND sanity_project_id != '' "
             "ORDER BY created_at DESC",
             (client['email'],)
         ).fetchall()

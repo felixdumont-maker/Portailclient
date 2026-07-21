@@ -9,6 +9,7 @@ Scheduler facturation mensuelle — Cocktail Média
 import os
 import fcntl
 import sqlite3
+import psycopg
 import pathlib
 import calendar
 from datetime import date, datetime, timedelta
@@ -21,11 +22,13 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 
 def get_db():
-    db_path = os.getenv("DB_PATH", "/data/instance/portail.db")
-    conn = sqlite3.connect(db_path, timeout=10, isolation_level=None)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON;")
-    conn.execute("PRAGMA journal_mode = WAL;")
+    """Copie de test étape 5/6 (Postgres) — hors contexte de requête Flask (job
+    planifié), donc pas de session : ORG_ID_DEFAUT directement, comme
+    sync_gmail_factures() dans app.py. Import tardif d'app pour éviter un import
+    circulaire (billing_scheduler est importé PAR app.py)."""
+    import app as _app
+    conn = psycopg.connect(_app.PG_DSN, autocommit=True, row_factory=_app._hybrid_row_factory)
+    conn.execute("SELECT set_config('app.org_id', %s, false)", (str(_app.ORG_ID_DEFAUT),))
     return conn
 
 
@@ -72,7 +75,7 @@ def fermer_factures_ouvertes(app, mail):
             try:
                 lignes = conn.execute("""
                     SELECT * FROM facture_lignes
-                    WHERE id_facture = ?
+                    WHERE id_facture = %s
                     ORDER BY date_service
                 """, (facture['id'],)).fetchall()
 
@@ -87,7 +90,7 @@ def fermer_factures_ouvertes(app, mail):
                 total = round(sous_total + tps + tvq, 2)
 
                 conn.execute("""
-                    UPDATE factures SET sous_total=?, tps=?, tvq=?, total=? WHERE id=?
+                    UPDATE factures SET sous_total=%s, tps=%s, tvq=%s, total=%s WHERE id=%s
                 """, (sous_total, tps, tvq, total, facture['id']))
 
                 # Générer PDF
@@ -143,9 +146,9 @@ def fermer_factures_ouvertes(app, mail):
                 # Mettre à jour DB
                 conn.execute("""
                     UPDATE factures
-                    SET statut='envoyee', date_emission=?, date_echeance='À la réception',
-                        pdf_path=?, drive_file_id=?
-                    WHERE id=?
+                    SET statut='envoyee', date_emission=%s, date_echeance='À la réception',
+                        pdf_path=%s, drive_file_id=%s
+                    WHERE id=%s
                 """, (date_str, pdf_path, drive_file_id, facture['id']))
                 conn.commit()
 
@@ -187,7 +190,7 @@ def ajouter_ligne_facture_mensuelle(id_client: int, id_projet: int,
 
     facture = conn.execute("""
         SELECT id FROM factures
-        WHERE id_client = ? AND periode_mois = ? AND statut = 'ouverte'
+        WHERE id_client = %s AND periode_mois = %s AND statut = 'ouverte'
     """, (id_client, periode)).fetchone()
 
     if not facture:
@@ -195,19 +198,19 @@ def ajouter_ligne_facture_mensuelle(id_client: int, id_projet: int,
         conn.execute("""
             INSERT INTO factures
             (numero, id_client, statut, type_facturation, periode_mois, sous_total, tps, tvq, total)
-            VALUES (?, ?, 'ouverte', 'mensuel', ?, 0, 0, 0, 0)
-        """, (numero, id_client, periode))
+            VALUES (%s, %s, 'ouverte', 'mensuel', %s, 0, 0, 0, 0)
+         RETURNING id""", (numero, id_client, periode))
         conn.commit()
         facture = conn.execute("""
             SELECT id FROM factures
-            WHERE id_client = ? AND periode_mois = ? AND statut = 'ouverte'
+            WHERE id_client = %s AND periode_mois = %s AND statut = 'ouverte'
         """, (id_client, periode)).fetchone()
 
     # Garde anti-doublon : évite une 2e ligne pour le même projet sur la facture ouverte du
     # mois (peut arriver si le déclencheur "travaux en cours" tourne deux fois pour le même
     # projet — ex. bouton dédié suivi d'un forçage de statut).
     deja = conn.execute(
-        "SELECT id FROM facture_lignes WHERE id_facture = ? AND id_projet = ?",
+        "SELECT id FROM facture_lignes WHERE id_facture = %s AND id_projet = %s",
         (facture['id'], id_projet)
     ).fetchone()
     if deja:
@@ -217,8 +220,8 @@ def ajouter_ligne_facture_mensuelle(id_client: int, id_projet: int,
     conn.execute("""
         INSERT INTO facture_lignes
         (id_facture, id_projet, description, date_service, localisation, quantite, prix_unitaire, total_ligne)
-        VALUES (?, ?, ?, ?, ?, 1, ?, ?)
-    """, (facture['id'], id_projet, description, date_service, localisation, prix, prix))
+        VALUES (%s, %s, %s, %s, %s, 1, %s, %s)
+     RETURNING id""", (facture['id'], id_projet, description, date_service, localisation, prix, prix))
     conn.commit()
     print(f"[SCHEDULER] Ligne ajoutée à facture mensuelle: {description} — {prix}$")
 
@@ -241,12 +244,12 @@ def sync_calendar_todos():
         if res is None:
             continue  # erreur transitoire → on ne touche à rien
         if res == 'deleted':
-            conn.execute("UPDATE todos_perso SET calendar_event_id=NULL WHERE id=?", (t['id'],))
+            conn.execute("UPDATE todos_perso SET calendar_event_id=NULL WHERE id=%s", (t['id'],))
             modifs += 1
             continue
         new_date, _heure = res
         if new_date and new_date != t['date_echeance']:
-            conn.execute("UPDATE todos_perso SET date_echeance=? WHERE id=?", (new_date, t['id']))
+            conn.execute("UPDATE todos_perso SET date_echeance=%s WHERE id=%s", (new_date, t['id']))
             modifs += 1
     conn.close()
     if modifs:
@@ -262,11 +265,11 @@ def envoyer_recap_todos(app, mail):
         today = date.today().strftime("%Y-%m-%d")
         aujourdhui = conn.execute(
             "SELECT texte, projet_nom FROM todos_perso "
-            "WHERE est_coche=0 AND COALESCE(is_titre,0)=0 AND date_echeance=? ORDER BY priorite", (today,)
+            "WHERE est_coche=0 AND COALESCE(is_titre,0)=0 AND date_echeance=%s ORDER BY priorite", (today,)
         ).fetchall()
         retard = conn.execute(
             "SELECT texte, projet_nom, date_echeance FROM todos_perso "
-            "WHERE est_coche=0 AND COALESCE(is_titre,0)=0 AND date_echeance IS NOT NULL AND date_echeance < ? "
+            "WHERE est_coche=0 AND COALESCE(is_titre,0)=0 AND date_echeance IS NOT NULL AND date_echeance < %s "
             "ORDER BY date_echeance", (today,)
         ).fetchall()
         notifs = conn.execute("SELECT COUNT(*) FROM admin_notifications WHERE is_read=0").fetchone()[0]

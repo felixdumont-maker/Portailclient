@@ -63,7 +63,7 @@ def _abrev_unique(abrev: str, id_client: int, conn: sqlite3.Connection) -> str:
     # Vérifie si cette abrev est déjà utilisée par un AUTRE client
     row = conn.execute("""
         SELECT id_client FROM factures
-        WHERE numero LIKE ? AND id_client != ?
+        WHERE numero LIKE %s AND id_client != %s
         LIMIT 1
     """, (f"{abrev}-%", id_client)).fetchone()
 
@@ -72,7 +72,7 @@ def _abrev_unique(abrev: str, id_client: int, conn: sqlite3.Connection) -> str:
 
     # Conflit — essayer avec une lettre de plus depuis le nom entreprise (ou nom complet si vide)
     client = conn.execute(
-        "SELECT nom_entreprise, nom_complet FROM clients WHERE id = ?", (id_client,)
+        "SELECT nom_entreprise, nom_complet FROM clients WHERE id = %s", (id_client,)
     ).fetchone()
     nom = (client["nom_entreprise"] or client["nom_complet"] or "") if client else ""
     mots = [m for m in re.sub(r"[^\w\s]", "", nom).split()]
@@ -82,7 +82,7 @@ def _abrev_unique(abrev: str, id_client: int, conn: sqlite3.Connection) -> str:
             continue
         r2 = conn.execute("""
             SELECT id_client FROM factures
-            WHERE numero LIKE ? AND id_client != ?
+            WHERE numero LIKE %s AND id_client != %s
             LIMIT 1
         """, (f"{candidat}-%", id_client)).fetchone()
         if not r2:
@@ -94,7 +94,7 @@ def _abrev_unique(abrev: str, id_client: int, conn: sqlite3.Connection) -> str:
 def generer_numero_facture(id_client: int, conn: sqlite3.Connection) -> str:
     """Génère le prochain numéro de facture pour ce client. Ex: MD-003"""
     client = conn.execute(
-        "SELECT nom_entreprise, nom_complet FROM clients WHERE id = ?", (id_client,)
+        "SELECT nom_entreprise, nom_complet FROM clients WHERE id = %s", (id_client,)
     ).fetchone()
     nom_entreprise = ((client["nom_entreprise"] or client["nom_complet"]) if client else "") or ""
     abrev = _generer_abreviation(nom_entreprise)
@@ -102,14 +102,14 @@ def generer_numero_facture(id_client: int, conn: sqlite3.Connection) -> str:
 
     # Compter les factures existantes de ce client
     count = conn.execute(
-        "SELECT COUNT(*) FROM factures WHERE id_client = ?", (id_client,)
+        "SELECT COUNT(*) FROM factures WHERE id_client = %s", (id_client,)
     ).fetchone()[0]
 
     numero = f"{abrev}-{str(count + 1).zfill(3)}"
 
     # Garantir unicité globale (collision rare mais possible)
     while conn.execute(
-        "SELECT 1 FROM factures WHERE numero = ?", (numero,)
+        "SELECT 1 FROM factures WHERE numero = %s", (numero,)
     ).fetchone():
         count += 1
         numero = f"{abrev}-{str(count + 1).zfill(3)}"
@@ -407,7 +407,7 @@ def creer_facture_projet(id_projet: int, conn: sqlite3.Connection) -> dict | Non
         SELECT p.*, s.nom_service, s.prix, s.exonere_taxes, s.localisation_requise
         FROM projets p
         LEFT JOIN services s ON s.id = p.id_service
-        WHERE p.id = ?
+        WHERE p.id = %s
     """, (id_projet,)).fetchone()
 
     if not projet:
@@ -419,7 +419,7 @@ def creer_facture_projet(id_projet: int, conn: sqlite3.Connection) -> dict | Non
         return None
 
     existing = conn.execute(
-        "SELECT f.id, f.numero FROM factures f JOIN facture_lignes fl ON fl.id_facture = f.id WHERE fl.id_projet = ?",
+        "SELECT f.id, f.numero FROM factures f JOIN facture_lignes fl ON fl.id_facture = f.id WHERE fl.id_projet = %s",
         (id_projet,)
     ).fetchone()
     if existing:
@@ -427,7 +427,7 @@ def creer_facture_projet(id_projet: int, conn: sqlite3.Connection) -> dict | Non
         return None
 
     client = conn.execute(
-        "SELECT * FROM clients WHERE id = ?", (projet["id_client"],)
+        "SELECT * FROM clients WHERE id = %s", (projet["id_client"],)
     ).fetchone()
 
     # Numéro de facture
@@ -448,10 +448,10 @@ def creer_facture_projet(id_projet: int, conn: sqlite3.Connection) -> dict | Non
         INSERT INTO factures
         (numero, id_client, statut, type_facturation, date_emission, date_echeance,
          sous_total, tps, tvq, total, periode_mois)
-        VALUES (?, ?, 'envoyee', 'projet', ?, ?, ?, ?, ?, ?, ?)
-    """, (numero, client["id"], date_str, ech_str, prix, tps, tvq, total,
+        VALUES (%s, %s, 'envoyee', 'projet', %s, %s, %s, %s, %s, %s, %s)
+     RETURNING id""", (numero, client["id"], date_str, ech_str, prix, tps, tvq, total,
           today.strftime("%Y-%m")))
-    id_facture = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    id_facture = conn.execute("SELECT lastval()").fetchone()[0]
 
     # Localisation sur la ligne si requise
     loc = projet["localisation"] if projet["localisation_requise"] else None
@@ -460,8 +460,8 @@ def creer_facture_projet(id_projet: int, conn: sqlite3.Connection) -> dict | Non
     conn.execute("""
         INSERT INTO facture_lignes
         (id_facture, id_projet, description, date_service, localisation, quantite, prix_unitaire, total_ligne)
-        VALUES (?, ?, ?, ?, ?, 1, ?, ?)
-    """, (id_facture, id_projet, projet["nom_service"] or projet["nom_projet"] or "Service",
+        VALUES (%s, %s, %s, %s, %s, 1, %s, %s)
+     RETURNING id""", (id_facture, id_projet, projet["nom_service"] or projet["nom_projet"] or "Service",
           date_str, loc, prix, prix))
 
     conn.commit()
@@ -489,7 +489,7 @@ def creer_facture_projet(id_projet: int, conn: sqlite3.Connection) -> dict | Non
     generer_pdf_facture(facture_dict, lignes, dict(client), pdf_path)
 
     # Sauvegarder le chemin PDF en DB
-    conn.execute("UPDATE factures SET pdf_path = ? WHERE id = ?", (pdf_path, id_facture))
+    conn.execute("UPDATE factures SET pdf_path = %s WHERE id = %s", (pdf_path, id_facture))
     conn.commit()
 
     return {
