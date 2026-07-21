@@ -16392,6 +16392,223 @@ def api_boutique_public_produit_detail(slug, produit_id):
     return jsonify(d)
 
 
+# --- Checkout public (création de commande, PAS de paiement réel — Phase 1.5) ---
+# Le paiement (Square/Interac) reste un mur volontaire : voir traiter_paiement_square()
+# / traiter_paiement_interac() plus bas, jamais appelées ici. Cette route ne fait que
+# créer la commande avec le statut qui reflète ce qui reste à faire avant de pouvoir
+# payer (peser, ou directement payer si tout est à prix fixe).
+#
+# Stock NON décrémenté ici, volontairement : tant que le paiement est un mur, une
+# commande créée ici ne devient jamais une vraie vente. Décrémenter maintenant viderait
+# le stock réel sans qu'aucun achat n'aboutisse (pas de flux d'annulation/expiration
+# non plus dans cette phase). À trancher explicitement dans la phase paiement : soit
+# réserver le stock à la création puis relâcher sur échec/expiration, soit décrémenter
+# seulement à la capture confirmée.
+@app.route('/api/v1/boutique/<slug>/commandes', methods=['POST'])
+@cross_origin(origins='*', supports_credentials=False)
+def api_boutique_public_commande_create(slug):
+    data = request.get_json(force=True) or {}
+    items_payload = data.get('items') or []
+    client_email = (data.get('client_email') or '').strip()
+    if not client_email:
+        return jsonify({'error': 'client_email requis'}), 400
+    if not items_payload:
+        return jsonify({'error': 'Le panier est vide'}), 400
+
+    conn = get_db_connection()
+    marchand = conn.execute("SELECT id FROM marchands WHERE slug=%s AND actif=true", (slug,)).fetchone()
+    if not marchand:
+        conn.close()
+        return jsonify({'error': 'Boutique introuvable'}), 404
+
+    lignes = []
+    a_ajuster = False
+    total_estime = 0.0
+    for it in items_payload:
+        variante_id = it.get('variante_id')
+        try:
+            quantite = float(it.get('quantite'))
+        except (TypeError, ValueError):
+            quantite = 0
+        if not variante_id or quantite <= 0:
+            conn.close()
+            return jsonify({'error': 'Item de panier invalide'}), 400
+        variante = conn.execute("""
+            SELECT v.id, v.prix_unitaire, v.ajustable_apres_vente
+            FROM variantes v JOIN produits p ON p.id = v.produit_id
+            WHERE v.id=%s AND p.marchand_id=%s AND p.actif=true
+        """, (variante_id, marchand['id'])).fetchone()
+        if not variante:
+            conn.close()
+            return jsonify({'error': f'Variante {variante_id} introuvable'}), 404
+        prix_estime = round(float(variante['prix_unitaire']) * quantite, 2)
+        total_estime += prix_estime
+        if variante['ajustable_apres_vente']:
+            a_ajuster = True
+        lignes.append({
+            'variante_id': variante['id'], 'quantite': quantite, 'prix_estime': prix_estime,
+            'ajustable': variante['ajustable_apres_vente'],
+        })
+
+    statut_initial = 'en_attente_pesee' if a_ajuster else 'en_attente_paiement'
+    cur = conn.execute("""
+        INSERT INTO commandes (marchand_id, client_email, client_nom, client_telephone,
+            notes_ramassage, statut, total_estime, total_final)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+    """, (
+        marchand['id'], client_email, data.get('client_nom'), data.get('client_telephone'),
+        data.get('notes_ramassage'), statut_initial, round(total_estime, 2),
+        None if a_ajuster else round(total_estime, 2),
+    ))
+    commande_id = cur.fetchone()['id']
+
+    for l in lignes:
+        # Les items non ajustables (pièce) sont finalisés tout de suite — rien à peser,
+        # le prix estimé EST le prix final. Les items au poids restent NULL jusqu'à
+        # l'écran admin "Commandes à ajuster".
+        finale = None if l['ajustable'] else l['quantite']
+        prix_finale = None if l['ajustable'] else l['prix_estime']
+        conn.execute("""
+            INSERT INTO commande_items (commande_id, variante_id, quantite_estimee, prix_estime,
+                quantite_finale, prix_final)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (commande_id, l['variante_id'], l['quantite'], l['prix_estime'], finale, prix_finale))
+
+    conn.commit()
+    conn.close()
+    return jsonify({'id': commande_id, 'statut': statut_initial, 'total_estime': round(total_estime, 2)}), 201
+
+
+def traiter_paiement_square(commande_id):
+    """STUB — capture Square (autorisation différée avec tampon pour le poids, immédiate
+    sinon). Nécessite les identifiants sandbox Square, pas encore disponibles — phase
+    de paiement séparée. Ne jamais appeler en prod tant que ce stub n'est pas remplacé :
+    lève explicitement plutôt que de simuler un faux succès."""
+    raise NotImplementedError(
+        "Paiement Square non branché (Phase 1.5 = panier/checkout seulement, "
+        "en attente des identifiants sandbox — voir plan de match du module Boutique)."
+    )
+
+
+def traiter_paiement_interac(commande_id):
+    """STUB — enregistrement de l'intention + envoi de la demande Interac (VoPay/Kapcharge,
+    fournisseur pas encore choisi). Ne jamais appeler en prod tant que ce stub n'est pas
+    remplacé : lève explicitement plutôt que de simuler un faux succès."""
+    raise NotImplementedError(
+        "Paiement Interac non branché (fournisseur VoPay/Kapcharge pas encore choisi, "
+        "Phase 1.5 = panier/checkout seulement — voir plan de match du module Boutique)."
+    )
+
+
+@app.route('/api/v1/boutique/commandes/<int:commande_id>/payer/square', methods=['POST'])
+@cross_origin(origins='*', supports_credentials=False)
+def api_boutique_payer_square(commande_id):
+    try:
+        traiter_paiement_square(commande_id)
+    except NotImplementedError as e:
+        return jsonify({'error': str(e), 'code': 'PAIEMENT_NON_DISPONIBLE'}), 501
+
+
+@app.route('/api/v1/boutique/commandes/<int:commande_id>/payer/interac', methods=['POST'])
+@cross_origin(origins='*', supports_credentials=False)
+def api_boutique_payer_interac(commande_id):
+    try:
+        traiter_paiement_interac(commande_id)
+    except NotImplementedError as e:
+        return jsonify({'error': str(e), 'code': 'PAIEMENT_NON_DISPONIBLE'}), 501
+
+
+# --- Admin — Commandes à ajuster (items au poids, écran quotidien du marchand) ---
+
+@app.route('/api/v1/admin/boutique/marchands/<int:marchand_id>/commandes-a-ajuster', methods=['GET'])
+@admin_required
+def api_admin_boutique_commandes_a_ajuster(marchand_id):
+    conn = get_db_connection()
+    commandes = conn.execute("""
+        SELECT DISTINCT c.id, c.client_email, c.client_nom, c.client_telephone,
+               c.notes_ramassage, c.statut, c.total_estime, c.created_at
+        FROM commandes c
+        JOIN commande_items ci ON ci.commande_id = c.id
+        JOIN variantes v ON v.id = ci.variante_id
+        WHERE c.marchand_id = %s AND v.ajustable_apres_vente = true AND ci.quantite_finale IS NULL
+        ORDER BY c.created_at ASC
+    """, (marchand_id,)).fetchall()
+
+    result = []
+    for c in commandes:
+        items = conn.execute("""
+            SELECT ci.id AS commande_item_id, ci.quantite_estimee, ci.prix_estime,
+                   v.id AS variante_id, v.attribut1, v.attribut2, v.prix_unitaire,
+                   p.nom AS produit_nom
+            FROM commande_items ci
+            JOIN variantes v ON v.id = ci.variante_id
+            JOIN produits p ON p.id = v.produit_id
+            WHERE ci.commande_id = %s AND v.ajustable_apres_vente = true AND ci.quantite_finale IS NULL
+            ORDER BY ci.id
+        """, (c['id'],)).fetchall()
+        d = dict(c)
+        d['items_a_peser'] = [dict(i) for i in items]
+        result.append(d)
+    conn.close()
+    return jsonify(result)
+
+
+@app.route('/api/v1/admin/boutique/commandes/<int:commande_id>/ajuster', methods=['PUT'])
+@admin_required
+def api_admin_boutique_commande_ajuster(commande_id):
+    data = request.get_json(force=True) or {}
+    items_payload = data.get('items') or []
+    if not items_payload:
+        return jsonify({'error': 'Aucun item à ajuster'}), 400
+
+    conn = get_db_connection()
+    commande = conn.execute("SELECT id, marchand_id FROM commandes WHERE id=%s", (commande_id,)).fetchone()
+    if not commande:
+        conn.close()
+        return jsonify({'error': 'Commande introuvable'}), 404
+
+    for it in items_payload:
+        commande_item_id = it.get('commande_item_id')
+        try:
+            quantite_finale = float(it.get('quantite_finale'))
+        except (TypeError, ValueError):
+            conn.close()
+            return jsonify({'error': 'quantite_finale invalide'}), 400
+        item = conn.execute("""
+            SELECT ci.id, v.prix_unitaire
+            FROM commande_items ci JOIN variantes v ON v.id = ci.variante_id
+            WHERE ci.id = %s AND ci.commande_id = %s AND v.ajustable_apres_vente = true
+        """, (commande_item_id, commande_id)).fetchone()
+        if not item:
+            conn.close()
+            return jsonify({'error': f'Item {commande_item_id} introuvable ou non ajustable'}), 404
+        prix_final = round(float(item['prix_unitaire']) * quantite_finale, 2)
+        conn.execute(
+            "UPDATE commande_items SET quantite_finale=%s, prix_final=%s WHERE id=%s",
+            (quantite_finale, prix_final, commande_item_id)
+        )
+
+    # Une fois TOUS les items de la commande finalisés (plus aucun prix_final NULL),
+    # la commande passe à 'ajustee' et son total_final devient calculable — la capture/
+    # facturation réelle qui suit reste un mur (traiter_paiement_*), hors scope ici.
+    restants = conn.execute(
+        "SELECT COUNT(*) AS n FROM commande_items WHERE commande_id=%s AND prix_final IS NULL",
+        (commande_id,)
+    ).fetchone()
+    if restants['n'] == 0:
+        total = conn.execute(
+            "SELECT COALESCE(SUM(prix_final), 0) AS total FROM commande_items WHERE commande_id=%s",
+            (commande_id,)
+        ).fetchone()
+        conn.execute(
+            "UPDATE commandes SET statut='ajustee', total_final=%s WHERE id=%s",
+            (total['total'], commande_id)
+        )
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'complet': restants['n'] == 0})
+
+
 # ───────────────────────────────────────────────────────────
 # API v1 — Soumissions
 # ───────────────────────────────────────────────────────────
