@@ -15304,6 +15304,11 @@ const clientConfig = {{
 
   direction: {_ts_str(direction)} as Direction,
 
+  // Module Boutique en ligne : vide si le client n'a pas activé ce service au
+  // moment de la création du site (voir _get_or_create_marchand()/checkbox
+  // "activer_boutique" du formulaire de création).
+  boutiqueSlug: {_ts_str(d.get('boutique_slug'))},
+
   social: {{
     instagram: {_ts_str(d.get('instagram'))},
     facebook:  {_ts_str(d.get('facebook'))},
@@ -15833,6 +15838,23 @@ def api_admin_sites_create():
 
     def _build():
         try:
+            # Boutique en ligne : activée depuis ce même flux plutôt que comme un
+            # processus séparé (voir checkbox "activer_boutique" du formulaire).
+            # Seul le template 'vitrine' a les composants boutique (ProductGrid/
+            # ProductDetail/Cart/Checkout) — ignoré silencieusement sur 'reservation'.
+            if template == 'vitrine' and data.get('activer_boutique'):
+                conn_b = get_db_connection()
+                client_row = conn_b.execute(
+                    "SELECT id FROM clients WHERE email=%s", (data['client_email'],)
+                ).fetchone()
+                if client_row:
+                    _marchand_id, boutique_slug = _get_or_create_marchand(conn_b, client_row['id'])
+                    conn_b.commit()
+                    data['boutique_slug'] = boutique_slug
+                else:
+                    print(f"[SITES] activer_boutique demandé mais client introuvable pour {data['client_email']}")
+                conn_b.close()
+
             config_ts  = _generate_config_ts(template, data)
             repo_info  = _create_github_repo(slug, _GITHUB_TOKEN)
             repo_name  = repo_info['full_name']
@@ -16108,22 +16130,18 @@ def api_admin_boutique_marchands_list():
     return jsonify([_marchand_public(r) for r in rows])
 
 
-@app.route('/api/v1/admin/boutique/marchands', methods=['POST'])
-@admin_required
-def api_admin_boutique_marchands_create():
-    data = request.get_json(force=True) or {}
-    id_client = data.get('id_client')
-    if not id_client:
-        return jsonify({'error': 'id_client requis'}), 400
-    conn = get_db_connection()
+def _get_or_create_marchand(conn, id_client):
+    """Retourne (marchand_id, slug) pour ce client — crée le marchand s'il n'existe
+    pas encore. Partagé entre la création manuelle (admin/boutique) et la création
+    automatique depuis le flux de site (voir api_admin_sites_create). Ne fait AUCUN
+    commit — à la charge de l'appelant, pour rester composable dans une transaction
+    plus large."""
     client = conn.execute("SELECT nom_entreprise, nom_complet FROM clients WHERE id=%s", (id_client,)).fetchone()
     if not client:
-        conn.close()
-        return jsonify({'error': 'Client introuvable'}), 404
-    existing = conn.execute("SELECT id FROM marchands WHERE id_client=%s", (id_client,)).fetchone()
+        return None, None
+    existing = conn.execute("SELECT id, slug FROM marchands WHERE id_client=%s", (id_client,)).fetchone()
     if existing:
-        conn.close()
-        return jsonify({'error': 'Ce client a déjà un marchand'}), 409
+        return existing['id'], existing['slug']
     base_slug = _slugify_site(client['nom_entreprise'] or client['nom_complet'] or f'marchand-{id_client}')
     slug = base_slug
     n = 1
@@ -16134,7 +16152,26 @@ def api_admin_boutique_marchands_create():
         "INSERT INTO marchands (id_client, slug) VALUES (%s, %s) RETURNING id",
         (id_client, slug)
     )
-    marchand_id = cur.fetchone()['id']
+    return cur.fetchone()['id'], slug
+
+
+@app.route('/api/v1/admin/boutique/marchands', methods=['POST'])
+@admin_required
+def api_admin_boutique_marchands_create():
+    data = request.get_json(force=True) or {}
+    id_client = data.get('id_client')
+    if not id_client:
+        return jsonify({'error': 'id_client requis'}), 400
+    conn = get_db_connection()
+    client_exists = conn.execute("SELECT id FROM clients WHERE id=%s", (id_client,)).fetchone()
+    if not client_exists:
+        conn.close()
+        return jsonify({'error': 'Client introuvable'}), 404
+    deja_existant = conn.execute("SELECT id FROM marchands WHERE id_client=%s", (id_client,)).fetchone()
+    if deja_existant:
+        conn.close()
+        return jsonify({'error': 'Ce client a déjà un marchand'}), 409
+    marchand_id, slug = _get_or_create_marchand(conn, id_client)
     conn.commit()
     conn.close()
     return jsonify({'id': marchand_id, 'slug': slug}), 201
