@@ -17,7 +17,7 @@ rapidfuzz==3.14.5
 reportlab==4.4.10
 openpyxl==3.1.5
 APScheduler==3.11.2
-flask-cors==6.0.2
+flask-cors==6.0.5
 Flask-Limiter[redis]==4.1.1
 pillow==12.2.0
 pywebpush==2.3.0
