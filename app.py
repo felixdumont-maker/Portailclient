@@ -481,6 +481,40 @@ def supprimer_depense_pigiste(conn, facture_pigiste_id):
     )
 
 # ───────────────────────────────────────────────────────────
+# Chiffrement au repos — secrets de paiement par marchand (module Boutique en ligne).
+# Contrairement au reste du système (jetons Gmail, service_account.json : protégés
+# seulement par le contrôle d'accès DB/fichier, jamais chiffrés), ce sont des
+# identifiants financiers de tiers — chiffrement explicite ajouté. Clé unique dans
+# .env, jamais commitée ; si absente, les fonctions lèvent une erreur claire plutôt
+# que d'échouer silencieusement ou de stocker en clair.
+# ───────────────────────────────────────────────────────────
+from cryptography.fernet import Fernet, InvalidToken
+
+_SECRET_ENCRYPTION_KEY = os.getenv('SECRET_ENCRYPTION_KEY', '')
+
+def encrypt_secret(valeur):
+    """Chiffre une chaîne (jeton Square, credentials Interac JSON...) pour stockage DB.
+    Retourne None si valeur est None/vide (permet de garder un champ optionnel vide)."""
+    if not valeur:
+        return None
+    if not _SECRET_ENCRYPTION_KEY:
+        raise RuntimeError("SECRET_ENCRYPTION_KEY absente de l'environnement — impossible de chiffrer un secret")
+    return Fernet(_SECRET_ENCRYPTION_KEY).encrypt(valeur.encode()).decode()
+
+def decrypt_secret(valeur_chiffree):
+    """Déchiffre une valeur produite par encrypt_secret(). Retourne None si absente
+    ou si le déchiffrement échoue (clé changée, donnée corrompue) — ne lève jamais
+    vers l'appelant pour éviter qu'un secret illisible fasse planter une page admin."""
+    if not valeur_chiffree:
+        return None
+    if not _SECRET_ENCRYPTION_KEY:
+        return None
+    try:
+        return Fernet(_SECRET_ENCRYPTION_KEY).decrypt(valeur_chiffree.encode()).decode()
+    except (InvalidToken, ValueError):
+        return None
+
+# ───────────────────────────────────────────────────────────
 # Intégrations externes (Phase 2) : Square, puis Shopify.
 # UNE app CocktailOS (créée dans le Square Developer Dashboard) ; en mode SaaS
 # multi-abonnés plus tard, chaque abonné autorisera cette app (OAuth par marchand).
@@ -2860,7 +2894,7 @@ def jours_du_mois_filter(mois):
 # API v1 — JSON endpoints pour Next.js
 # ───────────────────────────────────────────────────────────
 from flask import jsonify
-from flask_cors import CORS
+from flask_cors import CORS, cross_origin
 
 _cors_origins = ["https://portail.cocktailmedia.ca", os.getenv("PORTAIL_URL", "")]
 if os.getenv("FLASK_ENV", "development") != "production":
@@ -16043,6 +16077,319 @@ def api_admin_site_delete(site_id):
     conn.commit()
     conn.close()
     return jsonify({'success': True})
+
+
+# ───────────────────────────────────────────────────────────
+# API v1 — Module Boutique en ligne (Phase 1 : fondation)
+# Un seul système d'inventaire/variantes pour produits conventionnels ET vendus au
+# poids — la différence tient au seul champ variantes.type_unite ('piece'|'poids'),
+# jamais à une branche de code séparée. Panier/checkout/paiement Square+Interac =
+# prochaine phase (identifiants sandbox requis) ; ici : catalogue + inventaire.
+# ───────────────────────────────────────────────────────────
+
+def _marchand_public(row):
+    """Représentation admin d'un marchand — ne renvoie JAMAIS les secrets déchiffrés,
+    seulement s'ils sont configurés (l'admin les remplace, ne les relit pas)."""
+    d = dict(row)
+    d['square_configure'] = bool(d.pop('square_access_token', None))
+    d['interac_configure'] = bool(d.pop('interac_credentials', None))
+    return d
+
+@app.route('/api/v1/admin/boutique/marchands', methods=['GET'])
+@admin_required
+def api_admin_boutique_marchands_list():
+    conn = get_db_connection()
+    rows = conn.execute("""
+        SELECT m.*, c.nom_complet, c.nom_entreprise, c.email AS client_email
+        FROM marchands m JOIN clients c ON c.id = m.id_client
+        ORDER BY m.created_at DESC
+    """).fetchall()
+    conn.close()
+    return jsonify([_marchand_public(r) for r in rows])
+
+
+@app.route('/api/v1/admin/boutique/marchands', methods=['POST'])
+@admin_required
+def api_admin_boutique_marchands_create():
+    data = request.get_json(force=True) or {}
+    id_client = data.get('id_client')
+    if not id_client:
+        return jsonify({'error': 'id_client requis'}), 400
+    conn = get_db_connection()
+    client = conn.execute("SELECT nom_entreprise, nom_complet FROM clients WHERE id=%s", (id_client,)).fetchone()
+    if not client:
+        conn.close()
+        return jsonify({'error': 'Client introuvable'}), 404
+    existing = conn.execute("SELECT id FROM marchands WHERE id_client=%s", (id_client,)).fetchone()
+    if existing:
+        conn.close()
+        return jsonify({'error': 'Ce client a déjà un marchand'}), 409
+    base_slug = _slugify_site(client['nom_entreprise'] or client['nom_complet'] or f'marchand-{id_client}')
+    slug = base_slug
+    n = 1
+    while conn.execute("SELECT id FROM marchands WHERE slug=%s", (slug,)).fetchone():
+        n += 1
+        slug = f"{base_slug}-{n}"
+    cur = conn.execute(
+        "INSERT INTO marchands (id_client, slug) VALUES (%s, %s) RETURNING id",
+        (id_client, slug)
+    )
+    marchand_id = cur.fetchone()['id']
+    conn.commit()
+    conn.close()
+    return jsonify({'id': marchand_id, 'slug': slug}), 201
+
+
+@app.route('/api/v1/admin/boutique/marchands/<int:marchand_id>', methods=['GET'])
+@admin_required
+def api_admin_boutique_marchand_get(marchand_id):
+    conn = get_db_connection()
+    row = conn.execute("""
+        SELECT m.*, c.nom_complet, c.nom_entreprise, c.email AS client_email
+        FROM marchands m JOIN clients c ON c.id = m.id_client
+        WHERE m.id = %s
+    """, (marchand_id,)).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({'error': 'Marchand introuvable'}), 404
+    return jsonify(_marchand_public(row))
+
+
+@app.route('/api/v1/admin/boutique/marchands/<int:marchand_id>', methods=['PUT'])
+@admin_required
+def api_admin_boutique_marchand_update(marchand_id):
+    data = request.get_json(force=True) or {}
+    conn = get_db_connection()
+    marchand = conn.execute("SELECT id FROM marchands WHERE id=%s", (marchand_id,)).fetchone()
+    if not marchand:
+        conn.close()
+        return jsonify({'error': 'Marchand introuvable'}), 404
+
+    champs, valeurs = [], []
+    if 'actif' in data:
+        champs.append('actif=%s'); valeurs.append(bool(data['actif']))
+    if 'square_location_id' in data:
+        champs.append('square_location_id=%s'); valeurs.append(data['square_location_id'] or None)
+    if 'square_access_token' in data and data['square_access_token']:
+        champs.append('square_access_token=%s'); valeurs.append(encrypt_secret(data['square_access_token']))
+    if 'interac_provider' in data:
+        prov = data['interac_provider'] or None
+        if prov and prov not in ('vopay', 'kapcharge'):
+            conn.close()
+            return jsonify({'error': "interac_provider doit être 'vopay' ou 'kapcharge'"}), 400
+        champs.append('interac_provider=%s'); valeurs.append(prov)
+    if 'interac_credentials' in data and data['interac_credentials']:
+        champs.append('interac_credentials=%s'); valeurs.append(encrypt_secret(json.dumps(data['interac_credentials'])))
+
+    if champs:
+        valeurs.append(marchand_id)
+        conn.execute(f"UPDATE marchands SET {', '.join(champs)} WHERE id=%s", tuple(valeurs))
+        conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/v1/admin/boutique/marchands/<int:marchand_id>/produits', methods=['GET'])
+@admin_required
+def api_admin_boutique_produits_list(marchand_id):
+    conn = get_db_connection()
+    rows = conn.execute(
+        "SELECT * FROM produits WHERE marchand_id=%s ORDER BY created_at DESC", (marchand_id,)
+    ).fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route('/api/v1/admin/boutique/marchands/<int:marchand_id>/produits', methods=['POST'])
+@admin_required
+def api_admin_boutique_produits_create(marchand_id):
+    data = request.get_json(force=True) or {}
+    if not data.get('nom'):
+        return jsonify({'error': 'nom requis'}), 400
+    conn = get_db_connection()
+    marchand = conn.execute("SELECT id FROM marchands WHERE id=%s", (marchand_id,)).fetchone()
+    if not marchand:
+        conn.close()
+        return jsonify({'error': 'Marchand introuvable'}), 404
+    cur = conn.execute(
+        "INSERT INTO produits (marchand_id, nom, description, categorie, image_url) "
+        "VALUES (%s, %s, %s, %s, %s) RETURNING id",
+        (marchand_id, data['nom'], data.get('description'), data.get('categorie'), data.get('image_url'))
+    )
+    produit_id = cur.fetchone()['id']
+    conn.commit()
+    conn.close()
+    return jsonify({'id': produit_id}), 201
+
+
+@app.route('/api/v1/admin/boutique/produits/<int:produit_id>', methods=['PUT'])
+@admin_required
+def api_admin_boutique_produit_update(produit_id):
+    data = request.get_json(force=True) or {}
+    conn = get_db_connection()
+    produit = conn.execute("SELECT id FROM produits WHERE id=%s", (produit_id,)).fetchone()
+    if not produit:
+        conn.close()
+        return jsonify({'error': 'Produit introuvable'}), 404
+    champs, valeurs = [], []
+    for champ in ('nom', 'description', 'categorie', 'image_url'):
+        if champ in data:
+            champs.append(f'{champ}=%s'); valeurs.append(data[champ])
+    if 'actif' in data:
+        champs.append('actif=%s'); valeurs.append(bool(data['actif']))
+    if champs:
+        valeurs.append(produit_id)
+        conn.execute(f"UPDATE produits SET {', '.join(champs)} WHERE id=%s", tuple(valeurs))
+        conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/v1/admin/boutique/produits/<int:produit_id>', methods=['DELETE'])
+@admin_required
+def api_admin_boutique_produit_delete(produit_id):
+    conn = get_db_connection()
+    produit = conn.execute("SELECT id FROM produits WHERE id=%s", (produit_id,)).fetchone()
+    if not produit:
+        conn.close()
+        return jsonify({'error': 'Produit introuvable'}), 404
+    conn.execute("DELETE FROM produits WHERE id=%s", (produit_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/v1/admin/boutique/produits/<int:produit_id>/variantes', methods=['GET'])
+@admin_required
+def api_admin_boutique_variantes_list(produit_id):
+    conn = get_db_connection()
+    rows = conn.execute(
+        "SELECT * FROM variantes WHERE produit_id=%s ORDER BY created_at", (produit_id,)
+    ).fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route('/api/v1/admin/boutique/produits/<int:produit_id>/variantes', methods=['POST'])
+@admin_required
+def api_admin_boutique_variantes_create(produit_id):
+    data = request.get_json(force=True) or {}
+    type_unite = data.get('type_unite')
+    if type_unite not in ('piece', 'poids'):
+        return jsonify({'error': "type_unite doit être 'piece' ou 'poids'"}), 400
+    if data.get('prix_unitaire') is None:
+        return jsonify({'error': 'prix_unitaire requis'}), 400
+    conn = get_db_connection()
+    produit = conn.execute("SELECT id FROM produits WHERE id=%s", (produit_id,)).fetchone()
+    if not produit:
+        conn.close()
+        return jsonify({'error': 'Produit introuvable'}), 404
+    # Ajustable après vente uniquement pertinent pour les variantes au poids
+    ajustable = bool(data.get('ajustable_apres_vente')) if type_unite == 'poids' else False
+    cur = conn.execute(
+        "INSERT INTO variantes (produit_id, type_unite, attribut1, attribut2, prix_unitaire, "
+        "stock_disponible, ajustable_apres_vente) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+        (produit_id, type_unite, data.get('attribut1'), data.get('attribut2'),
+         data['prix_unitaire'], data.get('stock_disponible', 0), ajustable)
+    )
+    variante_id = cur.fetchone()['id']
+    conn.commit()
+    conn.close()
+    return jsonify({'id': variante_id}), 201
+
+
+@app.route('/api/v1/admin/boutique/variantes/<int:variante_id>', methods=['PUT'])
+@admin_required
+def api_admin_boutique_variante_update(variante_id):
+    data = request.get_json(force=True) or {}
+    conn = get_db_connection()
+    variante = conn.execute("SELECT id FROM variantes WHERE id=%s", (variante_id,)).fetchone()
+    if not variante:
+        conn.close()
+        return jsonify({'error': 'Variante introuvable'}), 404
+    champs, valeurs = [], []
+    for champ in ('attribut1', 'attribut2', 'prix_unitaire', 'stock_disponible', 'ajustable_apres_vente'):
+        if champ in data:
+            champs.append(f'{champ}=%s'); valeurs.append(data[champ])
+    if champs:
+        valeurs.append(variante_id)
+        conn.execute(f"UPDATE variantes SET {', '.join(champs)} WHERE id=%s", tuple(valeurs))
+        conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/v1/admin/boutique/variantes/<int:variante_id>', methods=['DELETE'])
+@admin_required
+def api_admin_boutique_variante_delete(variante_id):
+    conn = get_db_connection()
+    variante = conn.execute("SELECT id FROM variantes WHERE id=%s", (variante_id,)).fetchone()
+    if not variante:
+        conn.close()
+        return jsonify({'error': 'Variante introuvable'}), 404
+    conn.execute("DELETE FROM variantes WHERE id=%s", (variante_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+# --- Lecture publique (catalogue, sans authentification) ---
+# CORS ouvert à tout domaine (pas restreint à portail.cocktailmedia.ca comme le
+# reste de l'app) — ces routes sont appelées depuis les sites clients hébergés sur
+# Vercel, sur leur propre domaine. Pas de cookies/session ici (supports_credentials
+# =False), donc pas d'exposition CSRF à élargir le CORS sur ces deux routes précises.
+
+@app.route('/api/v1/boutique/<slug>/produits', methods=['GET'])
+@cross_origin(origins='*', supports_credentials=False)
+def api_boutique_public_produits(slug):
+    conn = get_db_connection()
+    marchand = conn.execute("SELECT id FROM marchands WHERE slug=%s AND actif=true", (slug,)).fetchone()
+    if not marchand:
+        conn.close()
+        return jsonify({'error': 'Boutique introuvable'}), 404
+    produits = conn.execute(
+        "SELECT id, nom, description, categorie, image_url FROM produits "
+        "WHERE marchand_id=%s AND actif=true ORDER BY created_at DESC",
+        (marchand['id'],)
+    ).fetchall()
+    result = []
+    for p in produits:
+        variantes = conn.execute(
+            "SELECT id, type_unite, attribut1, attribut2, prix_unitaire, stock_disponible "
+            "FROM variantes WHERE produit_id=%s AND stock_disponible > 0 ORDER BY id",
+            (p['id'],)
+        ).fetchall()
+        d = dict(p)
+        d['variantes'] = [dict(v) for v in variantes]
+        result.append(d)
+    conn.close()
+    return jsonify(result)
+
+
+@app.route('/api/v1/boutique/<slug>/produits/<int:produit_id>', methods=['GET'])
+@cross_origin(origins='*', supports_credentials=False)
+def api_boutique_public_produit_detail(slug, produit_id):
+    conn = get_db_connection()
+    marchand = conn.execute("SELECT id FROM marchands WHERE slug=%s AND actif=true", (slug,)).fetchone()
+    if not marchand:
+        conn.close()
+        return jsonify({'error': 'Boutique introuvable'}), 404
+    produit = conn.execute(
+        "SELECT id, nom, description, categorie, image_url FROM produits WHERE id=%s AND marchand_id=%s AND actif=true",
+        (produit_id, marchand['id'])
+    ).fetchone()
+    if not produit:
+        conn.close()
+        return jsonify({'error': 'Produit introuvable'}), 404
+    variantes = conn.execute(
+        "SELECT id, type_unite, attribut1, attribut2, prix_unitaire, stock_disponible "
+        "FROM variantes WHERE produit_id=%s AND stock_disponible > 0 ORDER BY id",
+        (produit_id,)
+    ).fetchall()
+    conn.close()
+    d = dict(produit)
+    d['variantes'] = [dict(v) for v in variantes]
+    return jsonify(d)
 
 
 # ───────────────────────────────────────────────────────────
